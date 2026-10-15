@@ -6,11 +6,18 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/ui/cmd/do_pray.h"
+#include "administration/privilege.h"
+#include "gameplay/economics/currencies.h"
 
 #include "engine/entities/char_data.h"
 #include "engine/entities/obj_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "gameplay/abilities/timed_abilities.h"
+#include "gameplay/mechanics/inventory.h"
 
 void do_pray(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	int metter = -1;
@@ -21,7 +28,7 @@ void do_pray(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		return;
 	}
 
-	if (!IS_IMMORTAL(ch)
+	if (!privilege::IsImmortal(ch)
 		&& ((subcmd == SCMD_DONATE
 			&& GET_RELIGION(ch) != kReligionPoly)
 			|| (subcmd == SCMD_PRAY
@@ -39,9 +46,11 @@ void do_pray(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		return;
 	}
 
-	half_chop(argument, arg, buf);
+	char whom[kMaxInputLength];
+	char gift[kMaxStringLength];
+	half_chop(argument, whom, gift);
 
-	if (!*arg || (metter = search_block(arg, pray_whom, false)) < 0) {
+	if (!*whom || (metter = search_block(whom, pray_whom, false)) < 0) {
 		if (subcmd == SCMD_DONATE) {
 			SendMsgToChar("Вы можете принести жертву :\r\n", ch);
 			for (metter = 0; *(pray_metter[metter]) != '\n'; metter++) {
@@ -74,7 +83,7 @@ void do_pray(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	}
 
 	if (subcmd == SCMD_DONATE) {
-		if (!*buf || !(obj = get_obj_in_list_vis(ch, buf, ch->carrying))) {
+		if (!*gift || !(obj = get_obj_in_list_vis(ch, gift, ch->carrying))) {
 			SendMsgToChar("Вы должны пожертвовать что-то стоящее.\r\n", ch);
 			return;
 		}
@@ -84,15 +93,15 @@ void do_pray(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			return;
 		}
 	} else if (subcmd == SCMD_PRAY) {
-		if (ch->get_gold() < 10) {
+		if (currencies::GetHand(*ch, currencies::kGold) < 10) {
 			SendMsgToChar("У вас не хватит денег на свечку.\r\n", ch);
 			return;
 		}
 	} else
 		return;
 
-	if (!IS_IMMORTAL(ch) && (IsTimedBySkill(ch, ESkill::kReligion)
-		|| IsAffectedBySpell(ch, ESpell::kReligion))) {
+	if (!privilege::IsImmortal(ch) && (IsTimedBySkill(ch, ESkill::kReligion)
+		|| IsAffected(ch, EAffect::kPrayerful) || IsAffected(ch, EAffect::kPietas))) {
 		SendMsgToChar("Вы не можете так часто взывать к Богам.\r\n", ch);
 		return;
 	}
@@ -101,30 +110,40 @@ void do_pray(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	timed.time = 12;
 	ImposeTimedSkill(ch, &timed);
 
+	// The "blessed" marker effect checked above (separate from the stat blessings below, which keep
+	// their own affect_type -- e.g. Yarilo grants kInfravision). kPrayerful for prayer, kPietas for sacrifice.
+	Affect<EApply> blessing;
+	blessing.duration = CalcDuration(ch, ch, ESkill::kUndefined, 12, 0, 0, 0);
+	blessing.modifier = 0;
+	blessing.location = EApply::kNone;
+	blessing.affect_type = (subcmd == SCMD_PRAY) ? EAffect::kPrayerful : EAffect::kPietas;
+	blessing.battleflag.clear();
+	ImposeAffect(ch, blessing, false, false, false, false);
+
 	for (const auto &i : pray_affect) {
 		if (i.metter == metter) {
 			Affect<EApply> af;
-			af.type = ESpell::kReligion;
-			af.duration = CalcDuration(ch, 12, 0, 0, 0, 0);
+			af.duration = CalcDuration(ch, ch, ESkill::kUndefined, 12, 0, 0, 0);
 			af.modifier = i.modifier;
 			af.location = i.location;
-			af.bitvector = i.bitvector;
-			af.battleflag = i.battleflag;
+			af.affect_type = static_cast<EAffect>(i.bitvector);
+			// issue #4005: поле battleflag таблицы pray_affect всюду нулевое, а свойства аффекта
+			// воронка всё равно берёт из affects.xml по affect_type -- писать тут нечего.
 			ImposeAffect(ch, af, false, false, false, false);
 		}
 	}
 
 	if (subcmd == SCMD_PRAY) {
-		sprintf(buf, "$n затеплил$g свечку и вознес$q молитву %s.", pray_whom[metter]);
-		act(buf, false, ch, nullptr, nullptr, kToRoom | kToArenaListen);
-		sprintf(buf, "Вы затеплили свечку и вознесли молитву %s.", pray_whom[metter]);
-		act(buf, false, ch, nullptr, nullptr, kToChar);
-		ch->remove_gold(10);
+		act(fmt::format("$n затеплил$g свечку и вознес$q молитву {}.", pray_whom[metter]),
+			false, ch, nullptr, nullptr, kToRoom | kToArenaListen);
+		act(fmt::format("Вы затеплили свечку и вознесли молитву {}.", pray_whom[metter]),
+			false, ch, nullptr, nullptr, kToChar);
+		currencies::RemoveHand(*ch, currencies::kGold, 10);
 	} else if (subcmd == SCMD_DONATE && obj) {
-		sprintf(buf, "$n принес$q $o3 в жертву %s.", pray_whom[metter]);
-		act(buf, false, ch, obj, nullptr, kToRoom | kToArenaListen);
-		sprintf(buf, "Вы принесли $o3 в жертву %s.", pray_whom[metter]);
-		act(buf, false, ch, obj, nullptr, kToChar);
+		act(fmt::format("$n принес$q $o3 в жертву {}.", pray_whom[metter]),
+			false, ch, obj, nullptr, kToRoom | kToArenaListen);
+		act(fmt::format("Вы принесли $o3 в жертву {}.", pray_whom[metter]),
+			false, ch, obj, nullptr, kToChar);
 		RemoveObjFromChar(obj);
 		ExtractObjFromWorld(obj);
 	}

@@ -17,62 +17,40 @@
 
 #ifndef PARSER_WRAPPER
 #define PARSER_WRAPPER
-#include <sstream>
+
 #include <filesystem>
 #include <memory>
+#include <string>
+#include <utility>
+#include <vector>
 
-#include "third_party_libs/pugixml/pugixml.h"
 #include "engine/structs/iterators.h"
 
 namespace parser_wrapper {
 
 class DataNode {
-  using value_type        = DataNode;
-  using pointer           = DataNode*;
-  using reference         = DataNode&;
- protected:
-	using DocPtr = std::shared_ptr<pugi::xml_document>;
-
-	DocPtr xml_doc_;
-	// Получить указатель на ноду непосредственно штатными средстваим нельзя.
-	pugi::xml_node curren_xml_node_;
-
  public:
-	DataNode() :
-		xml_doc_{std::make_shared<pugi::xml_document>()},
-		curren_xml_node_{pugi::xml_node()} {};
+	using value_type        = DataNode;
+	using pointer           = DataNode*;
+	using reference         = DataNode&;
+
+	DataNode();
 
 	explicit DataNode(const std::filesystem::path &file_name);
 
+	// issue.cfg-manager: свежий пустой документ, чей курсор стоит на узле-документе, так что
+	// первый AddChild() создаёт корневой элемент. Для построения DOM с нуля (например, для записи).
+	[[nodiscard]] static DataNode NewDocument();
+
 	DataNode(const DataNode &d);
 
-	~DataNode() = default;
+	DataNode(DataNode &&d) noexcept;
 
-	class NameIterator {
-		std::shared_ptr<DataNode> node_;
-	 public:
-		NameIterator() :
-			node_{std::make_shared<DataNode>()} {};
+	~DataNode();
 
-		explicit NameIterator(DataNode &node) :
-			node_{std::make_shared<DataNode>(node)}
-		{};
+	DataNode &operator=(const DataNode &d);
 
-		NameIterator &operator++();
-
-		const NameIterator operator++(int);
-
-		bool operator==(const NameIterator &it) const { return node_->curren_xml_node_ == it.node_->curren_xml_node_; };
-
-		bool operator!=(const NameIterator &other) const { return !(*this == other); };
-
-		reference operator*() const { return *node_; }
-
-		pointer operator->() { return node_.get(); }
-
-	};
-
-	DataNode &operator=(const DataNode &d) = default;
+	DataNode &operator=(DataNode &&d) noexcept;
 
 	explicit operator bool() const;
 
@@ -166,8 +144,63 @@ class DataNode {
 	/*
 	 * Диапазон дочерних узлов с именем key,
 	 */
-	[[nodiscard]] iterators::Range<NameIterator> Children(const std::string &key);
+	[[nodiscard]] iterators::Range<DataNode> Children(const std::string &key);
 
+	/*
+	 * issue.vedun-editor: enumerate this node's attributes as (name, value) pairs, in document
+	 * order. The editor reflects an arbitrary node's attributes into form fields.
+	 */
+	[[nodiscard]] std::vector<std::pair<std::string, std::string>> Attributes() const;
+
+	/*
+	 * issue.vedun-editor: set a value on the current node, mutating the shared document. A non-empty
+	 * key sets that attribute (creating it if absent); an EMPTY key sets the node's inner text
+	 * (symmetric with GetValue("")). Returns false on failure.
+	 */
+	bool SetValue(const std::string &key, const std::string &value);
+
+	/*
+	 * issue.spells-hotfix: remove an optional attribute from the current node entirely (not just
+	 * blank it, e.g. clearing any_of in an <unaffect>). Mutates the shared document. Returns false
+	 * if the attribute was absent.
+	 */
+	bool RemoveValue(const std::string &key);
+
+	/*
+	 * issue.vedun-editor: append an empty child element with the given tag name to the current
+	 * node (mutates the shared document). Returns the new child, sharing this node's document.
+	 */
+	DataNode AddChild(const std::string &name);
+
+	/*
+	 * issue.vedun-editor: remove the given child element from the current node (mutates the
+	 * shared document). Returns false if it is not a child of this node.
+	 */
+	bool RemoveChild(const DataNode &child);
+
+	/*
+	 * issue.vedun-editor: reorder a child element among its siblings (mutates the shared
+	 * document). Returns false if it is already at the start/end. The editor's move menu uses
+	 * these; combined with AddChild they cover inserting at an arbitrary position.
+	 */
+	bool MoveChildUp(const DataNode &child);
+	bool MoveChildDown(const DataNode &child);
+
+	/*
+	 * issue.vedun-editor: serialize the whole document to a file (pugixml). Returns false on
+	 * failure. The editor writes to a temp file then renames for an atomic commit.
+	 */
+	[[nodiscard]] bool Save(const std::filesystem::path &file) const;
+
+	/*
+	 * issue.vedun-print: serialize this node's element subtree to an XML string (pugixml print),
+	 * for the editor's "show the whole element" command. Read-only.
+	 */
+	[[nodiscard]] std::string ToXmlString() const;
+
+ private:
+	struct Impl;
+	std::unique_ptr<Impl> impl_;
 };
 
 } //parcer_wrapper

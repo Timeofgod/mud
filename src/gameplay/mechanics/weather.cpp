@@ -6,9 +6,10 @@
 */
 
 #include "weather.h"
+#include "administration/privilege.h"
 
 #include "gameplay/magic/spells.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
 #include "engine/ui/color.h"
 #include "utils/random.h"
 #include "celebrates.h"
@@ -53,7 +54,7 @@ void gods_day_now(CharData *ch) {
 	std::string poly_name = celebrates::GetNamePoly(celebrates::GetMudDay());
 	std::string real_name = celebrates::GetNameReal(celebrates::GetRealDay());
 
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		sprintf(poly, "Язычники : %s Нет праздника. %s\r\n", kColorWht, kColorNrm);
 		sprintf(mono, "Христиане: %s Нет праздника. %s\r\n", kColorWht, kColorNrm);
 		sprintf(real, "В реальном мире: %s Нет праздника. %s\r\n", kColorWht, kColorNrm);
@@ -571,27 +572,27 @@ void weather_change() {
 
 	temp += temp_change;
 	cweather_type = 0;
-	*buf = '\0';
+	std::string message;
 	if (weather_info.temperature - temp > 6) {
-		strcat(buf, "Резкое похолодание.\r\n");
+		message += "Резкое похолодание.\r\n";
 		SET_BIT(cweather_type, kWeatherQuickcool);
 	} else if (weather_info.temperature - temp < -6) {
-		strcat(buf, "Резкое потепление.\r\n");
+		message += "Резкое потепление.\r\n";
 		SET_BIT(cweather_type, kWeatherQuickhot);
 	}
 	weather_info.temperature = MIN(year_temp[time_info.month].max, MAX(year_temp[time_info.month].min, temp));
 
 	if (weather_info.change >= 10 || weather_info.change <= -10) {
-		strcat(buf, "Сильный ветер.\r\n");
+		message += "Сильный ветер.\r\n";
 		SET_BIT(cweather_type, kWeatherBigwind);
 	} else if (weather_info.change >= 6 || weather_info.change <= -6) {
-		strcat(buf, "Умеренный ветер.\r\n");
+		message += "Умеренный ветер.\r\n";
 		SET_BIT(cweather_type, kWeatherMediumwind);
 	} else if (weather_info.change >= 2 || weather_info.change <= -2) {
-		strcat(buf, "Слабый ветер.\r\n");
+		message += "Слабый ветер.\r\n";
 		SET_BIT(cweather_type, kWeatherLightwind);
 	} else if (IS_SET(weather_info.weather_type, kWeatherBigwind | kWeatherMediumwind | kWeatherLightwind)) {
-		strcat(buf, "Ветер утих.\r\n");
+		message += "Ветер утих.\r\n";
 		if (IS_SET(weather_info.weather_type, kWeatherBigwind))
 			SET_BIT(cweather_type, kWeatherMediumwind);
 		else if (IS_SET(weather_info.weather_type, kWeatherMediumwind))
@@ -600,7 +601,7 @@ void weather_change() {
 
 	switch (sky_change) {
 		case 1:        // CLOUDLESS -> CLOUDY
-			strcat(buf, "Небо затянуло тучами.\r\n");
+			message += "Небо затянуло тучами.\r\n";
 			weather_info.sky = kSkyCloudy;
 			break;
 		case 2:        // CLOUDY -> RAINING
@@ -609,40 +610,40 @@ void weather_change() {
 				case EMonth::kJune:
 				case EMonth::kJuly:
 				case EMonth::kAugust:
-				case EMonth::kSeptember: strcat(buf, "Начался дождь.\r\n");
+				case EMonth::kSeptember: message += "Начался дождь.\r\n";
 					SetPrecipitations(&cweather_type, kWeatherLightrain, 30, 40, 30);
 					break;
 				case EMonth::kDecember:
 				case EMonth::kJanuary:
-				case EMonth::kFebruary: strcat(buf, "Пошел снег.\r\n");
+				case EMonth::kFebruary: message += "Пошел снег.\r\n";
 					SetPrecipitations(&cweather_type, kWeatherLightsnow, 30, 40, 30);
 					break;
 				case EMonth::kOctober:
 				case EMonth::kApril:
 					if (IS_SET(cweather_type, kWeatherQuickcool)
 						&& weather_info.temperature <= 5) {
-						strcat(buf, "Пошел снег.\r\n");
+						message += "Пошел снег.\r\n";
 						SET_BIT(cweather_type, kWeatherLightsnow);
 					} else {
-						strcat(buf, "Начался дождь.\r\n");
+						message += "Начался дождь.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightrain, 40, 60, 0);
 					}
 					break;
 				case EMonth::kNovember:
 					if (avg_day_temp <= 3 || IS_SET(cweather_type, kWeatherQuickcool)) {
-						strcat(buf, "Пошел снег.\r\n");
+						message += "Пошел снег.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightsnow, 40, 60, 0);
 					} else {
-						strcat(buf, "Начался дождь.\r\n");
+						message += "Начался дождь.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightrain, 40, 60, 0);
 					}
 					break;
 				case EMonth::kMarch:
 					if (avg_day_temp >= 3 || IS_SET(cweather_type, kWeatherQuickhot)) {
-						strcat(buf, "Начался дождь.\r\n");
+						message += "Начался дождь.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightrain, 80, 20, 0);
 					} else {
-						strcat(buf, "Пошел снег.\r\n");
+						message += "Пошел снег.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightsnow, 60, 30, 10);
 					}
 					break;
@@ -650,20 +651,20 @@ void weather_change() {
 			weather_info.sky = kSkyRaining;
 			break;
 		case 3:        // CLOUDY -> CLOUDLESS
-			strcat(buf, "Начало проясняться.\r\n");
+			message += "Начало проясняться.\r\n";
 			weather_info.sky = kSkyCloudless;
 			break;
 		case 4:        // RAINING -> LIGHTNING
-			strcat(buf, "Налетевший ветер разогнал тучи.\r\n");
+			message += "Налетевший ветер разогнал тучи.\r\n";
 			weather_info.sky = kSkyLightning;
 			break;
 		case 5:        // RAINING -> CLOUDY
 			if (IS_SET(weather_info.weather_type, kWeatherLightrain | kWeatherMediumrain | kWeatherBigrain))
-				strcat(buf, "Дождь прекратился.\r\n");
+				message += "Дождь прекратился.\r\n";
 			else if (IS_SET(weather_info.weather_type, kWeatherLightsnow | kWeatherMediumsnow | kWeatherBigsnow))
-				strcat(buf, "Снегопад прекратился.\r\n");
+				message += "Снегопад прекратился.\r\n";
 			else if (IS_SET(weather_info.weather_type, kWeatherHail))
-				strcat(buf, "Град прекратился.\r\n");
+				message += "Град прекратился.\r\n";
 			weather_info.sky = kSkyCloudy;
 			break;
 		case 6:        // LIGHTNING -> RAINING
@@ -674,44 +675,44 @@ void weather_change() {
 				case EMonth::kAugust:
 				case EMonth::kSeptember:
 					if (IS_SET(cweather_type, kWeatherQuickcool)) {
-						strcat(buf, "Начался град.\r\n");
+						message += "Начался град.\r\n";
 						SET_BIT(cweather_type, kWeatherHail);
 					} else {
-						strcat(buf, "Полил дождь.\r\n");
+						message += "Полил дождь.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightrain, 10, 40, 50);
 					}
 					break;
 				case EMonth::kDecember:
 				case EMonth::kJanuary:
-				case EMonth::kFebruary: strcat(buf, "Повалил снег.\r\n");
+				case EMonth::kFebruary: message += "Повалил снег.\r\n";
 					SetPrecipitations(&cweather_type, kWeatherLightsnow, 10, 40, 50);
 					break;
 				case EMonth::kOctober:
 				case EMonth::kApril:
 					if (IS_SET(cweather_type, kWeatherQuickcool)
 						&& weather_info.temperature <= 5) {
-						strcat(buf, "Повалил снег.\r\n");
+						message += "Повалил снег.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightsnow, 40, 60, 0);
 					} else {
-						strcat(buf, "Начался дождь.\r\n");
+						message += "Начался дождь.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightrain, 40, 60, 0);
 					}
 					break;
 				case EMonth::kNovember:
 					if (avg_day_temp <= 3 || IS_SET(cweather_type, kWeatherQuickcool)) {
-						strcat(buf, "Повалил снег.\r\n");
+						message += "Повалил снег.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightsnow, 40, 60, 0);
 					} else {
-						strcat(buf, "Начался дождь.\r\n");
+						message += "Начался дождь.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightrain, 40, 60, 0);
 					}
 					break;
 				case EMonth::kMarch:
 					if (avg_day_temp >= 3 || IS_SET(cweather_type, kWeatherQuickhot)) {
-						strcat(buf, "Начался дождь.\r\n");
+						message += "Начался дождь.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightrain, 80, 20, 0);
 					} else {
-						strcat(buf, "Пошел снег.\r\n");
+						message += "Пошел снег.\r\n";
 						SetPrecipitations(&cweather_type, kWeatherLightsnow, 60, 30, 10);
 					}
 					break;
@@ -721,47 +722,47 @@ void weather_change() {
 		case 0:
 		default:
 			if (IS_SET(weather_info.weather_type, kWeatherHail)) {
-				strcat(buf, "Град прекратился.\r\n");
+				message += "Град прекратился.\r\n";
 				SetPrecipitations(&cweather_type, kWeatherLightrain, 10, 40, 50);
 			} else if (IS_SET(weather_info.weather_type, kWeatherBigrain)) {
 				if (weather_info.change >= 5) {
-					strcat(buf, "Дождь утих.\r\n");
+					message += "Дождь утих.\r\n";
 					SetPrecipitations(&cweather_type, kWeatherLightrain, 20, 80, 0);
 				} else
 					SET_BIT(cweather_type, kWeatherBigrain);
 			} else if (IS_SET(weather_info.weather_type, kWeatherMediumrain)) {
 				if (weather_info.change <= -5) {
-					strcat(buf, "Дождь усилился.\r\n");
+					message += "Дождь усилился.\r\n";
 					SET_BIT(cweather_type, kWeatherBigrain);
 				} else if (weather_info.change >= 5) {
-					strcat(buf, "Дождь утих.\r\n");
+					message += "Дождь утих.\r\n";
 					SET_BIT(cweather_type, kWeatherLightrain);
 				} else
 					SET_BIT(cweather_type, kWeatherMediumrain);
 			} else if (IS_SET(weather_info.weather_type, kWeatherLightrain)) {
 				if (weather_info.change <= -5) {
-					strcat(buf, "Дождь усилился.\r\n");
+					message += "Дождь усилился.\r\n";
 					SetPrecipitations(&cweather_type, kWeatherLightrain, 0, 70, 30);
 				} else
 					SET_BIT(cweather_type, kWeatherLightrain);
 			} else if (IS_SET(weather_info.weather_type, kWeatherBigsnow)) {
 				if (weather_info.change >= 5) {
-					strcat(buf, "Снегопад утих.\r\n");
+					message += "Снегопад утих.\r\n";
 					SetPrecipitations(&cweather_type, kWeatherLightsnow, 20, 80, 0);
 				} else
 					SET_BIT(cweather_type, kWeatherBigsnow);
 			} else if (IS_SET(weather_info.weather_type, kWeatherMediumsnow)) {
 				if (weather_info.change <= -5) {
-					strcat(buf, "Снегопад усилился.\r\n");
+					message += "Снегопад усилился.\r\n";
 					SET_BIT(cweather_type, kWeatherBigsnow);
 				} else if (weather_info.change >= 5) {
-					strcat(buf, "Снегопад утих.\r\n");
+					message += "Снегопад утих.\r\n";
 					SET_BIT(cweather_type, kWeatherLightsnow);
 				} else
 					SET_BIT(cweather_type, kWeatherMediumsnow);
 			} else if (IS_SET(weather_info.weather_type, kWeatherLightsnow)) {
 				if (weather_info.change <= -5) {
-					strcat(buf, "Снегопад усилился.\r\n");
+					message += "Снегопад усилился.\r\n";
 					SetPrecipitations(&cweather_type, kWeatherLightsnow, 0, 70, 30);
 				} else
 					SET_BIT(cweather_type, kWeatherLightsnow);
@@ -769,8 +770,8 @@ void weather_change() {
 			break;
 	}
 
-	if (*buf)
-		SendMsgToOutdoor(buf, WEATHER_CONTROL);
+	if (!message.empty())
+		SendMsgToOutdoor(message.c_str(), WEATHER_CONTROL);
 	weather_info.weather_type = cweather_type;
 }
 
@@ -846,7 +847,7 @@ int CalcDaySpellMod(CharData *ch, ESpell /* spell_id */, int type, int value) {
 			break;
 		case GAPPLY_SPELL_EFFECT: break;
 	}
-	if (IS_IMMORTAL(ch) || GET_GOD_FLAG(ch, EGf::kGodsLike))
+	if (privilege::IsImmortal(ch) || GET_GOD_FLAG(ch, EGf::kGodsLike))
 		modi = MAX(modi, value);
 	return (modi);
 }
@@ -865,7 +866,7 @@ int CalcWeatherSpellMod(CharData *ch, ESpell spell_id, int type, int value) {
 		return (modi);
 		}
 
-	sky = GET_ROOM_SKY(ch->in_room);
+	sky = (world[ch->in_room]->weather.duration > 0 ? world[ch->in_room]->weather.sky : weather_info.sky);
 	auto element = MUD::Spell(spell_id).GetElement();
 	switch (type) {
 		case GAPPLY_SPELL_SUCCESS:
@@ -999,7 +1000,7 @@ int weather_skill_modifier(CharData *ch, ESkill skillnum, int type, int value) {
 		ROOM_FLAGGED(ch->in_room, ERoomFlag::kIndoors) || ROOM_FLAGGED(ch->in_room, ERoomFlag::kNoWeather))
 		return (modi);
 
-	sky = GET_ROOM_SKY(ch->in_room);
+	sky = (world[ch->in_room]->weather.duration > 0 ? world[ch->in_room]->weather.sky : weather_info.sky);
 
 	switch (type) {
 		case GAPPLY_SKILL_SUCCESS:
@@ -1027,7 +1028,7 @@ int weather_skill_modifier(CharData *ch, ESkill skillnum, int type, int value) {
 			}
 			break;
 	}
-	if (IS_IMMORTAL(ch))
+	if (privilege::IsImmortal(ch))
 		modi = MAX(modi, value);
 	return (modi);
 }
@@ -1040,7 +1041,7 @@ int GetComplexSkillMod(CharData *ch, ESkill skillnum, int type, int value) {
 }
 
 int get_room_sky(int rnum) {
-	return GET_ROOM_SKY(rnum);
+	return (world[rnum]->weather.duration > 0 ? world[rnum]->weather.sky : weather_info.sky);
 }
 
 // Calculate the MUD time passed over the last time_to-time_from centuries (secs) //

@@ -1,26 +1,36 @@
+#include "engine/core/target_resolver.h"
 #include "engine/entities/char_data.h"
+#include "administration/privilege.h"
+#include "skill_messages.h"
 #include "engine/db/global_objects.h"
 #include "engine/core/utils_char_obj.inl"
+#include "utils/utils_string.h"
+
+#include <fmt/format.h>
 
 void DoArmoring(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	ObjData *obj;
-	char arg2[kMaxInputLength];
 	int add_ac, prob, percent, i, armorvalue;
 	const auto &strengthening = GlobalObjects::strengthening();
 
-	if (!ch->GetSkill(ESkill::kArmoring)) {
-		SendMsgToChar("Вы не умеете этого.", ch);
+	if (!GetSkill(ch, ESkill::kArmoring)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kArmoring, ESkillMsg::kDontKnowSkill), ch);
 		return;
 	}
 
-	two_arguments(argument, arg, arg2);
+	std::string arg2;
+	const std::string obj_name = utils::ExtractFirstArgumentLower(argument, arg2);
+	arg2 = utils::ExtractFirstArgumentLower(arg2);
 
-	if (!*arg)
-		SendMsgToChar("Что вы хотите укрепить?\r\n", ch);
+	// Раньше здесь не было return, и на пустой аргумент игрок получал сразу два сообщения:
+	// "укажите цель" и следом "У вас нет ''" (#3807).
+	if (obj_name.empty()) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kArmoring, ESkillMsg::kNoTarget) + "\r\n", ch);
+		return;
+	}
 
-	if (!(obj = get_obj_in_list_vis(ch, arg, ch->carrying))) {
-		snprintf(buf, kMaxInputLength, "У вас нет \'%s\'.\r\n", arg);
-		SendMsgToChar(buf, ch);
+	if (!(obj = get_obj_in_list_vis(ch, obj_name, ch->carrying))) {
+		SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", obj_name), ch);
 		return;
 	}
 
@@ -41,7 +51,7 @@ void DoArmoring(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			return;
 		}
 
-	if (!OBJWEAR_FLAGGED(obj, (to_underlying(EWearFlag::kBody)
+	if (!obj->get_wear_mask((to_underlying(EWearFlag::kBody)
 		| to_underlying(EWearFlag::kShoulders)
 		| to_underlying(EWearFlag::kHead)
 		| to_underlying(EWearFlag::kArms)
@@ -50,11 +60,11 @@ void DoArmoring(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		act("$o3 невозможно укрепить.", false, ch, obj, nullptr, kToChar);
 		return;
 	}
-	if (obj->get_owner() != GET_UID(ch)) {
+	if (obj->get_owner() != ch->get_uid()) {
 		SendMsgToChar(ch, "Укрепить можно только лично сделанный предмет.\r\n");
 		return;
 	}
-	if (!*arg2 && (ch->GetSkill(ESkill::kArmoring) >= 100)) {
+	if (arg2.empty() && (GetSkill(ch, ESkill::kArmoring) >= 100)) {
 		SendMsgToChar(ch,
 					  "Укажите параметр для улучшения: поглощение, здоровье, живучесть (сопротивление),"
 					  " стойкость (сопротивление), огня (сопротивление), воздуха (сопротивление), воды (сопротивление), земли (сопротивление)\r\n");
@@ -82,60 +92,61 @@ void DoArmoring(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				false, ch, obj, nullptr, kToRoom | kToArenaListen);
 			break;
 
-		default: sprintf(buf, "К сожалению, %s сделан из неподходящего материала.\r\n", OBJN(obj, ch, ECase::kNom));
-			SendMsgToChar(buf, ch);
+		default:
+			SendMsgToChar(fmt::format("К сожалению, {} сделан из неподходящего материала.\r\n",
+									  OBJN(obj, ch, grammar::ECase::kNom)), ch);
 			return;
 	}
 
 	percent = number(1, MUD::Skills()[ESkill::kArmoring].difficulty);
 	prob = CalcCurrentSkill(ch, ESkill::kArmoring, nullptr);
 	TrainSkill(ch, ESkill::kArmoring, percent <= prob, nullptr);
-	add_ac = IS_IMMORTAL(ch) ? -20 : -number(1, (GetRealLevel(ch) + 4) / 5);
+	add_ac = privilege::IsImmortal(ch) ? -20 : -number(1, (GetRealLevel(ch) + 4) / 5);
 	if (percent > prob || GET_GOD_FLAG(ch, EGf::kGodscurse)) {
 		act("Но только испортили $S.", false, ch, obj, nullptr, kToChar);
 		add_ac = -add_ac;
-	} else if (ch->GetSkill(ESkill::kArmoring) >= 100) {
+	} else if (GetSkill(ch, ESkill::kArmoring) >= 100) {
 		if (CompareParam(arg2, "поглощение")) {
-			armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::ABSORBTION);
+			armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::ABSORBTION);
 			armorvalue = std::max(0, number(armorvalue, armorvalue - 2));
 //			SendMsgToChar(ch, "увеличиваю поглот на %d\r\n", armorvalue);
 			obj->set_affected(1, EApply::kAbsorbe, armorvalue);
 		} else if (CompareParam(arg2, "здоровье")) {
-			armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::HEALTH);
+			armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::HEALTH);
 			armorvalue = std::max(0, number(armorvalue, armorvalue - 2));
 			armorvalue *= -1;
 //			SendMsgToChar(ch, "увеличиваю здоровье на %d\r\n", armorvalue);
 			obj->set_affected(1, EApply::kSavingCritical, armorvalue);
 		} else if (CompareParam(arg2, "живучесть"))// резисты в - лучше
 		{
-			armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::VITALITY);
+			armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::VITALITY);
 			armorvalue = -std::max(0, number(armorvalue, armorvalue - 2));
 			armorvalue *= -1;
 //			SendMsgToChar(ch, "увеличиваю живучесть на %d\r\n", armorvalue);
 			obj->set_affected(1, EApply::kResistVitality, armorvalue);
 		} else if (CompareParam(arg2, "стойкость")) {
-			armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::STAMINA);
+			armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::STAMINA);
 			armorvalue = std::max(0, number(armorvalue, armorvalue - 2));
 			armorvalue *= -1;
 //			SendMsgToChar(ch, "увеличиваю стойкость на %d\r\n", armorvalue);
 			obj->set_affected(1, EApply::kSavingStability, armorvalue);
 		} else if (CompareParam(arg2, "воздуха")) {
-			armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::AIR_PROTECTION);
+			armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::AIR_PROTECTION);
 			armorvalue = std::max(0, number(armorvalue, armorvalue - 2));
 //			SendMsgToChar(ch, "увеличиваю сопр воздуха на %d\r\n", armorvalue);
 			obj->set_affected(1, EApply::kResistAir, armorvalue);
 		} else if (CompareParam(arg2, "воды")) {
-			armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::WATER_PROTECTION);
+			armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::WATER_PROTECTION);
 			armorvalue = std::max(0, number(armorvalue, armorvalue - 2));
 //			SendMsgToChar(ch, "увеличиваю сопр воды на %d\r\n", armorvalue);
 			obj->set_affected(1, EApply::kResistWater, armorvalue);
 		} else if (CompareParam(arg2, "огня")) {
-			armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::FIRE_PROTECTION);
+			armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::FIRE_PROTECTION);
 			armorvalue = std::max(0, number(armorvalue, armorvalue - 2));
 //			SendMsgToChar(ch, "увеличиваю сопр огню на %d\r\n", armorvalue);
 			obj->set_affected(1, EApply::kResistFire, armorvalue);
 		} else if (CompareParam(arg2, "земли")) {
-			armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::EARTH_PROTECTION);
+			armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::EARTH_PROTECTION);
 			armorvalue = std::max(0, number(armorvalue, armorvalue - 2));
 //			SendMsgToChar(ch, "увеличиваю сопр земли на %d\r\n", armorvalue);
 			obj->set_affected(1, EApply::kResistEarth, armorvalue);
@@ -143,12 +154,12 @@ void DoArmoring(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			SendMsgToChar(ch, "Но не поняли что улучшать.\r\n");
 			return;
 		}
-		armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::TIMER);
+		armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::TIMER);
 		int timer =
-			obj->get_timer() * strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::TIMER) / 100;
+			obj->get_timer() * strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::TIMER) / 100;
 		obj->set_timer(timer);
 //		SendMsgToChar(ch, "увеличиваю таймер на %d%, устанавливаю таймер %d\r\n", armorvalue, timer);
-		armorvalue = strengthening((ch->GetSkill(ESkill::kArmoring) / 10 * 10), Strengthening::ARMOR);
+		armorvalue = strengthening((GetSkill(ch, ESkill::kArmoring) / 10 * 10), Strengthening::ARMOR);
 //		SendMsgToChar(ch, "увеличиваю армор на %d скилл равен %d  значение берем %d\r\n", armorvalue, GET_SKILL(ch, ESkill::kArmoring), (GET_SKILL(ch, ESkill::kArmoring) / 10 * 10) );
 		obj->set_affected(2, EApply::kArmour, armorvalue);
 		obj->set_extra_flag(EObjFlag::kArmored);

@@ -5,54 +5,29 @@
 #ifndef MAP_HPP_INCLUDED
 #define MAP_HPP_INCLUDED
 
-#include "engine/core/conf.h"
 #include <string>
-#include <bitset>
+#include <string_view>
+#include "engine/ui/map_options.h"
 
-#include "engine/core/sysdep.h"
-#include "engine/structs/structs.h"
-#include "engine/entities/char_data.h"
-#include "interpreter.h"
+class CharData;
 
 void do_map(CharData *ch, char *argument, int cmd, int subcmd);
 
 namespace MapSystem {
 
-enum {
-	MAP_MODE_MOBS,
-	MAP_MODE_PLAYERS,
-	MAP_MODE_MOBS_CORPSES,
-	MAP_MODE_PLAYER_CORPSES,
-	MAP_MODE_INGREDIENTS,
-	MAP_MODE_OTHER_OBJECTS,
-	MAP_MODE_1_DEPTH,
-	MAP_MODE_2_DEPTH,
-	MAP_MODE_DEPTH_FIXED,
-	MAP_MODE_MOB_SPEC_SHOP,
-	MAP_MODE_MOB_SPEC_RENT,
-	MAP_MODE_MOB_SPEC_MAIL,
-	MAP_MODE_MOB_SPEC_BANK,
-	MAP_MODE_MOB_SPEC_EXCH,
-	MAP_MODE_MOB_SPEC_HORSE,
-	MAP_MODE_MOB_SPEC_TEACH,
-	MAP_MODE_MOB_SPEC_TORC,
-	MAP_MODE_MOB_SPEC_ALL,
-	MAP_MODE_MOBS_CURR_ROOM,
-	MAP_MODE_OBJS_CURR_ROOM,
-	MAP_MODE_BIG,
-	TOTAL_MAP_OPTIONS
-};
-
 void print_map(CharData *ch, CharData *imm = 0);
 void do_command(CharData *ch, const std::string &arg);
 
-struct Options {
-	void olc_menu(CharData *ch);
-	void parse_menu(CharData *ch, const char *arg);
-	void text_olc(CharData *ch, const char *arg);
+// Клетка карты хранится строкой вида "&K - &n": цвет, видимая часть, сброс. Сброс после
+// каждой клетки стоит дорого -- на проводе это ещё семь байт, а клеток в карте сотни
+// (у имма в городе выходило под шесть килобайт на шаг). Эти две функции разбирают клетку
+// на части, чтобы печатать цвет только при смене, а сбрасывать раз в конце строки.
 
-	std::bitset<TOTAL_MAP_OPTIONS> bit_list_;
-};
+// Цветовой ключ клетки ("&K") или пусто, если клетка без цвета.
+std::string_view SignColor(std::string_view sign);
+
+// Видимая часть клетки (" - ") -- без ведущего цвета и завершающего "&n".
+std::string_view SignGlyph(std::string_view sign);
 
 } // namespace MapSystem
 

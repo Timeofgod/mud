@@ -1,24 +1,31 @@
 // Copyright (c) 2012 Krodo
 // Part of Bylins http://www.mud.ru
 
+#include <sstream>
 #include "sets_drop.h"
+#include "utils/native_text.h"
+
+#include <unordered_map>
+#include <unordered_set>
 
 #include "third_party_libs/pugixml/pugixml.h"
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include "engine/db/obj_prototypes.h"
+#include "engine/db/global_objects.h"
 #include "gameplay/clans/house.h"
 #include "engine/ui/color.h"
 #include "engine/db/help.h"
 #include "gameplay/statistics/mob_stat.h"
 #include "engine/entities/zone.h"
 #include "gameplay/ai/spec_procs.h"
+#include "gameplay/mechanics/dungeons.h"   // kZoneStartDungeons
+#include "gameplay/mechanics/service_zones.h"
 
 namespace SetsDrop {
 // список сетин на дроп
-const char *CONFIG_FILE = LIB_MISC"full_set_drop.xml";
+const char *CONFIG_FILE = LIB_CFG"mechanics/sets_drop.xml";
 // список уникальных мобов
-const char *UNIQUE_MOBS = LIB_PLRSTUFF"unique_mobs.xml";
 // минимальный уровень моба для участия в груп-списке дропа
 const int MIN_GROUP_MOB_LVL = 32;
 // мин/макс уровни мобов для выборки соло-сетин
@@ -26,7 +33,6 @@ const int MIN_SOLO_MOB_LVL = 25;
 const int MAX_SOLO_MOB_LVL = 31;
 // макс. кол-во участников в группе учитываемое в статистике
 const int MAX_GROUP_SIZE = 12;
-const char *DROP_TABLE_FILE = LIB_PLRSTUFF"sets_drop.xml";
 // сброс таблицы лоада каждые х часов
 const int RESET_TIMER = 35;
 // базовый шанс дропа соло сетин *10
@@ -80,6 +86,9 @@ struct ZoneNode {
 
 // временный список для отсева неуникальных имен внутри одной зоны
 std::list<ZoneNode> mob_name_list;
+// перепись имен зоны: сколько РАЗНЫХ мобов носит каждое имя. Считается по всем мобам из
+// зон-ресетов, до отсева по лимиту в мире (см. init_mob_name_list и filter_dupe_names).
+std::unordered_map<int, std::unordered_map<std::string, int>> zone_name_count;
 // временный список мобов на лоад груп-сетин
 std::list<ZoneNode> group_mob_list;
 // временный список мобов на лоад соло-сетин
@@ -209,10 +218,12 @@ void create_clone_miniset(int vnum) {
 // * Инициализация списка сетов на лоад.
 void init_obj_list() {
 	pugi::xml_document doc;
-	pugi::xml_parse_result result = doc.load_file(CONFIG_FILE);
+	// Файл лежит на диске в KOI8-R; читаем через границу кодировки, а разбираем уже
+	// буфер в нативной кодировке движка (issue #3681). Под KOI8-R это тождество.
+	const std::string xml_sets_drop = native_text::read_data_file(CONFIG_FILE);
+	pugi::xml_parse_result result = doc.load_buffer(xml_sets_drop.data(), xml_sets_drop.size());
 	if (!result) {
-		snprintf(buf, kMaxStringLength, "...%s", result.description());
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+		mudlog(fmt::format("...{}", result.description()), CMP, kLvlImmortal, SYSLOG, true);
 		return;
 	}
 	pugi::xml_node node_list = doc.child("set_list");
@@ -231,39 +242,26 @@ void init_obj_list() {
 			continue;
 		}
 
-		std::string type = parse::ReadAattrAsStr(set_node, "type");
-		if (type.empty() || (type != "auto" && type != "manual")) {
-			snprintf(buf, sizeof(buf),
-					 "...bad set attributes (type=%s)", type.c_str());
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-			continue;
-		}
+		// manual_mode=true: для каждой сетины руками задан group="true|false".
+		// false (по умолчанию): сет делится на solo/group автоматом по активаторам.
+		const bool manual_mode = set_node.attribute("manual_mode").as_bool();
 
 		std::set<int> tmp_solo_list;
 
-		if (type == "manual") {
+		if (manual_mode) {
 			for (pugi::xml_node obj_node = set_node.child("obj");
 				 obj_node; obj_node = obj_node.next_sibling("obj")) {
 				const int obj_vnum = parse::ReadAttrAsInt(obj_node, "vnum");
 				const int obj_rnum = GetObjRnum(obj_vnum);
 				if (obj_rnum < 0) {
-					snprintf(buf, sizeof(buf),
-							 "...bad obj_node attributes (vnum=%d)", obj_vnum);
-					mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+					mudlog(fmt::format("...bad obj_node attributes (vnum={})", obj_vnum),
+						   CMP, kLvlImmortal, SYSLOG, true);
 					continue;
 				}
 
-				std::string list_type = parse::ReadAattrAsStr(obj_node, "list");
-				if (list_type.empty()
-					|| (list_type != "solo" && list_type != "group")) {
-					snprintf(buf, sizeof(buf),
-							 "...bad manual obj attributes (list=%s, ObjVnum=%d)",
-							 list_type.c_str(), obj_vnum);
-					mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-					continue;
-				}
-
-				if (list_type == "solo") {
+				// group="true" -- груп-список, false/без атрибута -- соло-список
+				const bool group = obj_node.attribute("group").as_bool();
+				if (!group) {
 					solo_obj_list.push_back(obj_vnum);
 					// предварительный соло список, который
 					// дальше может быть поделен еще на два
@@ -295,9 +293,8 @@ void init_obj_list() {
 			for (pugi::xml_node obj_node = set_node.child("obj"); obj_node; obj_node = obj_node.next_sibling("obj")) {
 				const int obj_vnum = parse::ReadAttrAsInt(obj_node, "vnum");
 				if (GetObjRnum(obj_vnum) < 0) {
-					snprintf(buf, sizeof(buf),
-							 "...bad obj_node attributes (vnum=%d)", obj_vnum);
-					mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+					mudlog(fmt::format("...bad obj_node attributes (vnum={})", obj_vnum),
+						   CMP, kLvlImmortal, SYSLOG, true);
 					continue;
 				}
 				// заполнение списка активаторов
@@ -377,33 +374,16 @@ void add_to_zone_list(std::list<ZoneNode> &cont, MobNode &node) {
 void init_mob_name_list() {
 	std::set<int> bad_zones;
 
-	// клан-замки
+	// клан-замки -- меняются в игре, поэтому считаем каждый раз
 	for (const auto &clan : Clan::ClanList) {
 		bad_zones.insert(clan->GetRent() / 100);
 	}
 
-	// города
-	int curr_zone = 0;
-	bool rent = false, mail = false, banker = false;
-	for (const auto i : world) {
-		if (curr_zone != zone_table[i->zone_rn].vnum) {
-			if (rent && mail && banker) {
-				bad_zones.insert(curr_zone);
-			}
-			rent = false;
-			mail = false;
-			banker = false;
-			curr_zone = zone_table[i->zone_rn].vnum;
-		}
-
-		for (const auto ch : i->people) {
-			if (IS_RENTKEEPER(ch)) {
-				rent = true;
-			} else if (IS_POSTKEEPER(ch)) {
-				mail = true;
-			} else if (IS_BANKKEEPER(ch)) {
-				banker = true;
-			}
+	// города -- флаг зоны, посчитанный при загрузке мира (SetZonesTownFlags): там уже пройдены
+	// комнаты каждой зоны в поисках ренты, банка и почты, второй раз то же самое делать незачем.
+	for (const auto &zone : zone_table) {
+		if (zone.is_town) {
+			bad_zones.insert(zone.vnum);
 		}
 	}
 
@@ -414,26 +394,109 @@ void init_mob_name_list() {
 		}
 	}
 
-	for (auto i = mob_stat::mob_stat_register.cbegin(),
-			 iend = mob_stat::mob_stat_register.cend(); i != iend; ++i) {
-		const int rnum = GetMobRnum(i->first);
-		const int zone = i->first / 100;
-		std::set<int>::const_iterator k = bad_zones.find(zone);
+	// Лимит в мире у моба глобальный: при ресете сверяется total_online < arg2 (см. db.cpp,
+	// обработку команды 'M'), а команд загрузки у одного внума бывает несколько, и с разными
+	// лимитами. Раньше уникальность проверялась по каждой команде отдельно, поэтому моб с
+	// набором лимитов [4, 4, 4, 4, 1] проходил как уникальный по единственной строке с
+	// единицей, хотя в мире их стояло четверо -- и шанс дропа сетины с зоны множился на их
+	// число. Считаем эффективный лимит внума заранее, по всем командам всех зон: города,
+	// стройки и данжи в таблицу дропа не идут, но мир заполняют наравне со всеми.
+	std::unordered_map<int, int> effective_miw;
+	for (const auto &zone : zone_table) {
+		for (int cmd_no = 0; zone.cmd && zone.cmd[cmd_no].command != 'S'; ++cmd_no) {
+			if (zone.cmd[cmd_no].command != 'M') {
+				continue;
+			}
+			const int rnum = zone.cmd[cmd_no].arg1;
+			if (rnum < 0 || rnum > top_of_mobt) {
+				continue;
+			}
+			int &cap = effective_miw[rnum];
+			cap = std::max(cap, zone.cmd[cmd_no].arg2);
+		}
+	}
+	// Перепись имен строится здесь же, по ключам effective_miw -- это ровно все мобы из
+	// зон-ресетов, каждый по одному разу. Раньше filter_dupe_names считала имена по уже
+	// отобранным кандидатам, и двойник, отсеявшийся раньше по лимиту, в счет не попадал:
+	// у зоны 682 "всадник без головы" есть двумя внумами, 68203 (лимит 4) и 68211 (лимит 1),
+	// первый отсеивался по лимиту, второй оставался и выглядел уникальным по имени. Сетина
+	// садилась на него, а игрок бил неотличимого с виду двойника и не понимал, почему
+	// счетчик не двигается.
+	zone_name_count.clear();
+	for (const auto &node : effective_miw) {
+		const int mob_vnum = mob_index[node.first].vnum;
+		++zone_name_count[mob_vnum / 100][mob_proto[node.first].get_name()];
+	}
 
-		if (rnum < 0
-			|| zone < 100
-			|| k != bad_zones.end()) {
+	// один и тот же моб грузится несколькими командами -- в списке кандидатов он нужен однажды
+	std::unordered_set<int> added_mobs;
+
+	// Кандидаты берутся из команд загрузки мобов в зон-ресетах, а не из статистики убийств:
+	// в реестр статистики попадают только те, кого недавно били, поэтому глухие зоны выпадали
+	// из таблицы навсегда и дроп сползал на популярных мобов. Команда 'M' дает все нужное сразу:
+	// самого моба, его лимит в мире и комнату, куда он грузится.
+	for (const auto &zone : zone_table) {
+		const int zone_vnum = zone.vnum;
+		if (service_zones::IsNoLootZone(zone_vnum)   // служебные и начальные, см. cfg/mechanics
+			|| zone_vnum >= dungeons::kZoneStartDungeons   // в данжах сеты не падают
+			|| bad_zones.count(zone_vnum) > 0) {
 			continue;
 		}
 
-		MobNode node;
-		node.vnum = i->first;
-		node.rnum = rnum;
-		node.name = mob_proto[rnum].get_name();
-		auto stat = mob_stat::SumStat(i->second.stats, 4);
-		node.kill_stat = stat.kills;
+		for (int cmd_no = 0; zone.cmd && zone.cmd[cmd_no].command != 'S'; ++cmd_no) {
+			if (zone.cmd[cmd_no].command != 'M') {
+				continue;
+			}
+			const int rnum = zone.cmd[cmd_no].arg1;      // rnum моба (переведен при загрузке)
+			const RoomRnum room_rnum = zone.cmd[cmd_no].arg3;   // rnum комнаты, тоже переведен
 
-		add_to_zone_list(mob_name_list, node);
+			if (rnum < 0 || rnum > top_of_mobt) {
+				continue;
+			}
+			// лимит берем не из этой команды, а эффективный по внуму -- см. комментарий выше
+			const int max_in_world = effective_miw[rnum];
+			// пока только уникальные мобы
+			if (max_in_world != 1) {
+				continue;
+			}
+			if (room_rnum <= 0 || static_cast<size_t>(room_rnum) >= world.size()) {
+				continue;
+			}
+			// В мирной комнате моба не убить -- но только если он там и стоит. Бродячий моб
+			// из мирной выйдет, такой в списке нужен: дождется, когда выйдет, и будет убит.
+			if (ROOM_FLAGGED(room_rnum, ERoomFlag::kPeaceful)
+				&& mob_proto[rnum].IsFlagged(EMobFlag::kSentinel)) {
+				continue;
+			}
+			// засадные мобы сидят в виртуальных комнатах без выходов -- до них не добраться
+			bool has_exit = false;
+			for (int dir = 0; dir < EDirection::kMaxDirNum; ++dir) {
+				if (world[room_rnum]->dir_option[dir]) {
+					has_exit = true;
+					break;
+				}
+			}
+			if (!has_exit) {
+				continue;
+			}
+			// первая подошедшая команда моба заносит его в список, остальные пропускаем
+			if (!added_mobs.insert(rnum).second) {
+				continue;
+			}
+
+			MobNode node;
+			node.vnum = mob_index[rnum].vnum;
+			node.rnum = rnum;
+			node.name = mob_proto[rnum].get_name();
+			node.miw = max_in_world;
+			// статистика убийств есть не у всех -- она только уточняет тип моба
+			const auto stat_it = mob_stat::mob_stat_register.find(node.vnum);
+			if (stat_it != mob_stat::mob_stat_register.cend()) {
+				node.kill_stat = mob_stat::SumStat(stat_it->second.stats, 4).kills;
+			}
+
+			add_to_zone_list(mob_name_list, node);
+		}
 	}
 }
 
@@ -441,22 +504,11 @@ void init_mob_name_list() {
 void init_zone_type() {
 	for (std::list<ZoneNode>::iterator i = mob_name_list.begin(),
 			 iend = mob_name_list.end(); i != iend; ++i) {
-		int killed_solo = 0;
-		for (std::list<MobNode>::iterator k = i->mobs.begin(),
-				 kend = i->mobs.end(); k != kend; ++k) {
-			int group_cnt = 0;
-			for (int cnt = 2; cnt <= MAX_GROUP_SIZE; ++cnt) {
-				group_cnt += k->kill_stat.at(cnt);
-			}
-			if (k->kill_stat.at(1) > group_cnt) {
-				++killed_solo;
-			}
-		}
-		if (killed_solo >= i->mobs.size() * 0.8) {
-			i->type = SOLO_ZONE;
-		} else {
-			i->type = GROUP_ZONE;
-		}
+		// Тип берется из свойства зоны ("оптимальное число игроков", <= 1 -- соло): оно задано
+		// билдером и есть у любой зоны, в том числе у той, где никого ни разу не били. Раньше тип
+		// считался по статистике убийств, и зона без статистики выпадала из таблицы целиком.
+		const auto zone_rnum = GetZoneRnum(i->zone);
+		i->type = (zone_rnum >= 0 && zone_table[zone_rnum].group >= 2) ? GROUP_ZONE : SOLO_ZONE;
 	}
 }
 
@@ -466,30 +518,29 @@ void init_mob_type() {
 			 iend = mob_name_list.end(); i != iend; ++i) {
 		for (std::list<MobNode>::iterator k = i->mobs.begin(),
 				 kend = i->mobs.end(); k != kend; ++k) {
+			// по умолчанию моб той же природы, что и его зона -- это работает и без статистики
+			k->type = (i->type == GROUP_ZONE) ? GROUP_MOB : SOLO_MOB;
+
+			// если моба били, статистика уточняет: в групповой зоне его могли валить в одиночку
+			// и наоборот
 			int group_cnt = 0;
 			for (int cnt = 2; cnt <= MAX_GROUP_SIZE; ++cnt) {
 				group_cnt += k->kill_stat.at(cnt);
 			}
-			if (i->type == SOLO_ZONE && k->kill_stat.at(1) > group_cnt) {
-				k->type = SOLO_MOB;
-			} else if (i->type == GROUP_ZONE && k->kill_stat.at(1) < group_cnt) {
-				k->type = GROUP_MOB;
+			const int solo_cnt = k->kill_stat.at(1);
+			if (solo_cnt + group_cnt > 0) {
+				k->type = (solo_cnt > group_cnt) ? SOLO_MOB : GROUP_MOB;
 			}
 		}
 	}
 }
 
-int calc_max_in_world(int mob_rnum) {
-	return mob_index[mob_rnum].stored;
-}
-
 /**
  * С этого момента начинают отсекаться отдельные мобы
  * Отсекаются: мобы с неуникальным именем внутри одной зоны,
- *             мобы больше 1 макс.в.мире
  *             мобы ниже требуемого уровня для данного типа
  *             мобы с флагами только полнолуние/времена года
- * Инится у моба: макс.в.мире
+ * Мобы больше 1 макс.в.мире отсеиваются раньше, при отборе по командам зон-ресетов.
  */
 void filter_dupe_names() {
 	int vnum = 0;
@@ -497,18 +548,16 @@ void filter_dupe_names() {
 	for (std::list<ZoneNode>::iterator it = mob_name_list.begin(),
 			 iend = mob_name_list.end(); it != iend; ++it) {
 		std::list<MobNode> tmp_list;
+		// Перепись имен готова заранее (init_mob_name_list) и считана по ВСЕМ мобам зоны, а не
+		// по одним кандидатам: двойник мог отсеяться раньше по лимиту в мире, и тогда счет по
+		// кандидатам показывал оставшегося уникальным по имени.
+		const auto &name_count = zone_name_count[it->zone];
 		// отсеиваем (включая оригинал) одинаковые имена с разными внумами
 		for (std::list<MobNode>::iterator k = it->mobs.begin(),
 				 kend = it->mobs.end(); k != kend; ++k) {
 			// одинаковые имена в пределах зоны
-			bool good = true;
-			for (std::list<MobNode>::iterator l = it->mobs.begin(),
-					 lend = it->mobs.end(); l != lend; ++l) {
-				if (k->vnum != l->vnum && k->name == l->name) {
-					good = false;
-					break;
-				}
-			}
+			const auto name_it = name_count.find(k->name);
+			const bool good = (name_it == name_count.end() ? 1 : name_it->second) <= 1;
 			if (!good || k->type == -1) {
 				continue;
 			}
@@ -524,19 +573,14 @@ void filter_dupe_names() {
 				|| mob->IsFlagged(EMobFlag::kAppearsSummer)
 				|| mob->IsFlagged(EMobFlag::kAppearsAutumn)
 				|| NPC_FLAGGED(mob, ENpcFlag::kFreeDrop) //не падает фридроп
-				|| mob->IsFlagged(EMobFlag::kProtect) //нельзя убить
+				|| mob->IsFlagged(EMobFlag::kProtect) //урон обнуляется, не убить
+				|| mob->IsFlagged(EMobFlag::kNoFight) //на него нельзя даже напасть
 				|| mob->get_exp() <= 0) {
 				continue;
 			}
 
 
 
-
-			// пока только уникальные мобы
-			k->miw = calc_max_in_world(k->rnum);
-			if (k->miw != 1) {
-				continue;
-			}
 
 			vnum = mob_index[k->rnum].vnum;
 			level = mob_proto[k->rnum].GetLevel();
@@ -551,7 +595,7 @@ void filter_dupe_names() {
 
 			tmp_list.push_back(*k);
 		}
-		it->mobs = tmp_list;
+		it->mobs = std::move(tmp_list);
 	}
 }
 
@@ -759,7 +803,7 @@ std::string print_solo_list(const std::set<int> &node) {
 					solo_obj_names << "\r\n   ";
 					new_line = 0;
 				}
-				solo_obj_names << obj_proto[k->second.obj_rnum]->get_PName(ECase::kNom);
+				solo_obj_names << obj_proto[k->second.obj_rnum]->get_PName(grammar::ECase::kNom);
 				std::stringstream solo_out;
 				solo_out.precision(1);
 				solo_out << "    - " << mob_proto[k->first].get_name()
@@ -796,7 +840,7 @@ std::string print_current_set(const HelpNode &node) {
 	for (const auto l : node.group_list) {
 		for (const auto &k : drop_list) {
 			if (obj_proto[k.second.obj_rnum]->get_vnum() == l && k.second.chance > 0) {
-				out << "   " << obj_proto[k.second.obj_rnum]->get_PName(ECase::kNom)
+				out << "   " << obj_proto[k.second.obj_rnum]->get_PName(grammar::ECase::kNom)
 					<< " - " << mob_proto[k.first].get_name()
 					<< " (" << zone_table[mob_index[k.first].zone].name << ")"
 					<< " - " << std::fixed << k.second.chance / 10.0 << "%\r\n";
@@ -842,19 +886,20 @@ void init_xhelp_full() {
 
 bool load_unique_mobs() {
 	pugi::xml_document doc;
-	pugi::xml_parse_result result = doc.load_file(UNIQUE_MOBS);
+	// Граница чтения: файл берём через StateManager, а не pugi::load_file -- тот читает байты
+	// мимо границы кодировки и под UTF-8 отдал бы дисковые байты как нативные (issue #3787).
+	const std::string xml_mobs = MUD::StateManager().LoadText(state::EStateFile::kUniqueMobs);
+	pugi::xml_parse_result result = doc.load_buffer(xml_mobs.data(), xml_mobs.size());
 	int vnum = 0;
 	int level = 0;
 	if (!result) {
-		snprintf(buf, kMaxStringLength, "...%s", result.description());
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+		mudlog(fmt::format("...{}", result.description()), CMP, kLvlImmortal, SYSLOG, true);
 		return false;
 	}
 
 	pugi::xml_node node_list = doc.child("mobs");
 	if (!node_list) {
-		snprintf(buf, kMaxStringLength, "...<mobs> read fail");
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+		mudlog("...<mobs> read fail", CMP, kLvlImmortal, SYSLOG, true);
 		return false;
 	}
 
@@ -867,86 +912,41 @@ bool load_unique_mobs() {
 }
 
 bool load_drop_table() {
-	pugi::xml_document doc;
-	pugi::xml_parse_result result = doc.load_file(DROP_TABLE_FILE);
-	if (!result) {
-		snprintf(buf, kMaxStringLength, "...%s", result.description());
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+	// Machine-only regenerable cache -> a flat list (see save_drop_table). First
+	// line is the reset timestamp; each following line is one item:
+	//   obj_vnum mob_vnum drop_chance solo(0/1) can_drop(0/1)
+	const auto lines = MUD::StateManager().LoadLines(state::EStateFile::kDropTable);
+	if (lines.empty()) {
+		return false;  // no saved table -> caller regenerates it
+	}
+	try {
+		next_reset_time = std::stoull(lines[0], nullptr, 10);
+	}
+	catch (...) {
+		mudlog("SetsDrop: bad reset time in drop table, regenerating", CMP, kLvlImmortal, SYSLOG, true);
 		return false;
 	}
-
-	pugi::xml_node node_list = doc.child("drop_list");
-	if (!node_list) {
-		snprintf(buf, kMaxStringLength, "...<drop_list> read fail");
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-		return false;
-	}
-
-	pugi::xml_node time_node = node_list.child("time");
-	std::string timer = parse::ReadAattrAsStr(time_node, "reset");
-	if (!timer.empty()) {
-		try {
-			next_reset_time = std::stoull(timer, nullptr, 10);
+	for (std::size_t n = 1; n < lines.size(); ++n) {
+		if (lines[n].empty()) {
+			continue;
 		}
-		catch (...) {
-			snprintf(buf, kMaxStringLength, "...timer (%s) lexical_cast fail", timer.c_str());
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+		int obj_vnum = 0, mob_vnum = 0, chance = 0, solo = 0, can_drop = 0;
+		if (sscanf(lines[n].c_str(), "%d %d %d %d %d", &obj_vnum, &mob_vnum, &chance, &solo, &can_drop) != 5) {
+			mudlog("SetsDrop: malformed drop-table line, regenerating", CMP, kLvlImmortal, SYSLOG, true);
 			return false;
 		}
-	} else {
-		mudlog("...empty reset time", CMP, kLvlImmortal, SYSLOG, true);
-		return false;
-	}
-
-	for (pugi::xml_node item_node = node_list.child("item"); item_node;
-		 item_node = item_node.next_sibling("item")) {
-		const int obj_vnum = parse::ReadAttrAsInt(item_node, "vnum");
 		const int obj_rnum = GetObjRnum(obj_vnum);
-		if (obj_vnum <= 0 || obj_rnum < 0) {
-			snprintf(buf, sizeof(buf),
-					 "...bad item attributes (vnum=%d)", obj_vnum);
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-			return false;
-		}
-
-		const int mob_vnum = parse::ReadAttrAsInt(item_node, "mob");
 		const int mob_rnum = GetMobRnum(mob_vnum);
-		if (mob_vnum <= 0 || mob_rnum < 0) {
-			snprintf(buf, sizeof(buf),
-					 "...bad item attributes (mob=%d)", mob_vnum);
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+		if (obj_vnum <= 0 || obj_rnum < 0 || mob_vnum <= 0 || mob_rnum < 0 || chance < 0) {
+			mudlog("SetsDrop: bad drop-table entry, regenerating", CMP, kLvlImmortal, SYSLOG, true);
 			return false;
 		}
-
-		const int chance = parse::ReadAttrAsInt(item_node, "drop_chance");
-		if (chance < 0) {
-			snprintf(buf, sizeof(buf),
-					 "...bad item attributes (drop_chance=%d)", chance);
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-			return false;
-		}
-
-		std::string solo = parse::ReadAattrAsStr(item_node, "solo");
-		if (solo.empty()) {
-			snprintf(buf, sizeof(buf), "...bad item attributes (solo=empty)");
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-			return false;
-		}
-
-		std::string can_drop = parse::ReadAattrAsStr(item_node, "can_drop");
-		if (can_drop.empty()) {
-			snprintf(buf, sizeof(buf), "...bad item attributes (can_drop=empty)");
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-			return false;
-		}
-
 		DropNode tmp_node;
 		tmp_node.obj_rnum = obj_rnum;
 		tmp_node.obj_vnum = obj_vnum;
 		tmp_node.chance = chance;
-		tmp_node.solo = solo == "true" ? true : false;
-		tmp_node.can_drop = can_drop == "true" ? true : false;
-
+		tmp_node.solo = solo != 0;
+		tmp_node.can_drop = can_drop != 0;
 		drop_list.insert(std::make_pair(mob_rnum, tmp_node));
 	}
 	return true;
@@ -963,33 +963,29 @@ void save_unique_mobs() {
 		mob_node.append_attribute("vnum") = it->first;
 		mob_node.append_attribute("level") = it->second;
 	}
-	doc.save_file(UNIQUE_MOBS);
+	// Граница записи: state/ хранится в нативной кодировке, поэтому пишем как есть
+	// (issue #3787). SaveText кладёт файл атомарно, зеркально LoadText.
+	std::ostringstream xml;
+	doc.save(xml, "\t", pugi::format_default, pugi::encoding_utf8);
+	MUD::StateManager().SaveText(state::EStateFile::kUniqueMobs, xml.str());
 }
 
 void save_drop_table() {
 	if (!need_save_drop_table) return;
-
-	pugi::xml_document doc;
-	doc.append_child().set_name("drop_list");
-	pugi::xml_node node_list = doc.child("drop_list");
-
-	pugi::xml_node time_node = node_list.append_child();
-	time_node.set_name("time");
-	time_node.append_attribute("reset") = fmt::format("{}", next_reset_time).c_str();
-
-	for (std::map<int, DropNode>::iterator i = drop_list.begin(),
-			 iend = drop_list.end(); i != iend; ++i) {
-		pugi::xml_node mob_node = node_list.append_child();
-		mob_node.set_name("item");
-		mob_node.append_attribute("vnum") = obj_proto[i->second.obj_rnum]->get_vnum();
-		mob_node.append_attribute("mob") = mob_index[i->first].vnum;
-		mob_node.append_attribute("drop_chance") = i->second.chance;
-		mob_node.append_attribute("solo") = i->second.solo ? "true" : "false";
-		mob_node.append_attribute("can_drop") = i->second.can_drop ? "true" : "false";
+	// Machine-only regenerable cache -> a flat list, not XML. First line is the
+	// reset timestamp; each following line is one item:
+	//   obj_vnum mob_vnum drop_chance solo(0/1) can_drop(0/1)
+	std::vector<std::string> lines;
+	lines.push_back(fmt::format("{}", next_reset_time));
+	for (std::map<int, DropNode>::iterator i = drop_list.begin(), iend = drop_list.end(); i != iend; ++i) {
+		lines.push_back(fmt::format("{} {} {} {} {}",
+								obj_proto[i->second.obj_rnum]->get_vnum(),
+								mob_index[i->first].vnum,
+								i->second.chance,
+								i->second.solo ? 1 : 0,
+								i->second.can_drop ? 1 : 0));
 	}
-
-	doc.save_file(DROP_TABLE_FILE);
-
+	MUD::StateManager().SaveLines(state::EStateFile::kDropTable, lines);
 	need_save_drop_table = false;
 }
 
@@ -1134,9 +1130,7 @@ int check_mob(int mob_rnum) {
 
 void renumber_obj_rnum(const int mob_rnum) {
 	if (mob_rnum < 0) {
-		snprintf(buf, kMaxStringLength,
-				 "SetsDrop: renumber_obj_rnum wrong parameters...");
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+		mudlog("SetsDrop: renumber_obj_rnum wrong parameters...", CMP, kLvlImmortal, SYSLOG, true);
 		return;
 	}
 

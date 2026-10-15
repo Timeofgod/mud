@@ -8,12 +8,13 @@
 #include "dead_load.h"
 #include "engine/entities/char_data.h"
 #include "engine/entities/obj_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "gameplay/mechanics/inventory.h"
 #include "engine/db/obj_prototypes.h"
 #include "engine/db/global_objects.h"
 #include "stable_objs.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 namespace dead_load {
 
@@ -141,8 +142,8 @@ bool ParseDeadLoadLine(OnDeadLoadList &dl_list, char *line) {
 int ResolveTagsInObjName(ObjData *obj, CharData *ch) {
 	// ищем метку @p , @p1 ... и заменяем на падежи.
 	int i, k;
-	for (i = ECase::kFirstCase; i <= ECase::kLastCase; i++) {
-		auto name_case = static_cast<ECase>(i);
+	for (i = grammar::ECase::kFirstCase; i <= grammar::ECase::kLastCase; i++) {
+		auto name_case = static_cast<grammar::ECase>(i);
 		std::string obj_pad = obj_proto[obj->get_rnum()]->get_PName(name_case);
 		size_t j = obj_pad.find("@p");
 		if (std::string::npos != j && 0 < j) {
@@ -151,7 +152,7 @@ int ResolveTagsInObjName(ObjData *obj, CharData *ch) {
 			obj_pad.replace(j, 3, GET_PAD(ch, k));
 
 			obj->set_PName(name_case, obj_pad);
-			if (i == ECase::kNom) {
+			if (i == grammar::ECase::kNom) {
 				obj->set_short_description(obj_pad);
 				obj->set_aliases(obj_pad);
 			}

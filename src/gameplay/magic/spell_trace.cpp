@@ -1,0 +1,71 @@
+/**
+ \file spell_trace.cpp - a part of the Bylins engine.
+ \brief issue.spell-tc-info: shared tester/coder diagnostic emitter for spell effects.
+*/
+
+#include "spell_trace.h"
+#include "utils/logger.h"
+#include "gameplay/mechanics/minions.h"
+
+#include "engine/entities/char_data.h"
+
+#include <cstdarg>
+#include <cstdio>
+
+namespace spell_trace {
+
+namespace {
+
+// The character who would actually receive send_to_TC output: a charmice forwards to its master;
+// plain NPCs (and master-less / NPC-mastered charmice) receive nothing.
+const CharData *Recipient(const CharData *ch) {
+	if (ch == nullptr) {
+		return nullptr;
+	}
+	if (IsCharmice(ch)) {
+		if (!ch->has_master() || ch->get_master()->IsNpc()) {
+			return nullptr;
+		}
+		return ch->get_master();
+	}
+	if (ch->IsNpc()) {
+		return nullptr;
+	}
+	return ch;
+}
+
+// Mirrors send_to_TC(false, true, true): the recipient must be a tester or a coder.
+bool Wants(const CharData *ch) {
+	const CharData *to = Recipient(ch);
+	return to != nullptr && (to->IsFlagged(EPrf::kTester) || to->IsFlagged(EPrf::kCoderinfo));
+}
+
+} // namespace
+
+bool Active(const CharData *caster, const CharData *victim) {
+	return Wants(caster) || (victim != nullptr && victim != caster && Wants(victim));
+}
+
+void Line(CharData *caster, CharData *victim, const char *fmt, ...) {
+	if (!Active(caster, victim)) {
+		return;
+	}
+	char buf[1024];
+	va_list args;
+	va_start(args, fmt);
+	vsnprintf(buf, sizeof(buf), fmt, args);
+	va_end(args);
+	if (caster != nullptr) {
+		SendToTC(caster, false, true, true, "%s", buf);
+	}
+	// issue #3971: получателя считаем по хозяину. SendToTC пересылает строку чармиса его хозяину
+	// (logger.cpp), поэтому для своего же спутника кастер получал одну и ту же строку дважды --
+	// в логе выходило по две строки на каждое наложение, будто аффект лёг два раза.
+	if (victim != nullptr && victim != caster && Recipient(victim) != Recipient(caster)) {
+		SendToTC(victim, false, true, true, "%s", buf);
+	}
+}
+
+} // namespace spell_trace
+
+// vim: ts=4 sw=4 tw=0 noet syntax=cpp :

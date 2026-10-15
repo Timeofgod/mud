@@ -7,11 +7,12 @@
 */
 
 #include "boat.h"
+#include "administration/privilege.h"
 
 #include "engine/entities/entities_constants.h"
 #include "gameplay/affects/affect_contants.h"
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_movement.h"
 #include "engine/ui/cmd/do_equip.h"
 
 bool IsBoatNeedHere(RoomRnum room_rnum);
@@ -21,7 +22,7 @@ bool IsCharIgnoresDeepWater(CharData *ch);
  * Return true if char can walk on water
  */
 bool HasBoat(CharData *ch) {
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		return true;
 	}
 
@@ -49,7 +50,7 @@ bool IsCharNeedBoatThere(CharData *ch, RoomRnum room_rnum) {
 }
 
 bool IsCharIgnoresDeepWater(CharData *ch) {
-	return (IS_GOD(ch) || ch->IsFlagged(EMobFlag::kSwimming) || AFF_FLAGGED(ch, EAffect::kWaterWalk) ||
+	return (privilege::IsGod(ch) || ch->IsFlagged(EMobFlag::kSwimming) || AFF_FLAGGED(ch, EAffect::kWaterWalk) ||
 		ch->IsFlagged(EMobFlag::kFlying) ||	AFF_FLAGGED(ch, EAffect::kFly));
 }
 

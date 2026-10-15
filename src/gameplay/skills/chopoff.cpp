@@ -1,4 +1,8 @@
 #include "chopoff.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/mount.h"
+
+#include "skill_messages.h"
 
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/common.h"
@@ -9,10 +13,22 @@
 #include "engine/db/global_objects.h"
 #include "gameplay/mechanics/sight.h"
 
+// issue.chardata-cleaning: was the global CLEAR_MIND (only used here).
+static bool ClearMind(const CharData *ch) {
+	return !ch->battle_affects.get(kEafOverwhelm) && !ch->battle_affects.get(kEafHammer);
+}
+
+// issue.chardata-cleaning: was CharData::have_mind (only used here): an autonomous NPC,
+// not a charmed pet or a ridden horse, retaliates against a missed chopoff.
+static bool IsAutonomous(const CharData *ch) {
+	return !AFF_FLAGGED(ch, EAffect::kCharmed) && !mount::IsHorse(ch);
+}
+
+
 // ************************* CHOPOFF PROCEDURES
 void go_chopoff(CharData *ch, CharData *vict) {
 	if (IsUnableToAct(ch)) {
-		SendMsgToChar("Вы временно не в состоянии сражаться.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kChopoff, ESkillMsg::kCantFightNow) + "\r\n", ch);
 		return;
 	}
 
@@ -21,11 +37,11 @@ void go_chopoff(CharData *ch, CharData *vict) {
 		return;
 	}
 
-	if (ch->IsHorsePrevents())
+	if (mount::IsBlockedByHorse(ch))
 		return;
 
 	if ((vict->GetPosition() < EPosition::kFight)) {
-		if (number(1, 100) < ch->GetSkill(ESkill::kChopoff)) {
+		if (number(1, 100) < GetSkill(ch, ESkill::kChopoff)) {
 			SendMsgToChar("Вы приготовились провести подсечку, но вовремя остановились.\r\n", ch);
 			ch->setSkillCooldown(ESkill::kChopoff, kBattleRound / 6);
 			return;
@@ -38,7 +54,7 @@ void go_chopoff(CharData *ch, CharData *vict) {
 	int percent = number(1, MUD::Skill(ESkill::kChopoff).difficulty);
 	int prob = CalcCurrentSkill(ch, ESkill::kChopoff, vict);
 
-	if (IsAffectedBySpell(ch, ESpell::kWeb)) {
+	if (IsAffectedWithFlag(ch, kAfEntanglement)) {
 		prob /= 3;
 	}
 	if (GET_GOD_FLAG(ch, EGf::kGodsLike)
@@ -49,27 +65,25 @@ void go_chopoff(CharData *ch, CharData *vict) {
 
 	if (GET_GOD_FLAG(ch, EGf::kGodscurse) ||
 		GET_GOD_FLAG(vict, EGf::kGodsLike) ||
-		vict->IsOnHorse() || vict->GetPosition() < EPosition::kFight || vict->IsFlagged(EMobFlag::kNoUndercut) || IS_IMMORTAL(
-		vict))
+		mount::IsOnHorse(vict) || vict->GetPosition() < EPosition::kFight || vict->IsFlagged(EMobFlag::kNoUndercut) || privilege::IsImmortal(vict))
 		prob = 0;
 
 	bool success = percent <= prob;
 	TrainSkill(ch, ESkill::kChopoff, success, vict);
 	SendSkillBalanceMsg(ch, MUD::Skill(ESkill::kChopoff).name, percent, prob, success);
 	if (!success) {
-		sprintf(buf, "%sВы попытались подсечь $N3, но упали сами...%s", kColorWht, kColorNrm);
-		act(buf, false, ch, nullptr, vict, kToChar);
+		act("&WВы попытались подсечь $N3, но упали сами...&n", false, ch, nullptr, vict, kToChar);
 		act("$n попытал$u подсечь вас, но упал$g сам$g.", false, ch, nullptr, vict, kToVict);
 		act("$n попытал$u подсечь $N3, но упал$g сам$g.", true, ch, nullptr, vict, kToNotVict | kToArenaListen);
 		ch->SetPosition(EPosition::kSit);
 		prob = 3;
 		if (CanUseFeat(ch, EFeat::kEvasion)) {
 			Affect<EApply> af;
-			af.type = ESpell::kExpedient;
+			af.affect_type = EAffect::kEvade;
 			af.location = EApply::kPhysicResist;
 			af.modifier = 50;
-			af.duration = CalcDuration(ch, 3, 0, 0, 0, 0);
-			af.battleflag = kAfBattledec | kAfPulsedec;
+			af.duration = CalcDuration(ch, ch, ESkill::kUndefined, 3, 0, 0, 0);
+			af.battleflag = {kAfBattledec, kAfPulsedec};
 			ImposeAffect(ch, af, false, false, false, false);
 			af.location = EApply::kAffectResist;
 			ImposeAffect(ch, af, false, false, false, false);
@@ -80,17 +94,17 @@ void go_chopoff(CharData *ch, CharData *vict) {
 			act("$n покатил$u по земле, пытаясь избежать атак $N1.", true, ch, nullptr, vict, kToNotVict | kToArenaListen);
 		}
 	} else {
-		if (IS_HORSE(vict) && vict->get_master()->IsOnHorse()) {
+		if (mount::IsHorse(vict) && mount::IsOnHorse(vict->get_master())) {
 			CharData *tch = vict->get_master();
 			act("$n ловко подсек$q $N3, заставив $S споткнуться.", true, ch, nullptr, vict, kToNotVict | kToArenaListen);
 			SendMsgToChar(ch, "%sВы провели подсечку, заставив %s споткнуться.%s\r\n",
 						  kColorBoldBlu, GET_PAD(vict, 3), kColorNrm);
 			percent = number(1, MUD::Skill(ESkill::kRiding).difficulty);
-			prob = tch->GetSkill(ESkill::kRiding);
+			prob = GetSkill(tch, ESkill::kRiding);
 			if (percent < prob) {
 				SendMsgToChar(tch, "Вы смогли удержаться на спине своего скакуна.\r\n");
 			} else {
-				vict->DropFromHorse();
+				mount::DropFromHorse(vict);
 				SetWait(vict, 1, false); //лошади тоже немнога лагу
 			}
 		} else {
@@ -101,15 +115,15 @@ void go_chopoff(CharData *ch, CharData *vict) {
 			SetWait(vict, 3, false);
 			if (ch->isInSameRoom(vict)) {
 				vict->SetPosition(EPosition::kSit);
-				vict->DropFromHorse();
+				mount::DropFromHorse(vict);
 			}
 		}
 		prob = 1;
 	}
-	Appear(ch);
+	sight::Appear(ch);
 	if (!success) {
 		SetWait(ch, prob, false);
-		if (vict->IsNpc() && CAN_SEE(vict, ch) && vict->have_mind() && CLEAR_MIND(vict) && !vict->GetEnemy()) {
+		if (vict->IsNpc() && sight::CanSee(vict, ch) && IsAutonomous(vict) && ClearMind(vict) && !vict->GetEnemy()) {
 			hit(vict, ch, ESkill::kUndefined, AFF_FLAGGED(vict, EAffect::kStopRight) ? fight::kOffHand : fight::kMainHand);
 		}
 	} else {
@@ -119,47 +133,48 @@ void go_chopoff(CharData *ch, CharData *vict) {
 }
 
 void do_chopoff(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (ch->GetSkill(ESkill::kChopoff) < 1) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (GetSkill(ch, ESkill::kChopoff) < 1) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kChopoff, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 
-	CharData *vict = FindVictim(ch, argument);
+	std::string target_name;
+	CharData *vict = FindVictim(ch, argument, target_name);
 	if (!vict) {
-		SendMsgToChar("Кого вы собираетесь подсечь?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kChopoff, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 
 	if (!may_kill_here(ch, vict, argument))
 		return;
-	if (!check_pkill(ch, vict, arg))
+	if (!check_pkill(ch, vict, target_name))
 		return;
 
 	do_chopoff(ch, vict);
 }
 
 void do_chopoff(CharData *ch, CharData *vict) {
-	if (ch->GetSkill(ESkill::kChopoff) < 1) {
+	if (GetSkill(ch, ESkill::kChopoff) < 1) {
 		log("ERROR: вызов подножки для персонажа %s (%d) без проверки умения", ch->get_name().c_str(), GET_MOB_VNUM(ch));
 		return;
 	}
 
-	if (ch->HasCooldown(ESkill::kChopoff)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kChopoff)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kChopoff, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	};
 
-	if (ch->IsOnHorse()) {
-		SendMsgToChar("Верхом это сделать затруднительно.\r\n", ch);
+	if (mount::IsOnHorse(ch)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kChopoff, ESkillMsg::kCantWhileMounted) + "\r\n", ch);
 		return;
 	}
 
 	if (vict == ch) {
-		SendMsgToChar("Вы можете воспользоваться командой <сесть>.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kChopoff, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 
-	if (IS_IMPL(ch) || !ch->GetEnemy())
+	if (privilege::IsImpl(ch) || !ch->GetEnemy())
 		go_chopoff(ch, vict);
 	else if (IsHaveNoExtraAttack(ch)) {
 		if (!ch->IsNpc())

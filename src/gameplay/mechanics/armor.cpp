@@ -7,10 +7,12 @@
 */
 
 #include "armor.h"
+#include "gameplay/mechanics/condition.h"
+#include "gameplay/mechanics/minions.h"
 
 #include "engine/entities/char_data.h"
 #include "gameplay/core/base_stats.h"
-#include "gameplay/classes/classes.h"
+#include "gameplay/classes/pc_classes.h"
 #include "gameplay/skills/leadership.h"
 
 int GetClaccAcLimit(CharData *ch);
@@ -33,10 +35,10 @@ int CalcBaseAc(CharData *ch) {
 	}
 
 	if (ch->IsFlagged(EPrf::kIronWind)) {
-		armorclass += ch->GetSkill(ESkill::kIronwind) / 2;
+		armorclass += GetSkill(ch, ESkill::kIronwind) / 2;
 	}
 
-	armorclass += (size_app[GET_POS_SIZE(ch)].ac * 10);
+	armorclass += (SizeApp(GET_POS_SIZE(ch)).ac * 10);
 
 	if (ch->battle_affects.get(kEafPunctual)) {
 		if (GET_EQ(ch, EEquipPos::kWield)) {
@@ -65,7 +67,7 @@ int GetRealAc(CharData *ch) {
 }
 
 int GetClaccAcLimit(CharData *ch) {
-	if (IS_CHARMICE(ch)) {
+	if (IsCharmice(ch)) {
 		return -200;
 	};
 	if (ch->IsNpc()) {
@@ -96,7 +98,7 @@ int CalcTotalAc(CharData *victim, int base_ac) {
 	base_ac /= 10;
 	//считаем штраф за голод
 	if (!victim->IsNpc() && base_ac < 5) { //для голодных
-		int p_ac = static_cast<int>((1 - victim->get_cond_penalty(P_AC)) * 40);
+		int p_ac = static_cast<int>((1 - condition::GetCondPenalty(victim, condition::kAc)) * 40);
 		if (p_ac) {
 			if (base_ac + p_ac > 5) {
 				base_ac = 5;

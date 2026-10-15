@@ -7,32 +7,34 @@
 */
 
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "utils/utils_string.h"
+#include "gameplay/mechanics/condition.h"
+#include "administration/privilege.h"
+#include "engine/core/char_equip_flags.h"
+#include "engine/core/obj_handler.h"
+#include "gameplay/mechanics/equipment.h"
+#include "gameplay/mechanics/inventory.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/fight/fight.h"
 
 void DoArenaRestore(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	CharData *vict;
 
-	one_argument(argument, buf);
-	if (!*buf)
+	std::string remains;
+	const std::string arg = utils::ExtractFirstArgumentLower(argument, remains);
+	if (arg.empty())
 		SendMsgToChar("Кого вы хотите восстановить?\r\n", ch);
-	else if (!(vict = get_char_vis(ch, buf, EFind::kCharInWorld)))
-		SendMsgToChar(NOPERSON, ch);
+	else if (!(vict = target_resolver::FindCharInWorld(ch, arg)))
+		SendMsgToChar(CommonMsg(ECommonMsg::kNoPerson) + "\r\n", ch);
 	else {
 		vict->set_hit(vict->get_real_max_hit());
 		vict->set_move(vict->get_real_max_move());
 		if (IS_MANA_CASTER(vict)) {
-			vict->mem_queue.stored = GET_MAX_MANA(vict);
+			vict->mem_queue.stored = Mana(GetRealWis(vict));
 		} else {
 			vict->mem_queue.stored = vict->mem_queue.total;
 		}
-		if (vict->GetSkill(ESkill::kWarcry) > 0) {
-			struct TimedSkill wctimed;
-			wctimed.skill = ESkill::kWarcry;
-			wctimed.time = 0;
-			ImposeTimedSkill(vict, &wctimed);
-		}
-		if (IS_GRGOD(ch) && IS_IMMORTAL(vict)) {
+		if (privilege::IsGrGod(ch) && privilege::IsImmortal(vict)) {
 			vict->set_str(25);
 			vict->set_int(25);
 			vict->set_wis(25);
@@ -41,15 +43,13 @@ void DoArenaRestore(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			vict->set_cha(25);
 		}
 		update_pos(vict);
-		RemoveAffectFromChar(vict, ESpell::kDrunked);
-		GET_DRUNK_STATE(vict) = GET_COND(vict, DRUNK) = 0;
-		RemoveAffectFromChar(vict, ESpell::kAbstinent);
+		RemoveAffectFromChar(vict, EAffect::kDrunked);
+		GET_DRUNK_STATE(vict) = GET_COND(vict, condition::kDrunk) = 0;
+		RemoveAffectFromChar(vict, EAffect::kAbstinent);
 
 		//сброс таймеров скиллов и фитов
-		while (vict->timed)
-			ExpireTimedSkill(vict, vict->timed);
-		while (vict->timed_feat)
-			ExpireTimedFeat(vict, vict->timed_feat);
+		ch->timed_skill.clear();
+		ch->timed_feat.clear();
 		reset_affects(vict);
 		for (int i = 0; i < EEquipPos::kNumEquipPos; i++) {
 			if (GET_EQ(vict, i)) {

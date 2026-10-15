@@ -3,13 +3,14 @@
 // Part of Bylins http://www.mud.ru
 
 //#include "remember.h"
+#include "administration/privilege.h"
 
 //#include "utils/logger.h"
 #include "engine/entities/char_data.h"
 #include "engine/ui/color.h"
 #include "gameplay/clans/house.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 namespace Remember {
 
@@ -90,7 +91,7 @@ void CharRemember::add_str(std::string text, int flag) {
 			break;
 		case PERSONAL: add_to_cont(personal_, buffer);
 			break;
-		case GROUP:// added by WorM  групптелы 2010.10.13
+		case Remember::GROUP:// added by WorM  групптелы 2010.10.13
 			add_to_cont(group_, buffer);
 			break;
 		case GOSSIP: add_to_cont(gossip, buffer);
@@ -118,7 +119,7 @@ std::string CharRemember::get_text(int flag) const {
 			break;
 		case PERSONAL: buffer = get_from_cont(personal_, num_str_);
 			break;
-		case GROUP:// added by WorM  групптелы 2010.10.13
+		case Remember::GROUP:// added by WorM  групптелы 2010.10.13
 			buffer = get_from_cont(group_, num_str_);
 			break;
 		case GOSSIP: buffer = get_from_cont(gossip, num_str_);
@@ -167,51 +168,51 @@ void do_remember_char(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/)
 
 	// Если без аргумента - выдает личные теллы
 	if (!*argument) {
-		SendMsgToChar(ch->remember_get(Remember::PERSONAL), ch);
+		SendWrappedToChar(ch->remember_get(Remember::PERSONAL), ch);
 		return;
 	}
 
 	argument = one_argument(argument, arg);
 
 	if (utils::IsAbbr(arg, "воззвать")) {
-		if (IS_IMMORTAL(ch) || ch->IsFlagged(EPrf::kCoderinfo)) {
-			SendMsgToChar(ch->remember_get(Remember::PRAY), ch);
+		if (privilege::IsImmortal(ch) || ch->IsFlagged(EPrf::kCoderinfo)) {
+			SendWrappedToChar(ch->remember_get(Remember::PRAY), ch);
 		} else {
-			SendMsgToChar(ch->remember_get(Remember::PRAY_PERSONAL), ch);
+			SendWrappedToChar(ch->remember_get(Remember::PRAY_PERSONAL), ch);
 		}
-	} else if ((GetRealLevel(ch) < kLvlImmortal || IS_IMPL(ch)) && utils::IsAbbr(arg, "оффтоп")) {
+	} else if ((GetRealLevel(ch) < kLvlImmortal || privilege::IsImpl(ch)) && utils::IsAbbr(arg, "оффтоп")) {
 		if (!ch->IsFlagged(EPrf::kStopOfftop)) {
-			SendMsgToChar(ch->remember_get(Remember::OFFTOP), ch);
+			SendWrappedToChar(ch->remember_get(Remember::OFFTOP), ch);
 		} else {
 			SendMsgToChar(ch, "Вам нечего вспомнить.\r\n");
 		}
 	} else if (utils::IsAbbr(arg, "болтать") || utils::IsAbbr(arg, "орать")) {
-		SendMsgToChar(ch->remember_get(Remember::GOSSIP), ch);
+		SendWrappedToChar(ch->remember_get(Remember::GOSSIP), ch);
 	} else if (utils::IsAbbr(arg, "группа") || utils::IsAbbr(arg, "ггруппа"))
 	{
-		SendMsgToChar(ch->remember_get(Remember::GROUP), ch);
+		SendWrappedToChar(ch->remember_get(Remember::GROUP), ch);
 	} else if (utils::IsAbbr(arg, "клан") || utils::IsAbbr(arg, "гдругам")) {
 		if (CLAN(ch)) {
-			SendMsgToChar(CLAN(ch)->get_remember(ch->remember_get_num(), Remember::CLAN), ch);
+			SendWrappedToChar(CLAN(ch)->get_remember(ch->remember_get_num(), Remember::CLAN), ch);
 		} else {
 			SendMsgToChar(ch, "Вам нечего вспомнить.\r\n");
 		}
 		return;
 	} else if (utils::IsAbbr(arg, "союзники") || utils::IsAbbr(arg, "альянс") || utils::IsAbbr(arg, "гсоюзникам")) {
 		if (CLAN(ch)) {
-			SendMsgToChar(CLAN(ch)->get_remember(ch->remember_get_num(), Remember::ALLY), ch);
+			SendWrappedToChar(CLAN(ch)->get_remember(ch->remember_get_num(), Remember::ALLY), ch);
 		} else {
 			SendMsgToChar(ch, "Вам нечего вспомнить.\r\n");
 		}
 		return;
-	} else if (utils::IsAbbr(arg, "гбогам") && IS_IMMORTAL(ch)) {
-		SendMsgToChar(get_from_flaged_cont(wiznet_, ch->remember_get_num(), GetRealLevel(ch)), ch);
+	} else if (utils::IsAbbr(arg, "гбогам") && privilege::IsImmortal(ch)) {
+		SendWrappedToChar(get_from_flaged_cont(wiznet_, ch->remember_get_num(), GetRealLevel(ch)), ch);
 		return;
 	} else if (utils::IsAbbr(arg, "все")) {
-		SendMsgToChar(ch->remember_get(Remember::ALL), ch);
+		SendWrappedToChar(ch->remember_get(Remember::ALL), ch);
 		return;
 	} else {
-		if (IS_IMMORTAL(ch) && !IS_IMPL(ch))
+		if (privilege::IsImmortal(ch) && !privilege::IsImpl(ch))
 			SendMsgToChar("Формат команды: вспомнить [без параметров|болтать|воззвать|гг|гд|гс|гб|все]\r\n", ch);
 		else
 			SendMsgToChar("Формат команды: вспомнить [без параметров|болтать|оффтоп|гг|гд|гс|все]\r\n", ch);

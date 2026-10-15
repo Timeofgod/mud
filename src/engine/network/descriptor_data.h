@@ -8,7 +8,6 @@
 #define BYLINS_SRC_STRUCTS_DESCRIPTOR_DATA_H_
 
 #include "gameplay/communication/boards/boards_types.h"
-#include "gameplay/economics/ext_money.h"
 #include "engine/structs/structs.h"
 #include "engine/core/sysdep.h"
 #include "engine/core/iosystem.h"
@@ -25,6 +24,9 @@ namespace GloryConst {
 }
 namespace NamedStuff {
 	struct stuff_node;
+}
+namespace vedun {
+	struct Session;
 }
 namespace MapSystem {
 	struct Options;
@@ -86,12 +88,14 @@ enum class EConState : uint8_t {
   kResetKin = 49,        // выбор расы после смены/удаления оной (или иного испоганивания значения)
   kResetRace = 50,        // выбор РОДА посла смены/сброса оного
   kConsole = 51,            // Интерактивная скриптовая консоль
-  kTorcExch = 52,        // обмен гривен
+  kGetScreenWidth = 52,     // Ширина экрана при создании персонажа
   kMenuStats = 53,        // оплата сброса стартовых статов из главного меню
   kSedit = 54,            // sedit - редактирование сетов
   kResetReligion = 55,    // сброс религии из меню сброса статов
   kRandomNumber = 56,    // Verification code entry: where player enter the game from new location
-  kInit = 57                // just connected
+  kInit = 57,               // just connected
+  kAdminAPI = 58,           // Admin API connection
+  kVedun = 59               // Vedun data editor (issue.vedun-editor)
 };
 // Номера оставлены, чтобы было удобней ориентироваться в списке описаний -- Svent
 // не забываем отражать новые состояния в connection_descriptions -- Krodo
@@ -115,8 +119,8 @@ struct DescriptorData {
 
 	socket_t descriptor{};    // file descriptor for socket    //
 	char host[kHostLength + 1]{};    // hostname          //
-	byte bad_pws;        // number of bad pw attemps this login //
-	byte idle_tics;        // tics idle at password prompt     //
+	int bad_pws;        // number of bad pw attemps this login //
+	int idle_tics;        // tics idle at password prompt     //
 	EConState state;        // state of 'connectedness'    //
 	int desc_num;        // unique num assigned to desc      //
 	time_t input_time;
@@ -155,6 +159,7 @@ struct DescriptorData {
 	unsigned long ip; // ип адрес в виде числа для внутреннего пользования
 	std::weak_ptr<Boards::Board> board; // редактируемая доска
 	Message::shared_ptr message; // редактируемое сообщение
+	std::shared_ptr<vedun::Session> vedun_session; // Vedun editor session (issue.vedun-editor)
 	std::shared_ptr<struct ClanOLC> clan_olc; // редактирование привилегий клана
 	std::shared_ptr<struct ClanInvite> clan_invite; // приглашение в дружину
 	bool registered_email; // чтобы не шарить каждую секунду по списку мыл
@@ -169,9 +174,21 @@ struct DescriptorData {
 	ObjVnum old_vnum;                    // старый внум именной шмотки
 	std::shared_ptr<MapSystem::Options> map_options; // редактирование опций режима карты
 	bool snoop_with_map; // показывать снуперу карту цели с опциями самого снупера
-	std::array<int, ExtMoney::kTotalTypes> ext_money{}; // обмен доп.денег
 	std::shared_ptr<obj_sets_olc::sedit> sedit; // редактирование сетов
 	bool mxp{}; // Для MXP
+
+	// Admin API support
+	bool admin_api_mode{}; // Admin API connection (JSON protocol)
+	bool admin_api_authenticated{}; // Admin API authenticated flag
+	std::string admin_api_large_buffer; // Buffer for large JSON messages
+	long admin_user_id{}; // Authenticated user ID (UID)
+	std::string admin_user_name; // Authenticated user name
+
+	// Размер окна клиента, присланный по NAWS (telnet window size). Нули -- клиент
+	// не сообщал. Держим на соединении: NAWS приходит до входа в игру, а применять
+	// его есть к кому только после выбора персонажа.
+	int naws_width{};
+	int naws_height{};
 
  private:
 	bool m_msdp_support;

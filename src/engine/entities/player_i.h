@@ -23,6 +23,7 @@ enum ELoadCharFlags : int {
 struct MERCDATA;
 
 class Account;
+class BufferedFileWriter;
 namespace DpsSystem {
 class Dps;
 }
@@ -74,13 +75,13 @@ class PlayerI {
 	virtual bool quested_get(int/* vnum*/) const { return false; };
 	virtual std::string quested_get_text(int/* vnum*/) const { return ""; };
 	virtual std::string quested_print() const { return ""; };
-	virtual void quested_save(FILE * /*saved*/) const {};
+	virtual void quested_save(BufferedFileWriter & /*saved*/) const {};
 
 	virtual int mobmax_get(int/* vnum*/) const { return 0; };
 	virtual void mobmax_add(CharData * /*ch*/, int/* vnum*/, int/* count*/, int/* level*/) {};
 	virtual void mobmax_load(CharData * /*ch*/, int/* vnum*/, int/* count*/, int/* level*/) {};
 	virtual void mobmax_remove(int/* vnum*/) {};
-	virtual void mobmax_save(FILE * /*saved*/) const {};
+	virtual void mobmax_save(BufferedFileWriter & /*saved*/) const {};
 
 	virtual void dps_add_dmg(int/* type*/, int/* dmg*/, int/* over_dmg*/ = 0, CharData * /*ch*/ = nullptr) {};
 	virtual void dps_clear(int/* type*/) {};
@@ -91,7 +92,7 @@ class PlayerI {
 	virtual void dps_end_round(int/* type*/, CharData * /*ch*/ = nullptr) {};
 	virtual void dps_add_exp(int/* exp*/, bool/* battle*/ = false) {};
 
-	virtual void save_char() {};
+	virtual void save_char(bool/* update_save_time*/ = true) {};
 	virtual int load_char_ascii(const char * /*name*/, const int /* load_flags */) { return -1; };
 
 	virtual bool get_disposable_flag(int/* num*/) { return false; };
@@ -108,30 +109,12 @@ class PlayerI {
 	virtual void map_text_olc(const char * /*arg*/) {};
 	virtual const MapSystem::Options *get_map_options() const { return &empty_map_options; };
 
-	virtual int get_ext_money(unsigned/* type*/) const { return 0; };
-	virtual void set_ext_money(unsigned/* type*/, int/* num*/, bool/* write_log*/ = true) {};
-
-	virtual int get_today_torc() { return 0; };
-	virtual void add_today_torc(int/* num*/) {};
-
 	virtual int get_reset_stats_cnt(stats_reset::Type/* type*/) const { return 0; };
 	virtual void inc_reset_stats_cnt(stats_reset::Type/* type*/) {};
 
 	virtual time_t get_board_date(Boards::BoardTypes/* type*/) const { return 0; };
 	virtual void set_board_date(Boards::BoardTypes/* type*/, time_t/* date*/) {};
 
-	virtual int get_ice_currency() { return 0; };
-	virtual void set_ice_currency(int  /* value */) {};
-	virtual void add_ice_currency(int /* value */) {};
-	virtual void sub_ice_currency(int /* value */) {};
-	virtual int get_hryvn() { return 0; }
-	virtual void set_hryvn(int /* value */) {};
-	virtual void sub_hryvn(int /* value */) {};
-	virtual void add_hryvn(int /* value */) {};
-	virtual int get_nogata() { return 0; }
-	virtual void set_nogata(int /* value */) {};
-	virtual void sub_nogata(int /* value */) {};
-	virtual void add_nogata(int /* value */) {};
 
 	virtual void dquest(int /*id */) {};
 	virtual void complete_quest(int /*id */) {};
@@ -140,12 +123,10 @@ class PlayerI {
 	void spent_hryvn_sub(int /*value*/) {};
 	int get_spent_hryvn() { return 0; };
 	void reset_daily_quest() {};
-	virtual void add_value_cities(bool /* value */) {};
-
 	virtual void str_to_cities(std::string /*value*/) {};
 	std::string cities_to_str() { return ""; };
-	virtual bool check_city(const size_t) { return false; };
-	virtual void mark_city(const size_t) {};
+	virtual bool check_city(const std::string &) { return false; };
+	virtual void mark_city(const std::string &) {};
 
 	virtual int death_player_count() {
 		return 1;

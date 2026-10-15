@@ -3,6 +3,9 @@
 //
 
 #include "do_style.h"
+
+#include "engine/entities/char_data.h"
+#include "engine/ui/interpreter.h"
 #include "engine/ui/color.h"
 #include "gameplay/fight/pk.h"
 
@@ -16,14 +19,15 @@ const char *cstyles[] = {"normal",
 };
 
 void DoStyle(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (ch->HasCooldown(ESkill::kGlobalCooldown)) {
+	if (ch->Skills().HasActiveCooldown(ESkill::kGlobalCooldown)) {
 		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
 		return;
 	};
 	int tp;
-	one_argument(argument, arg);
+	char style_arg[kMaxInputLength];
+	one_argument(argument, style_arg);
 
-	if (!*arg) {
+	if (!*style_arg) {
 		SendMsgToChar(ch, "Вы сражаетесь %s стилем.\r\n",
 					  ch->IsFlagged(EPrf::kPunctual) ? "точным" : ch->IsFlagged(EPrf::kAwake) ? "осторожным"
 																									  : "обычным");
@@ -32,12 +36,12 @@ void DoStyle(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	if (TryFlipActivatedFeature(ch, argument)) {
 		return;
 	}
-	if ((tp = search_block(arg, cstyles, false)) == -1) {
+	if ((tp = search_block(style_arg, cstyles, false)) == -1) {
 		SendMsgToChar("Формат: стиль { название стиля }\r\n", ch);
 		return;
 	}
 	tp >>= 1;
-	if ((tp == 1 && !ch->GetSkill(ESkill::kPunctual)) || (tp == 2 && !ch->GetSkill(ESkill::kAwake))) {
+	if ((tp == 1 && !GetSkill(ch, ESkill::kPunctual)) || (tp == 2 && !GetSkill(ch, ESkill::kAwake))) {
 		SendMsgToChar("Вам неизвестен такой стиль боя.\r\n", ch);
 		return;
 	}

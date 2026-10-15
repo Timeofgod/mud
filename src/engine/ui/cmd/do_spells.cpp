@@ -1,4 +1,7 @@
 #include "do_spells.h"
+#include <fmt/format.h>
+#include "administration/privilege.h"
+#include "gameplay/mechanics/magic_item.h"
 
 #include "engine/ui/color.h"
 #include "engine/entities/char_data.h"
@@ -7,6 +10,8 @@
 #include "gameplay/magic/spells_info.h"
 #include "engine/db/global_objects.h"
 #include "gameplay/mechanics/weather.h"
+#include "gameplay/core/remort.h"
+#include "utils/native_text.h"
 
 #include <cmath>
 
@@ -43,12 +48,18 @@ void DisplaySpells(CharData *ch, CharData *vict, bool all) {
 
 	char names[kMaxMemoryCircle][kMaxStringLength];
 	std::string time_str;
-	int slots[kMaxMemoryCircle], i, max_slot = 0, slot_num, gcount = 0;
+	int slots[kMaxMemoryCircle], i, max_slot = 0, slot_num;
+	// Разбивка на колонки считается в символах, а не в байтах: под UTF-8 байт на символ уже не
+	// один, и прежняя арифметика по длине строки разносила колонки (issue #3681). slots[]
+	// остаётся смещением в буфере -- оно по природе байтовое, -- а chars[] хранит, сколько
+	// символов в этот круг уже набрано.
+	int chars[kMaxMemoryCircle];
 	auto have_spells{false};
 	max_slot = 0;
 	for (i = 0; i < kMaxMemoryCircle; i++) {
 		*names[i] = '\0';
 		slots[i] = 0;
+		chars[i] = 0;
 	}
 
 	for (const auto &spl_info : MUD::Spells()) {
@@ -58,19 +69,21 @@ void DisplaySpells(CharData *ch, CharData *vict, bool all) {
 			continue;
 		if (MUD::Spell(spell_id).IsInvalid())
 			continue;
+		if (MUD::Spell(spell_id).IsFlagged(kMagWarcry))
+			continue;
 		if (IS_MANA_CASTER(ch) && !spell_create.contains(spell_id))
 			continue;
-		if (!IS_MANA_CASTER(ch) && !IS_GOD(ch) && ROOM_FLAGGED(ch->in_room, ERoomFlag::kDominationArena)) {
+		if (!IS_MANA_CASTER(ch) && !privilege::IsGod(ch) && ROOM_FLAGGED(ch->in_room, ERoomFlag::kDominationArena)) {
 			if (!IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kTemp) && !all)
 				continue;
 		}
 		if ((CalcMinSpellLvl(ch, spell_id) > GetRealLevel(ch) ||
-			class_spell.GetMinRemort() > GetRealRemort(ch) ||
+			class_spell.GetMinRemort() > remort::GetRealRemort(ch) ||
 			CalcCircleSlotsAmount(ch, class_spell.GetCircle()) <= 0) &&
 			all && !GET_SPELL_TYPE(ch, spell_id)) {
 			continue;
 		}
-		if (class_spell.GetMinRemort() > GetRealRemort(ch)) {
+		if (class_spell.GetMinRemort() > remort::GetRealRemort(ch)) {
 			slot_num = kMaxMemoryCircle - 1;
 		} else {
 			slot_num = class_spell.GetCircle() - 1;
@@ -79,19 +92,24 @@ void DisplaySpells(CharData *ch, CharData *vict, bool all) {
 		if (IS_MANA_CASTER(ch)) {
 			if (!spell_create.contains(spell_id))
 				continue;
-			if (CalcSpellManacost(ch, spell_id) > GET_MAX_MANA(ch))
+			if (CalcSpellManacost(ch, spell_id) > Mana(GetRealWis(ch)))
 				continue;
 			if (CheckRecipeItems(ch, spell_id, ESpellType::kRunes, false)) {
-				slots[slot_num] += sprintf(names[slot_num] + slots[slot_num],
-										   "%s|<...%4d.> %s%-38s&n|",
-										   slots[slot_num] % 114 <
-											   10 ? "\r\n" : "  ",
-										   CalcSpellManacost(ch, spell_id), GetSpellColor(spell_id), MUD::Spell(spell_id).GetCName());
+				const auto line = fmt::format("{}|<...{:4}.> {}{:<38}&n|",
+										   chars[slot_num] % 114 < 10 ? "\r\n" : "  ",
+										   CalcSpellManacost(ch, spell_id), GetSpellColor(spell_id),
+										   MUD::Spell(spell_id).GetCName());
+				strcpy(names[slot_num] + slots[slot_num], line.c_str());
+				slots[slot_num] += static_cast<int>(line.size());
+				chars[slot_num] += static_cast<int>(native_text::char_count(line));
 			} else {
 				if (all) {
-					slots[slot_num] += sprintf(names[slot_num] + slots[slot_num],
-							"%s|+--------+ %s%-38s&n|", slots[slot_num] % 114 < 10 ? "\r\n" 
-							: "  ", GetSpellColor(spell_id), MUD::Spell(spell_id).GetCName());
+					const auto line = fmt::format("{}|+--------+ {}{:<38}&n|",
+							chars[slot_num] % 114 < 10 ? "\r\n" : "  ", GetSpellColor(spell_id),
+							MUD::Spell(spell_id).GetCName());
+					strcpy(names[slot_num] + slots[slot_num], line.c_str());
+					slots[slot_num] += static_cast<int>(line.size());
+					chars[slot_num] += static_cast<int>(native_text::char_count(line));
 				}
 			}
 		} else {
@@ -103,48 +121,50 @@ void DisplaySpells(CharData *ch, CharData *vict, bool all) {
 						/ kSecsPerMudHour)))));
 				time_str.append("]");
 			}
+			std::string threshold;
 			if (CalcMinSpellLvl(ch, spell_id) > GetRealLevel(ch) && IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kKnow)) {
-				sprintf(buf1, "%d", CalcMinSpellLvl(ch, spell_id) - GetRealLevel(ch));
+				threshold = std::to_string(CalcMinSpellLvl(ch, spell_id) - GetRealLevel(ch));
 			}
 			else {
-				sprintf(buf1, "%s", "K");
+				threshold = "K";
 			}
-			slots[slot_num] += sprintf(names[slot_num] + slots[slot_num],
-					"%s|<%s%c%c%c%c%c%c%c>%s%s%-30s %-7s&n|",
-					slots[slot_num] % 116 < 10 ? "\r\n" : "  ",
-					IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kKnow) ? buf1 : ".",
+			// fmt, а не sprintf: ширину поля с названием заклинания надо мерить в символах.
+			// printf считает %-30s в байтах, и под UTF-8 колонка разъезжалась (issue #3681).
+			const auto line = fmt::format("{}|<{}{}{}{}{}{}{}{}>{}{}{:<30} {:<7}&n|",
+					chars[slot_num] % 116 < 10 ? "\r\n" : "  ",
+					IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kKnow) ? threshold.c_str() : ".",
 					IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kTemp) ? 'T' : '.',
 					IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kPotionCast) ? 'P' : '.',
 					IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kWandCast) ? 'W' : '.',
 					IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kScrollCast) ? 'S' : '.',
 					IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kItemCast) ? 'I' : '.',
 					IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kRunes) ? 'R' : '.',
-					 '.',
+					'.',
 					(CalcMinSpellLvl(ch, spell_id) - GetRealLevel(ch) < 10) ? "  " : " ",
 					GetSpellColor(spell_id),
 					MUD::Spell(spell_id).GetCName(),
-					time_str.c_str());
+					time_str);
+			strcpy(names[slot_num] + slots[slot_num], line.c_str());
+			slots[slot_num] += static_cast<int>(line.size());
+			chars[slot_num] += static_cast<int>(native_text::char_count(line));
 		}
 		have_spells = true;
 	};
-	gcount = sprintf(buf2 + gcount, "  %sВам доступна следующая магия :%s", kColorCyn, kColorNrm);
+	std::string out = fmt::format("  {}Вам доступна следующая магия :{}", kColorCyn, kColorNrm);
 	if (have_spells) {
 		for (i = 0; i < max_slot; i++) {
 			if (slots[i] != 0) {
 				if (!IS_MANA_CASTER(ch))
-					gcount += sprintf(buf2 + gcount, "\r\nКруг %d", i + 1);
+					out += fmt::format("\r\nКруг {}", i + 1);
 			}
 			if (slots[i])
-				gcount += sprintf(buf2 + gcount, "%s", names[i]);
-			//else
-			//gcount += sprintf(buf2+gcount,"\n\rПусто.");
+				out += names[i];
 		}
 	} else {
-		gcount += sprintf(buf2 + gcount, "\r\nВ настоящее время магия вам недоступна!");
+		out += "\r\nВ настоящее время магия вам недоступна!";
 	}
-	gcount += sprintf(buf2 + gcount, "\r\n");
-	//page_string(ch->desc, buf2, 1);
-	SendMsgToChar(buf2, vict);
+	out += "\r\n";
+	SendMsgToChar(out, vict);
 }
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

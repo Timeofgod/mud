@@ -1,7 +1,10 @@
 #include "shield_block.h"
+#include "administration/privilege.h"
+#include "skill_messages.h"
 
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/fight_hit.h"
+#include "gameplay/fight/common.h"
 #include "engine/db/global_objects.h"
 #include "gameplay/mechanics/equipment.h"
 
@@ -17,21 +20,21 @@ void go_block(CharData *ch) {
 }
 
 void do_block(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/) {
-	if (ch->IsNpc() || !ch->GetSkill(ESkill::kShieldBlock)) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (ch->IsNpc() || !GetSkill(ch, ESkill::kShieldBlock)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kShieldBlock, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
-	if (ch->HasCooldown(ESkill::kShieldBlock)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kShieldBlock)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kShieldBlock, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	};
 	if (!ch->GetEnemy()) {
-		SendMsgToChar("Но вы ни с кем не сражаетесь!\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kShieldBlock, ESkillMsg::kNotFighting) + "\r\n", ch);
 		return;
 	};
 	if (!(ch->IsNpc()
 		|| GET_EQ(ch, kShield)
-		|| IS_IMMORTAL(ch)
+		|| privilege::IsImmortal(ch)
 		|| GET_GOD_FLAG(ch, EGf::kGodsLike))) {
 		SendMsgToChar("Вы не можете сделать это без щита.\r\n", ch);
 		return;
@@ -47,7 +50,7 @@ void ProcessShieldBlock(CharData *ch, CharData *victim, HitData &hit_data) {
 	if (!CanPerformShieldBlock(victim, hit_data)) {
 		return;
 	}
-	if (!(GET_EQ(victim, EEquipPos::kShield) || victim->IsNpc() || IS_IMMORTAL(victim))) {
+	if (!(GET_EQ(victim, EEquipPos::kShield) || victim->IsNpc() || privilege::IsImmortal(victim))) {
 		SendMsgToChar("У вас нечем отразить атаку противника.\r\n", victim);
 	} else {
 		int range = number(1, MUD::Skill(ESkill::kShieldBlock).difficulty);
@@ -68,7 +71,7 @@ void ProcessShieldBlock(CharData *ch, CharData *victim, HitData &hit_data) {
 			act("$N немного отразил$G вашу атаку.", false, ch, nullptr, victim, kToChar);
 			act("$n немного отразил$g атаку $N1.", true, victim, nullptr, ch, kToNotVict | kToArenaListen);
 			DamageEquipment(victim, EEquipPos::kShield, hit_data.dam, 10);
-			hit_data.dam *= 10 / 15;
+			hit_data.dam = SlightDefenceDamage(hit_data.dam);
 		} else if (prob < 250) {
 			act("Вы частично отразили атаку $N1.", false, victim, nullptr, ch, kToChar);
 			act("$N частично отразил$G вашу атаку.", false, ch, nullptr, victim, kToChar);

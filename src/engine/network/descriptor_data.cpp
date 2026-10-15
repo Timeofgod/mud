@@ -7,6 +7,15 @@
 
 #include "descriptor_data.h"
 
+#include <atomic>
+#include <cstdio>
+#include "utils/logger.h"
+#include "utils/utf8.h"
+#include <string>
+#include <cstring>
+#include "utils/native_text.h"
+#include "utils/utils_encoding.h"
+
 #include "engine/entities/char_player.h"
 #include "engine/network/msdp/msdp.h"
 #include "engine/network/msdp/msdp_constants.h"
@@ -162,14 +171,62 @@ void DescriptorData::msdp_report_changed_vars() {
 	}
 }
 
+// Буква "ё" на раскладке ЙЦУКЕН сидит на месте апострофа, набрать ее игроку неудобно, и в игре ее
+// не показывают: на границе вывода она превращается в "е". Замена живет здесь, внутри проходов
+// перекодировки, которые тут и так делаются, поэтому отдельного прохода по тексту не появляется.
+// KOI8-R: ё = 0xA3, Ё = 0xB3, е = 0xC5, Е = 0xE5.
+namespace {
+inline char NoYoKoi8(char c) {
+	switch (static_cast<unsigned char>(c)) {
+		case 0xA3: return static_cast<char>(0xC5);
+		case 0xB3: return static_cast<char>(0xE5);
+		default: return c;
+	}
+}
+}   // namespace
+
 void DescriptorData::string_to_client_encoding(const char *in_str, char *out_str) const {
+	// Легаси-кодировки клиентов заданы таблицами "байт KOI8-R -> байт целевой кодировки",
+	// поэтому перед ними текст надо привести к KOI8-R. Под KOI8-R-рантаймом это тождество,
+	// под UTF-8 - настоящая перекодировка (issue #3681). Для UTF-8-клиента ничего приводить
+	// не нужно: см. case kCodePageUTF8 ниже.
+	// Предохранитель. Всё нативное -- валидный UTF-8; если сюда пришло иное, значит текст
+	// прочитан с диска мимо границы и игрок увидит кашу. Так уже уезжали экран справки
+	// и список синонимов (issue #3681).
+	//
+	// Проверка -- полный разбор строки, быстрого выхода на латинице в is_valid нет. Замерено:
+	// 436 нс на строку в 208 байт, около 477 МБ/с. Для легаси-клиентов это заметно дешевле
+	// того, что тут и так делается (to_koi8 разбирает ту же строку, дальше побайтная таблица),
+	// а объёмы вывода мада от такой скорости далеки.
+	if (!utf8::is_valid(in_str)) {
+		static std::atomic<unsigned long> seen{0};
+		const unsigned long n = seen.fetch_add(1);
+		if (n < 10 || n % 10000 == 0) {
+			std::string head;
+			char byte[4];
+			for (std::size_t i = 0; in_str[i] && i < 16; ++i) {
+				std::snprintf(byte, sizeof(byte), "%02x", static_cast<unsigned char>(in_str[i]));
+				head += byte;
+				head += ' ';
+			}
+			log("SYSERR: клиенту уходит не-UTF-8 (#%lu) -- где-то пропущена граница чтения. "
+				"Первые байты: %s", n + 1, head.c_str());
+		}
+	}
+
+	std::string koi8_text;
+	if (keytable != kCodePageUTF8) {
+		koi8_text = native_text::to_koi8(in_str);
+		in_str = koi8_text.c_str();
+	}
+
 	switch (keytable) {
 		case kCodePageAlt:
-			for (; *in_str; *out_str = KtoA(*in_str), in_str++, out_str++);
+			for (; *in_str; *out_str = codepages::KtoA(NoYoKoi8(*in_str)), in_str++, out_str++);
 			break;
 		case kCodePageWin:
 			for (; *in_str; in_str++, out_str++) {
-				*out_str = KtoW(*in_str);
+				*out_str = codepages::KtoW(NoYoKoi8(*in_str));
 
 				// 0xFF is cp1251 'я' and Telnet IAC, so escape it with another IAC
 				if (*out_str == '\xFF') {
@@ -181,13 +238,13 @@ void DescriptorData::string_to_client_encoding(const char *in_str, char *out_str
 		case kCodePageWinzOld:
 		case kCodePageWinzZ:
 			// zMUD before 6.39 or after for backward compatibility  - replace я with z
-			for (; *in_str; *out_str = KtoW2(*in_str), in_str++, out_str++);
+			for (; *in_str; *out_str = codepages::KtoW2(NoYoKoi8(*in_str)), in_str++, out_str++);
 			break;
 
 		case kCodePageWinz:
 			// zMUD after 6.39 and CMUD support 'я' but with some issues
 			for (; *in_str; in_str++, out_str++) {
-				*out_str = KtoW(*in_str);
+				*out_str = codepages::KtoW(NoYoKoi8(*in_str));
 
 				// 0xFF is cp1251 'я' and Telnet IAC, so escape it with antother IAC
 				// also there is a bug in zMUD, meaning we need to add an extra byte
@@ -203,11 +260,26 @@ void DescriptorData::string_to_client_encoding(const char *in_str, char *out_str
 			// Anton Gorev (2016-04-25): we have to be careful. String in UTF-8 encoding may
 			// contain character with code 0xff which telnet interprets as IAC.
 			// II:  FE and FF were never defined for any purpose in UTF-8, we are safe
-			koi_to_utf8(const_cast<char *>(in_str), out_str);
+			// Рантайм в UTF-8 - отдаём как есть. Перекодировка тут испортила бы текст
+			// (именно так и выглядела первая флип-сборка). Копируем сами, а не strcpy, чтобы по
+			// дороге сменить "ё" на "е" (D1 91 -> D0 B5, D0 81 -> D0 95): длины совпадают, буфер
+			// вызывающего не растет, лишнего прохода по строке нет -- копирование тут и так было.
+			for (; *in_str; ++in_str, ++out_str) {
+				const auto first = static_cast<unsigned char>(in_str[0]);
+				const auto second = static_cast<unsigned char>(in_str[1]);
+				if ((first == 0xD1 && second == 0x91) || (first == 0xD0 && second == 0x81)) {
+					*out_str++ = static_cast<char>(0xD0);
+					*out_str = static_cast<char>(second == 0x91 ? 0xB5 : 0x95);
+					++in_str;
+					continue;
+				}
+				*out_str = *in_str;
+			}
+			*out_str = '\0';
 			break;
 
 		default:
-			for (; *in_str; *out_str = *in_str, in_str++, out_str++);
+			for (; *in_str; *out_str = NoYoKoi8(*in_str), in_str++, out_str++);
 			break;
 	}
 

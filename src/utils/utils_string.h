@@ -1,7 +1,11 @@
 #ifndef UTILS_STRING_HPP_
 #define UTILS_STRING_HPP_
 
+#include <cstddef>
+
 #include <cstring>
+#include <fstream>
+#include <list>
 #include <memory>
 #include <string>
 #include <vector>
@@ -16,7 +20,7 @@ class Padding {
 		m_padding(padding) {
 	}
 
-	auto length() const { return m_length; }
+	[[nodiscard]] auto length() const { return m_length; }
 	std::ostream &output(std::ostream &os) const;
 
  protected:
@@ -104,8 +108,44 @@ std::string RemoveColors(std::string string);
 shared_string_ptr GetStringWithoutColors(const char *string);
 std::string GetStringWithoutColors(const std::string &string);
 
+// Длина ANSI-последовательности, начинающейся в begin (диапазон [begin, end)). Ноль, если
+// последовательности там нет. Нужна на разборе ввода: клиентские триггеры (jmc, тортилла)
+// отдают перехваченную строку вместе с цветом, и игрок отправляет её обратно в мад. Выбросить
+// один байт ESC мало -- остаток вида "[1;35m" печатный и виден всем в канале (issue #3791
+// сюда не относится, это про ввод).
+//
+// Разбирается CSI ("ESC [" + параметры 0x30..0x3F и промежуточные 0x20..0x2F + завершающий
+// байт 0x40..0x7E) -- именно ею записан цвет. Для одинокого ESC и для оборванной
+// последовательности вернёт 1: выбрасываем сам ESC, как и раньше.
+std::size_t AnsiEscapeLength(const char *begin, const char *end);
+
+// Строковый аналог isname (никакого isstring в коде нет и не было -- опечатка).
+// Слова abbr ищутся среди слов words по порядку, лишние слова words пропускаются; каждое
+// слово сравнивается по префиксу и без учёта регистра. Так игрок и набирает цель: "кни.огн"
+// находит "книга возникновении огня", а "огн.кни" -- уже нет, порядок значим.
+//
+// Разделитель слов -- точка (а также подчёркивание и пробел). Дефис остаётся частью слова, как
+// и положено: правильный запрос к "вееру шань-цзы" -- "веер.шань-цзы", и его находят обе
+// функции. isname вдобавок режет по любому не-буквенно-цифровому знаку, дефис включая, поэтому
+// у него срабатывает ещё и "цзы" -- это дикумадовское наследие, а не наше правило, полагаться
+// на него не стоит.
+//
+// Пустой abbr сюда не приходит: вызывающие отсекают его сами (do_style, show featinfo,
+// currencies::FindBySearch). Вернёт он на нём true -- совпадение с чем угодно, тогда как
+// isname отвечает "нет"; это следствие реализации, а не обещание.
+// abbr - список кратких аббревиатур, words текст\фраза
+bool IsEquivalent(const std::string &abbr, const std::string &words);
+// То же, но без пропусков: слова abbr должны совпасть с первыми словами words подряд.
+bool IsEqual(const std::string &abbr, const std::string &words);
+// Совпадают ли первые chars символов у обеих строк (без учёта регистра). Если символов
+// в какой-то из строк меньше -- не совпадают. Единица счёта -- символ, а не байт: пределы
+// вроде kMinNameLength означают буквы, и под UTF-8 байтовый счёт давал вдвое короче (#3681).
+bool IsSamePrefix(const char *arg1, const char *arg2, std::size_t chars);
+
+// arg1 аббревиатура в arg2 тексте\фразе
 bool IsAbbr(const char *arg1, const char *arg2);
-inline int IsAbbrev(const std::string &arg1, const char *arg2) { return IsAbbr(arg1.c_str(), arg2); }
+inline int IsAbbr(const std::string &arg1, const char *arg2) { return IsAbbr(arg1.c_str(), arg2); }
+inline int IsAbbr(const std::string &arg1, const std::string &arg2) { return IsAbbr(arg1.c_str(), arg2.c_str()); }
 
 
 // строку в нижний регистр
@@ -129,10 +169,33 @@ std::vector<std::string> Split(const std::string s, char delimiter = ' ');
  */
 std::vector<std::string> SplitAny(const std::string s, std::string any);
 
-// аналог one_argument для string
-// s - разделяемая строка
-// возвращает первое слово, в remains остаток, если нет пробелов то строки пустые
+/**
+ * Отделить первое слово строки от остатка -- разбор аргументов на std::string, без фиксированных
+ * буферов (в отличие от one_argument и half_chop, которым нужен буфер на kMaxStringLength).
+ *
+ * Возвращает первое слово, в remains кладёт всё, что после него, уже без ведущих пробелов.
+ * Строка из одного слова даёт это слово и пустой остаток; пустая или из одних пробелов -- две
+ * пустые строки. Передавать одну и ту же переменную и как s, и как remains можно: слово
+ * копируется раньше, чем перезаписывается остаток.
+ *
+ * Разделителями считаются пробел, табуляция и переводы строки -- то же, что у a_isspace.
+ *
+ * Отличие от one_argument ровно одно: тот вдобавок приводит слово к нижнему регистру. Если
+ * это нужно (слово дальше сравнивается с учётом регистра), берите ExtractFirstArgumentLower --
+ * она и есть полный строковый аналог one_argument.
+ */
 std::string ExtractFirstArgument(const std::string &s, std::string &remains);
+
+/**
+ * То же, что ExtractFirstArgument, только слово приводится к нижнему регистру -- полный
+ * строковый аналог one_argument, но без буфера на kMaxStringLength. При переносе кода со
+ * связки `one_argument(argument, arg)` через глобальный буфер (#3807) берите её: поведение
+ * команды не поменяется.
+ *
+ * Перегрузка без remains -- когда нужно только первое слово.
+ */
+std::string ExtractFirstArgumentLower(const std::string &s, std::string &remains);
+std::string ExtractFirstArgumentLower(const std::string &s);
 
 // первое слово разделенное маской
 std::string FirstWordOnString(std::string s, std::string mask);
@@ -141,6 +204,7 @@ std::string FirstWordOnString(std::string s, std::string mask);
  * Обрезать пробелы слева.
  */
 void TrimLeft(std::string &s);
+void TrimLeft(char *s);
 
 /**
  *  Обрезать пробелы справа.
@@ -285,7 +349,152 @@ std::string &colorCAP(std::string &&txt);
 char *CAP(char *txt);
 std::string CAP(const std::string txt);
 
+// формирует строку из списка слов, разделенных separator (то, что стоит
+// между словами на строке: ", " для списка, " " для переноса по словам)
+// при превышении max_length переносит на новую строку, срезая хвостовой
+// пробел разделителя перед \r\n. separator по умолчанию ", " -- прежнее поведение.
+// prefix печатается один раз в начале первой строки и учитывается в её длине
+// (по видимой длине, без цветокодов), но НЕ участвует в склейке через separator
+// (т.е. после него не ставится ", "). На строках-продолжениях префикса нет.
+std::string OutWordsList(const std::vector<std::string> &words, size_t max_length,
+		const std::string &separator = ", ", const std::string &prefix = "");
+// то же, но на вход строка со словами через пробелы
+std::string OutWordsList(const std::string &words_str, size_t max_length,
+		const std::string &separator = ", ", const std::string &prefix = "");
+// переносит многострочный текст по словам на ширину max_length, сохраняя
+// авторские переносы строк и пустые строки (абзацы): каждая исходная строка
+// длиннее max_length переносится независимо через OutWordsList(line, max_length, " "),
+// а влезающая остаётся нетронутой -- с её пробелами.
+// max_length == 0 -- перенос не выполняется (текст возвращается как есть с \r\n)
+std::string WrapText(const std::string &text, size_t max_length);
+
+// Видимая ширина строки в символах: пропускает и наши цветокоды (&R, &n), и готовые
+// ANSI-последовательности (\x1B[1;33m). Вторые попадают в текст из констант kColor*, и
+// счёт без них переносил строку раньше времени -- ровно на длину escape-последовательности.
+std::size_t VisibleWidth(std::string_view text);
+
+/// Вернуть строку пола персонажа по числовому значению (to_underlying(ch->get_sex())).
+std::string sprintGender(int gender_value);
+
+
 } // namespace utils
+
+/// Сравнение строк без учета регистра (аналог strcmp).
+/// Возвращает: 0 если равны, >0 если arg1 > arg2, <0 если arg1 < arg2.
+int str_cmp(const char *arg1, const char *arg2);
+int str_cmp(const std::string &arg1, const char *arg2);
+int str_cmp(const char *arg1, const std::string &arg2);
+int str_cmp(const std::string &arg1, const std::string &arg2);
+
+/// Удаление завершающих \r\n из C-строки.
+/// Дубль: utils::TrimRight - похожий функционал но для пробелов.
+void PruneCrlf(char *txt);
+/// Удаление завершающих \r\n из std::string.
+void PruneCrlf(std::string &txt);
+
+/// Возвращает указатель на первую видимую букву в C-строке, пропуская цветовые коды.
+/// Дубль: utils::colorCAP - ищет первую букву и делает заглавной.
+const char *first_letter(const char *txt);
+/// Возвращает подстроку начиная с первой видимой буквы, пропуская цветовые коды.
+std::string first_letter(const std::string &txt);
+
+/// Проверяет что C-строка состоит только из цифр.
+/// Возвращает 1 если да, 0 если нет.
+int is_number(const char *str);
+/// Проверяет что std::string состоит только из цифр.
+int is_number(const std::string &str);
+
+/// Убирает двойные доллары ($$) из C-строки, модифицируя на месте.
+/// Используется для отмены экранирования act() при прямом выводе.
+char *delete_doubledollar(char *string);
+/// Убирает двойные доллары ($$) из std::string, модифицируя на месте.
+void delete_doubledollar(std::string &string);
+
+/// Замена всех вхождений символа s на строку d в буфере.
+/// Дубль: utils::ReplaceAll - то же но string->string вместо char->string.
+void StringReplace(std::string &buffer, char s, const std::string &d);
+
+/// Форматирование новостного сообщения (добавляет отступы).
+std::string &format_news_message(std::string &text);
+
+/// Безопасное копирование C-строки с ограничением размера (аналог strlcpy из OpenBSD).
+/// Возвращает длину src; если >= siz, произошло усечение.
+size_t strl_cpy(char *dst, const char *src, size_t siz);
+
+/// Форматирование числа с разделением по разрядам.
+/// Пример: 1234567 -> "1 234 567" (с разделителем separator).
+/// Дубль: thousands_sep - то же но с запятой.
+std::string PrintNumberByDigits(long long num, char separator = ' ');
+
+/// Форматирование числа с разделением запятыми.
+/// Пример: 1234567 -> "1,234,567".
+/// Дубль: PrintNumberByDigits - то же но с выбором разделителя.
+std::string thousands_sep(long long n);
+
+/// Пропуск точек и пробелов в C-строке.
+void skip_dots(char **string);
+/// Пропуск точек и пробелов в std::string (удаляет с начала).
+void skip_dots(std::string &string);
+
+/// Поиск подстроки без учета регистра в C-строках (аналог strstr).
+/// Возвращает указатель на первое вхождение ct в cs, или nullptr.
+char *str_str(const char *cs, const char *ct);
+/// Поиск подстроки без учета регистра в std::string.
+/// Возвращает позицию первого вхождения или std::string::npos.
+std::string::size_type str_str(const std::string &cs, const std::string &ct);
+
+/// Удаление символов \r из C-строки (^M).
+void kill_ems(char *str);
+/// Удаление символов \r из std::string (^M).
+void kill_ems(std::string &str);
+
+/// Вырезание первого алфавитно-цифрового слова из строки str в word.
+void cut_one_word(std::string &str, std::string &word);
+
+/// Пропуск остатка строки в ifstream (до \n).
+void ReadEndString(std::ifstream &file);
+
+/// Валидация формата email адреса (C-строка).
+bool IsValidEmail(const char *address);
+/// Валидация формата email адреса (std::string).
+bool IsValidEmail(const std::string &address);
+
+/// Проверка совпадения C-строки str со списком имен namelist (разделенных пробелами).
+/// Без учета регистра, поддерживает частичное совпадение.
+bool isname(const char *str, const char *namelist);
+/// Проверка совпадения std::string str со списком имен (char*).
+inline bool isname(const std::string &str, const char *namelist) { return isname(str.c_str(), namelist); }
+/// Проверка совпадения C-строки str со списком имен (std::string).
+inline bool isname(const char *str, const std::string &namelist) { return isname(str, namelist.c_str()); }
+/// Проверка совпадения std::string str со списком имен (std::string).
+inline bool isname(const std::string &str, const std::string &namelist) {
+	return isname(str.c_str(), namelist.c_str());
+}
+
+/// Дешёвый предфильтр под isname: false означает, что isname заведомо не совпадёт.
+/// true ничего не обещает -- решение всё равно за isname. Смысл в цене: isname
+/// разбирает обе строки посимвольно через native_text, а здесь ищется подстрока
+/// в один-два байта. Нужен там, где isname зовут на весь список предметов мира.
+bool MayMatchName(const char *str, const std::string &namelist);
+
+/// Извлечение первого слова из C-строки с приведением к нижнему регистру.
+/// Поддерживает кавычки для слов с пробелами.
+/// Дубль: utils::ExtractFirstArgument - похожий функционал через std::string.
+const char *one_word(const char *argument, char *first_arg);
+
+/// Replace Russian letters in name with lowercase Latin (for file names).
+void CreateFileName(std::string &name);
+
+/// Lowercase a name with the first letter uppercased (uniform container lookup).
+void name_convert(std::string &text);
+
+/// Compact experience formatting (e.g. 1234567 -> "1 тыс"): thousands/millions/billions suffix.
+std::string ExpFormat(long long exp);
+
+/// Тестовая полоска ширины экрана: точки с числовой меткой каждые пять знаков
+/// ("....5...10...15..."). Метка ЗАКАНЧИВАЕТСЯ на своей позиции, поэтому строка выходит
+/// ровно `width` знаков -- по ней и меряют реальную ширину окна. Чистый ASCII.
+std::string ScreenRuler(std::size_t width);
 
 #endif // UTILS_STRING_HPP_
 

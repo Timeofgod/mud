@@ -4,7 +4,8 @@
 
 #include "help.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <algorithm>
+#include <fmt/format.h>
 
 #include "obj_prototypes.h"
 #include "engine/ui/modify.h"
@@ -74,7 +75,7 @@ std::string print_skill(const CObjectPrototype::skills_t::value_type &skill, boo
 	if (skill.second != 0) {
 		char buf[128];
 
-		sprintf(buf, "%s%s%s%s%d%s\r\n",
+		snprintf(buf, sizeof(buf), "%s%s%s%s%d%s\r\n",
 				(activ ? " +    " : "   "),
 				kColorCyn,
 				MUD::Skill(skill.first).GetName(),
@@ -106,10 +107,11 @@ std::string print_skills(const CObjectPrototype::skills_t &skills, bool activ, b
 std::string print_obj_affects(const CObjectPrototype *const obj) {
 	std::stringstream out;
 
-	out << obj->get_PName(ECase::kNom) << "\r\n";
+	out << obj->get_PName(grammar::ECase::kNom) << "\r\n";
 
-	if (obj->get_no_flags().sprintbits(no_bits, buf2, ",")) {
-		out << "Неудобства : " << buf2 << "\r\n";
+	char flags[kMaxStringLength];
+	if (obj->get_no_flags().sprintbits(no_bits, flags, sizeof(flags), ",")) {
+		out << "Неудобства : " << flags << "\r\n";
 	}
 
 	if (obj->get_type() == EObjType::kWeapon) {
@@ -125,8 +127,8 @@ std::string print_obj_affects(const CObjectPrototype *const obj) {
 		out << "Вес : " << obj->get_weight() << "\r\n";
 	}
 
-	if (obj->get_affect_flags().sprintbits(weapon_affects, buf2, ",")) {
-		out << "Аффекты : " << buf2 << "\r\n";
+	if (obj->get_affect_flags().sprintbits(equipment_affects, flags, sizeof(flags), ",")) {
+		out << "Аффекты : " << flags << "\r\n";
 	}
 
 	std::string tmp_str;
@@ -176,9 +178,10 @@ std::string print_activator(class_to_act_map::const_iterator &activ, const CObje
 	}*/
 	out << "\r\n";
 
-	FlagData affects = activ->second.get_affects();
-	if (affects.sprintbits(weapon_affects, buf2, ",")) {
-		out << " + Аффекты : " << buf2 << "\r\n";
+	auto affects = activ->second.get_affects();
+	char flags[kMaxStringLength];
+	if (affects.sprintbits(equipment_affects, flags, sizeof(flags), ",")) {
+		out << " + Аффекты : " << flags << "\r\n";
 	}
 
 	std::array<obj_affected_type, kMaxObjAffect> affected = activ->second.get_affected();
@@ -218,15 +221,15 @@ std::string print_activator(class_to_act_map::const_iterator &activ, const CObje
 ////////////////////////////////////////////////////////////////////////////////
 struct activators_obj {
 	activators_obj() {
-		native_no_flag = clear_flags;
-		native_affects = clear_flags;
+		native_no_flag.clear();
+		native_affects.clear();
 	};
 
 	// номер профы и ее суммарные активы
 	std::map<int, clss_activ_node> clss_list;
 	// суммарные статы шмоток
-	FlagData native_no_flag;
-	FlagData native_affects;
+	BitsetFlags<ENoFlag> native_no_flag;
+	BitsetFlags<EEquipmentAffect> native_affects;
 	std::vector<obj_affected_type> native_affected;
 	CObjectPrototype::skills_t native_skills;
 
@@ -241,7 +244,7 @@ struct activators_obj {
 void activators_obj::fill_class(set_info::const_iterator k) {
 	for (const auto & m : k->second) {
 		for (const auto & q : m.second) {
-			for (int i = 0; i <= kNumPlayerClasses * kNumKins; ++i) {
+			for (int i = 0; i <= kNumPlayerClasses; ++i) {
 				if (check_num_in_unique_bit_flag_data(q.first, i)) {
 					struct clss_activ_node tmp_node;
 					clss_list[i] = tmp_node;
@@ -297,8 +300,9 @@ std::string activators_obj::print() {
 
 		// affects
 		cls_it.second.total_affects += native_affects;
-		if (cls_it.second.total_affects.sprintbits(weapon_affects, buf2, ",")) {
-			node.afct += " + Аффекты : " + std::string(buf2) + "\r\n";
+		char flags[kMaxStringLength];
+		if (cls_it.second.total_affects.sprintbits(equipment_affects, flags, sizeof(flags), ",")) {
+			node.afct += " + Аффекты : " + std::string(flags) + "\r\n";
 		}
 		// affected
 		sum_apply(cls_it.second.affected, native_affected);
@@ -369,8 +373,9 @@ std::string print_fullset_stats(const set_info &set) {
 	// печатаем все, что получилось
 	out << "Суммарные свойства набора: \r\n";
 
-	if (activ.native_no_flag.sprintbits(no_bits, buf2, ",")) {
-		out << "Неудобства : " << buf2 << "\r\n";
+	char flags[kMaxStringLength];
+	if (activ.native_no_flag.sprintbits(no_bits, flags, sizeof(flags), ",")) {
+		out << "Неудобства : " << flags << "\r\n";
 	}
 
 	out << activ.print();
@@ -569,11 +574,14 @@ std::string OutRecipiesHelp(ECharClass ch_class) {
 
 	out << "Список доступных рецептов:\r\n";
 	out2 << "\r\n&GРецепты, доступные после одного или нескольких перевоплощений:&n\r\n";
+	// issue.class-recipes: набор рецептов класса спрашиваем у самого класса.
+	const auto &recipe_class = MUD::Class(ch_class);
 	for (int sortpos = 0; sortpos <= top_imrecipes; sortpos++) {
-		if (!imrecipes[sortpos].classknow[to_underlying(ch_class)]) {
+		const auto *req = recipe_class.FindIngredientRecipe(imrecipes[sortpos].str_id);
+		if (!req) {
 				continue;
 		}
-		if (imrecipes[sortpos].remort > 0) {
+		if (req->remort > 0) {
 			skills_list2.push_back(imrecipes[sortpos].name);
 			continue;
 		}
@@ -582,12 +590,12 @@ std::string OutRecipiesHelp(ECharClass ch_class) {
 	utils::SortKoiString(skills_list);
 	for (auto it : skills_list) {
 		tmpstr = !(++columns % 2) ? "\r\n" : "\t";
-		out << "\t" << std::left << std::setw(30) << it << tmpstr;
+		out << "\t" << fmt::format("{:<30}", it) << tmpstr;
 	}
 	utils::SortKoiString(skills_list2);
 	for (auto it : skills_list2) {
 			tmpstr = !(++columns2 % 2) ? "\r\n" : "\t";
-			out2 << "\t" << "&C" << std::left << std::setw(30) << it << "&n" << tmpstr;
+			out2 << "\t" << "&C" << fmt::format("{:<30}", it) << "&n" << tmpstr;
 	}
 	if (out.str().back() == '\t')
 		out << "\r\n";
@@ -707,20 +715,20 @@ std::string OutSkillsHelp(ECharClass ch_class) {
 			}
 		}
 		if (num == 1) {
-			skills_list2.push_back(utils::SubstKtoW(skill.GetName()));
+			skills_list2.push_back(skill.GetName());
 			continue;
 		}
-		skills_list.push_back(utils::SubstKtoW(skill.GetName()));
+		skills_list.push_back(skill.GetName());
 	}
 	std::sort(skills_list.begin(), skills_list.end());
 	for (auto it : skills_list) {
 		tmpstr = !(++columns % 2) ? "\r\n" : "\t";
-		out << "\t" << std::left << std::setw(30) << utils::SubstWtoK(it) << tmpstr;
+		out << "\t" << fmt::format("{:<30}", it) << tmpstr;
 	}
 	std::sort(skills_list2.begin(), skills_list2.end());
 	for (auto it : skills_list2) {
 			tmpstr = !(++columns2 % 2) ? "\r\n" : "\t";
-			out2 << "\t" << "&C" << std::left << std::setw(30) << utils::SubstWtoK(it) << "&n" << tmpstr;
+			out2 << "\t" << "&C" << fmt::format("{:<30}", it) << "&n" << tmpstr;
 	}
 	if (out.str().back() == '\t')
 		out << "\r\n";
@@ -875,11 +883,27 @@ std::string OutCasterSpellsHelp(ECharClass ch_class) {
 	return out;
 }
 
+void CharDamHelp() {
+	std::vector<std::pair<std::string, std::string>> dam_list = MUD::PointsIntensity().ShowHelpDamage();
+	std::ostringstream out;
+	table_wrapper::Table table;
+	table << table_wrapper::kHeader << "Для силы наносимых повреждений существуют следующие сообщения" << "урон" << table_wrapper::kEndRow;
+
+	for (size_t i = 0; i < dam_list.size(); ++i) {
+		table << dam_list[i].first << dam_list[i].second << table_wrapper::kEndRow;
+	}
+//	table << table_wrapper::kEndRow;
+//	table << table_wrapper::kSeparator;
+	table_wrapper::PrintTableToStream(out, table);
+	out << "\r\nСм. также: &CДМЕТР, ПЕРЕВЯЗАТЬ&n";
+	add_static("УРОН", out.str(), 0, true);
+}
+
 void CasterSpellslHelp() {
 	std::string out;
 
 	out = OutCasterSpellsHelp(ECharClass::kSorcerer);
-	out += "\r\nСм. также: &CЛЕКАРЬ, УМЕНИЯЛЕКАРЯ, СПОСОБНОСТИЛЕКАРЯ, ОТВАРЫЛЕКАРЯ";
+	out += "\r\nСм. также: &CЛЕКАРЬ, УМЕНИЯЛЕКАРЯ, СПОСОБНОСТИЛЕКАРЯ, ОТВАРЫЛЕКАРЯ&n";
 	add_static("ЗАКЛИНАНИЯЛЕКАРЯ", out, 0, true);
 
 	out = OutCasterSpellsHelp(ECharClass::kConjurer);
@@ -950,17 +974,17 @@ std::string OutFeatureHelp(ECharClass ch_class) {
 	utils::SortKoiString(feat_list);
 	for (auto it : feat_list) {
 		tmpstr = !(++columns % 2) ? "\r\n" : "\t";
-		out << "\t" << std::left << std::setw(30) << it << tmpstr;
+		out << "\t" << fmt::format("{:<30}", it) << tmpstr;
 	}
 	utils::SortKoiString(feat_list2);
 	for (auto it : feat_list2) {
 		tmpstr = !(++columns2 % 2) ? "\r\n" : "\t";
-		out2 << "\t" << "&C" << std::left << std::setw(30) << it << "&n" << tmpstr;
+		out2 << "\t" << "&C" << fmt::format("{:<30}", it) << "&n" << tmpstr;
 	}
 	utils::SortKoiString(feat_list3);
 	for (auto it : feat_list3) {
 		tmpstr = !(++columns3 % 2) ? "\r\n" : "\t";
-		out3 << "\t" << "&C" << std::left << std::setw(30) << it << "&n" << tmpstr;
+		out3 << "\t" << "&C" << fmt::format("{:<30}", it) << "&n" << tmpstr;
 	}
 	if (out.str().back() == '\t')
 		out << "\r\n";
@@ -1265,8 +1289,12 @@ void SetsHelp() {
 			str_out = "все";
 		else if (count_class == 0)
 			str_out = "никто";
-		if (str_out.back() == '\n')
-			str_out.back() = '\0';
+		// Именно pop_back(), а не запись '\0': присваивание оставляло NUL ВНУТРИ строки,
+		// не меняя её длины. Байтовая таблица это терпела, а libfort в режиме utf8_table
+		// на встроенном нуле уводит расчёт ширины в переполнение и роняет процесс.
+		if (str_out.back() == '\n') {
+			str_out.pop_back();
+		}
 		table << str_out << table_wrapper::kSeparator << table_wrapper::kEndRow;
 	}
 	table.SetColumnAlign(0, table_wrapper::align::kRight);
@@ -1297,7 +1325,7 @@ void check_update_dynamic() {
 void reload(Flags flag) {
 	switch (flag) {
 		case STATIC: static_help.clear();
-			world_loader.BootIndex(DB_BOOT_HLP);
+			game_loader.BootIndex(DB_BOOT_HLP);
 			init_group_zones();
 			init_zone_all();
 			ClassRecipiesHelp();
@@ -1306,6 +1334,7 @@ void reload(Flags flag) {
 			CasterSpellslHelp();
 			SetsHelp();
 			AllHelp();
+			CharDamHelp();
 			PrintActivators::process();
 			obj_sets::init_xhelp();
 			// итоговая сортировка массива через дефолтное < для строковых ключей 
@@ -1345,11 +1374,10 @@ bool help_compare(const std::string &arg, const std::string &text, bool strong) 
 
 	if (strong) {
 
-		sprintf(buf, "strong arg=%s| text=%s|",arg.c_str(), text.c_str());
-		mudlog(buf, CMP, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("strong arg={}| text={}|", arg, text), CMP, kLvlGreatGod, SYSLOG, true);
 		return arg == text;
 	}
-	return IsEquivalent(name, text);
+	return utils::IsAbbr(name, text);
 }
 
 void UserSearch::process(int flag) {
@@ -1363,18 +1391,14 @@ void UserSearch::process(int flag) {
 }
 
 void UserSearch::print_not_found() const {
-	snprintf(buf, sizeof(buf), "%s uses command HELP: %s (not found)", GET_NAME(ch), arg_str.c_str());
-	mudlog(buf, LGH, kLvlImmortal, SYSLOG, true);
-	snprintf(buf, sizeof(buf),
-			 "&WПо вашему запросу '&w%s&W' ничего не было найдено.&n\r\n"
-			 "\r\n&cИнформация:&n\r\n"
-			 "Если применять команду \"справка\" без параметров, будут отображены основные команды,\r\n"
-			 "особенно необходимые новичкам. Кроме того полезно ознакомиться с разделом &CНОВИЧОК&n.\r\n\r\n"
-			 "Справочная система позволяет использовать в запросе индексацию разделов и строгий поиск.\r\n\r\n"
-			 "%s",
-			 arg_str.c_str(),
-			 HELP_USE_EXMAPLES);
-	SendMsgToChar(buf, ch);
+	mudlog(fmt::format("{} uses command HELP: {} (not found)", GET_NAME(ch), arg_str), LGH, kLvlImmortal, SYSLOG, true);
+	SendMsgToChar(fmt::format("&WПо вашему запросу '&w{}&W' ничего не было найдено.&n\r\n"
+							  "\r\n&cИнформация:&n\r\n"
+							  "Если применять команду \"справка\" без параметров, будут отображены основные команды,\r\n"
+							  "особенно необходимые новичкам. Кроме того полезно ознакомиться с разделом &CНОВИЧОК&n.\r\n\r\n"
+							  "Справочная система позволяет использовать в запросе индексацию разделов и строгий поиск.\r\n\r\n"
+							  "{}",
+							  arg_str, HELP_USE_EXMAPLES), ch);
 }
 
 void UserSearch::print_curr_topic(const help_node &node) const {
@@ -1383,9 +1407,7 @@ void UserSearch::print_curr_topic(const help_node &node) const {
 		SetsDrop::print_timer_str(ch);
 	}
 	if (!node.no_immlog) {
-		snprintf(buf, sizeof(buf), "%s uses command HELP: %s (read)",
-				 GET_NAME(ch), arg_str.c_str());
-		mudlog(buf, LGH, kLvlImmortal, SYSLOG, true);
+		mudlog(fmt::format("{} uses command HELP: {} (read)", GET_NAME(ch), arg_str), LGH, kLvlImmortal, SYSLOG, true);
 	}
 	page_string(ch->desc, node.entry);
 }
@@ -1413,8 +1435,7 @@ void UserSearch::print_key_list() const {
 		   "либо воспользуйтесь индексацией или строгим поиском.\r\n\r\n"
 		<< HELP_USE_EXMAPLES;
 
-	snprintf(buf, sizeof(buf), "%s uses command HELP: %s (list)", GET_NAME(ch), arg_str.c_str());
-	mudlog(buf, LGH, kLvlImmortal, SYSLOG, true);
+	mudlog(fmt::format("{} uses command HELP: {} (list)", GET_NAME(ch), arg_str), LGH, kLvlImmortal, SYSLOG, true);
 	page_string(ch->desc, out.str());
 }
 
@@ -1475,6 +1496,8 @@ void UserSearch::search(const std::vector<help_node> &cont) {
 using namespace HelpSystem;
 
 void do_help(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
+	std::string arg_str(argument);
+
 	if (!ch->desc) {
 		return;
 	}
@@ -1483,22 +1506,33 @@ void do_help(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		page_string(ch->desc, help, 0);
 		return;
 	}
-
+	if (arg_str.size() > 100) {
+		SendMsgToChar(ch, "Слишком длинная строка в запросе справки.\r\n");
+		return;
+	}
 	UserSearch user_search(ch);
 	// trust_level справки для демигодов - kLevelImmortal
 	user_search.level = GET_GOD_FLAG(ch, EGf::kDemigod) ? kLvlImmortal : GetRealLevel(ch);
-	utils::ConvertToLow(argument);
-	// Получаем topic_num для индексации топика
-	sscanf(argument, "%d.%s", &user_search.topic_num, argument);
-	// если последний символ аргумента '!' -- включаем строгий поиск
-	if (strlen(argument) > 1 && *(argument + strlen(argument) - 1) == '!') {
-		user_search.strong = true;
-		*(argument + strlen(argument) - 1) = '\0';
-		user_search.arg_str = argument;
-	} else {
-		user_search.arg_str = utils::FixDot(argument);
+	utils::ConvertToLow(arg_str);
+	// Парсинг topic_num
+	size_t dot_pos = arg_str.find('.');
+    
+	if (dot_pos != std::string::npos) {
+		try {
+			user_search.topic_num = std::stoi(arg_str.substr(0, dot_pos));
+			arg_str = arg_str.substr(dot_pos + 1);
+		} catch (...) {
+			user_search.topic_num = 0;
+			arg_str.erase(std::remove(arg_str.begin(), arg_str.end(), '.'), arg_str.end());
+		}
 	}
-
+	// если последний символ аргумента '!' -- включаем строгий поиск
+	if (arg_str.size() > 1 && arg_str.back() == '!') {
+		user_search.strong = true;
+		user_search.arg_str = arg_str;
+	} else {
+		user_search.arg_str = arg_str;
+	}
 	// поиск по всем массивам или до стопа по флагу
 	for (int i = STATIC; i < TOTAL_NUM && !user_search.stop; ++i) {
 		user_search.process(i);

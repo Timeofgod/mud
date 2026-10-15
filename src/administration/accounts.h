@@ -9,6 +9,7 @@
 #include "engine/structs/structs.h"
 #include "engine/entities/char_data.h"
 #include "engine/network/descriptor_data.h"
+#include "gameplay/economics/currency_storage.h"
 
 #include <string>
 #include <vector>
@@ -43,6 +44,14 @@ class Account {
 	time_t last_login;
 	// История логинов, ключ - айпи, в структуре количество раз, с которых был произведен заход с данного айпи-адреса + дата, когда последний раз выходили с данного айпишника
 	std::unordered_map<std::string, login_index> history_logins;
+	// issue.currency-storage: shared balances for currencies flagged account_shared.
+	currencies::CurrencyStorage account_currencies_;
+	// issue #4014: что было записано в файл аккаунта в последний раз. Файл перезаписывается только
+	// когда содержимое изменилось: save_to_file() зовётся на КАЖДОМ сейве персонажа, а сама запись
+	// мелкого файла на бою стоила 20-35 мс и целиком съедала секцию idle в профиле point_update.
+	// Сверка по содержимому, а не флагом «грязно»: флаг пришлось бы ставить во всех мутаторах, и
+	// забытый мутатор означал бы потерю данных аккаунта.
+	std::string last_saved_text_;
 
  public:
 	void purge_erased();
@@ -51,7 +60,6 @@ class Account {
 	void read_from_file();
 	std::string get_email();
 	bool quest_is_available(int id);
-	int zero_hryvn(CharData *ch, int val);
 	void complete_quest(int id);
 	static std::shared_ptr<Account> get_account(const std::string &email);
 	void show_players(CharData *ch);
@@ -64,6 +72,7 @@ class Account {
 	bool compare_password(const std::string &password);
 	void show_history_logins(CharData *ch);
 	void add_login(const std::string &ip_addr);
+	[[nodiscard]] currencies::CurrencyStorage &currency_storage() { return account_currencies_; }
 };
 
 extern std::unordered_map<std::string, std::shared_ptr<Account>> accounts;

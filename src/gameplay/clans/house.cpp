@@ -4,7 +4,18 @@
 * (c) 2005 Krodo                                                              *
 ******************************************************************************/
 
+#include "utils/utils_string.h"
 #include "house.h"
+#include "utils/russian_keys.h"
+#include "utils/native_text.h"
+#include "engine/db/player_index.h"
+#include "gameplay/economics/currencies.h"
+#include "utils/utils_encoding.h"
+#include "utils/grammar/gender.h"
+#include "utils/grammar/declensions.h"
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/ai/special_messages.h"
+#include "gameplay/mechanics/identify.h"
 
 #include <sys/stat.h>
 #include <algorithm>
@@ -14,17 +25,21 @@
 #include <iomanip>
 #include <limits>
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include "administration/karma.h"
 #include "engine/db/world_objects.h"
 #include "engine/db/world_characters.h"
 #include "engine/db/obj_prototypes.h"
 #include "utils/logger.h"
+#include "utils/thread_pool.h"
 #include "utils/utils.h"
 #include "engine/entities/obj_data.h"
 #include "engine/core/comm.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "gameplay/mechanics/inventory.h"
 #include "gameplay/fight/pk.h"
 #include "engine/ui/color.h"
 #include "gameplay/communication/boards/boards.h"
@@ -36,11 +51,12 @@
 #include "engine/ui/modify.h"
 #include "engine/entities/room_data.h"
 #include "engine/db/obj_save.h"
-#include "engine/core/handler.h"
 #include "gameplay/mechanics/named_stuff.h"
 #include "engine/db/help.h"
 #include "engine/core/conf.h"
 #include "engine/db/global_objects.h"
+#include "ingr_chest_saver.h"
+#include "chest_saver.h"
 #include "engine/ui/objects_filter.h"
 #include "engine/ui/table_wrapper.h"
 #include "gameplay/mechanics/sight.h"
@@ -49,15 +65,16 @@
 #include "utils/utils_time.h"
 #include "gameplay/mechanics/dungeons.h"
 #include "engine/ui/cmd/do_who.h"
+#include "gameplay/core/remort.h"
 
 using namespace ClanSystem;
 
 extern int mortal_start_room;
-extern void list_obj_to_char(ObjData *list, CharData *ch, int mode, int show);
+extern void sight::list_obj_to_char(ObjData *list, CharData *ch, int mode, int show);
 extern int AllocateBufferForFile(const char *name, char **destination_buf);
 // TODO: думать надо с этим, или глобально следить за спамом, или игноров напихать на все случаи жизни, или так и оставить
 extern void SetWait(CharData *ch, int waittime, int victim_in_room);
-extern const char *show_obj_to_char(ObjData *object, CharData *ch, int mode, int show_state, int how);
+extern std::string sight::show_obj_to_char(ObjData *object, CharData *ch, int mode, int show_state, int how);
 extern bool char_to_pk_clan(CharData *ch);
 
 void fix_ingr_chest_rnum(const int room_rnum)//Нужно чтоб позиция короба не съехала
@@ -116,8 +133,10 @@ void prepare_write_mod(CharData *ch, std::string &param) {
 * и перевод всего слова в нижний регистр.
 */
 void check_rank(std::string &rank) {
-	if (rank.size() > MAX_RANK_LENGHT) {
-		rank = rank.substr(0, MAX_RANK_LENGHT);
+	// Предел -- в символах (так и сказано игроку), а с UTF-8 кириллица занимает по два байта:
+	// по size() десятибуквенное звание резалось до пяти букв, да ещё и посреди символа (issue #3681).
+	if (native_text::char_count(rank) > MAX_RANK_LENGHT) {
+		rank = rank.substr(0, native_text::char_offset(rank, MAX_RANK_LENGHT));
 	}
 	utils::ConvertToLow(rank);
 }
@@ -167,7 +186,7 @@ Clan::Clan() :
 	exp(0), clan_exp(0), exp_buf(0), clan_level(0), rent(0),
 	pk(true),
 	chest_room(0), storehouse(true), exp_info(true), test_clan(false),
-	ingr_chest_room_rnum_(-1), gold_tax_pct_(0), reputation(10),
+	ingr_chest_room_rnum_(0), gold_tax_pct_(0), reputation(10),
 	chest_objcount(0), chest_discount(0), chest_weight(0),
 	ingr_chest_objcount_(0) {
 }
@@ -176,16 +195,17 @@ Clan::~Clan() {
 }
 // релоад одного отдельного клана, абр. указывать на латинице!
 void Clan::ClanReload(const std::string &index) {
-	std::ifstream file(LIB_HOUSE "index");
-	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", LIB_HOUSE "index", __FILE__, __func__, __LINE__);
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(LIB_CLANS "index"));
+	if (file.str().empty()) {
+		log("Error open file: %s! (%s %s %d)", LIB_CLANS "index", __FILE__, __func__, __LINE__);
 		return;
 	}
 	std::string buffer;
 	std::list<std::string> clanIndex;
 	while (file >> buffer)
 		clanIndex.push_back(buffer);
-	file.close();
 	// ищем наш клан
 	for (const auto &it : clanIndex) {
 		if (it == index) {
@@ -209,9 +229,11 @@ void Clan::ClanLoadSingle(const std::string &index) {
 	std::string buffer;
 	const auto tempClan = std::make_shared<Clan>();
 
-	std::string filename = LIB_HOUSE + index + "/" + index;
-	std::ifstream file(filename.c_str());
-	if (!file.is_open()) {
+	std::string filename = LIB_CLANS + index + "/" + index;
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(filename.c_str()));
+	if (file.str().empty()) {
 		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
@@ -425,7 +447,7 @@ void Clan::ClanLoadSingle(const std::string &index) {
 				log("Owner %ld is no longer exist (%s).", unique, filename.c_str());
 				break;
 			}
-			tempMember->name[0] = UPPER(tempMember->name[0]);
+			native_text::capitalize_first(tempMember->name);
 			tempMember->rank_num = 0;
 			tempMember->money = money;
 			tempMember->exp = exp;
@@ -461,7 +483,7 @@ void Clan::ClanLoadSingle(const std::string &index) {
 					log("Member %ld is no longer exist (%s).", unique, filename.c_str());
 					continue;
 				}
-				tempMember->name[0] = UPPER(tempMember->name[0]);
+				native_text::capitalize_first(tempMember->name);
 				tempMember->rank_num = rank;
 				tempMember->money = money;
 				tempMember->exp = exp;
@@ -471,7 +493,6 @@ void Clan::ClanLoadSingle(const std::string &index) {
 		}
 
 	}
-	file.close();
 
 	// тут нужно проверить наличие критичных для клана полей
 	// т.к. загрузка без привязки к положению в файле - что-то может не проинициализироваться
@@ -496,7 +517,7 @@ void Clan::ClanLoadSingle(const std::string &index) {
 					tempClan->owner.c_str(), __FILE__, __LINE__);
 				return;
 			}
-			victim->add_bank(tempClan->bank);
+			currencies::AddBank(*victim, currencies::kGold, tempClan->bank);
 			victim->save_char();
 		}
 		Boards::Static::clan_delete_message(tempClan->abbrev, tempClan->rent / 100);
@@ -523,8 +544,9 @@ void Clan::ClanLoadSingle(const std::string &index) {
 	}
 
 	// подгружаем пкл/дрл
-	std::ifstream pkFile((filename + ".pkl").c_str());
-	if (pkFile.is_open()) {
+	// Граница чтения: pk-лог лежит на диске в кодировке мира (issue #3681).
+	std::istringstream pkFile(native_text::read_data_file(filename + ".pkl"));
+	if (!pkFile.str().empty()) {
 		int author = 0;
 		while (pkFile >> author) {
 			int victim = 0;
@@ -558,11 +580,11 @@ void Clan::ClanLoadSingle(const std::string &index) {
 					tempClan->frList[victim] = tempRecord;
 			}
 		}
-		pkFile.close();
 	}
 	//подгружаем кланстафф
-	std::ifstream stuffFile((filename + ".stuff").c_str());
-	if (stuffFile.is_open()) {
+	// Граница чтения: названия именных вещей дружины лежат в кодировке мира (issue #3681).
+	std::istringstream stuffFile(native_text::read_data_file(filename + ".stuff"));
+	if (!stuffFile.str().empty()) {
 		int i;
 		while (stuffFile >> i) {
 			ClanStuffName temp;
@@ -605,21 +627,34 @@ void Clan::ClanLoadSingle(const std::string &index) {
 void Clan::ClanLoad() {
 	const bool reload = Clan::ClanList.empty() ? false : true;
 
+	// issue #3737: перед перезагрузкой сбрасываем на диск всё, что ещё не сохранено. ChestLoad()
+	// первым делом выбрасывает из памяти содержимое всех клановых сундуков и читает его заново из
+	// файлов, а сейверы сундуков -- dirty-трекеры и ходят раз в десять минут. Из-за этого
+	// "reload clan" уничтожал всё, что положили после последнего сейва: в файле этого ещё не было,
+	// а из памяти уже стёрли, и вещь пропадала молча -- при распаде внутри контейнера сообщение
+	// не выводится. Сохранение ниже по коду не спасает: оно записывает уже опустевшее состояние.
+	// Делать это надо именно здесь, до ClanList.clear(): сейверы ходят по этому самому списку.
+	if (reload) {
+		Clan::SaveChestAll();
+		save_ingr_chests();
+	}
+
 	init_chest_rnum();
 	// на случай релоада
 	Clan::ClanList.clear();
 
 	// файл со списком кланов
-	std::ifstream file(LIB_HOUSE "index");
-	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", LIB_HOUSE "index", __FILE__, __func__, __LINE__);
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(LIB_CLANS "index"));
+	if (file.str().empty()) {
+		log("Error open file: %s! (%s %s %d)", LIB_CLANS "index", __FILE__, __func__, __LINE__);
 		return;
 	}
 	std::string buffer;
 	std::list<std::string> clanIndex;
 	while (file >> buffer)
 		clanIndex.push_back(buffer);
-	file.close();
 	// собственно грузим кланы
 	for (const auto &it : clanIndex) {
 		Clan::ClanLoadSingle(it);
@@ -673,12 +708,9 @@ void Clan::HconShow(CharData *ch) {
 	SendMsgToChar(buffer.str().c_str(), ch);
 }
 
-void Clan::save_clan_file(const std::string &filename) const {
-	std::ofstream file(filename.c_str());
-	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
-		return;
-	}
+// формирование содержимого основного файла клана
+std::string Clan::build_clan_file() const {
+	std::ostringstream file;
 
 	file << "Abbrev: " << abbrev << "\n"
 		 << "Name: " << name << "\n"
@@ -739,14 +771,58 @@ void Clan::save_clan_file(const std::string &filename) const {
 		}
 	}
 	file << "~\n";
-	file.close();
+	return file.str();
+}
+
+// формирование содержимого пкл/дрл файла клана
+std::string Clan::build_pk_file() const {
+	std::ostringstream file;
+
+	for (auto it = pkList.begin(); it != pkList.end(); ++it)
+		file << it->second->author << " " << it->first << " " << (*it).
+			second->time << " " << "0\n" << it->second->text << "\n~\n";
+	for (auto it = frList.begin(); it != frList.end(); ++it)
+		file << it->second->author << " " << it->first << " " << (*it).
+			second->time << " " << "1\n" << it->second->text << "\n~\n";
+
+	return file.str();
+}
+
+namespace {
+
+// запись файла, если его содержимое изменилось с прошлого сохранения
+bool write_if_changed(const std::string &filename, const std::string &contents,
+					  std::optional<std::string> &cache) {
+	if (cache.has_value() && *cache == contents) {
+		return true;
+	}
+
+	std::ofstream file(filename.c_str());
+	if (!file.is_open()) {
+		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
+		return false;
+	}
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
+	const std::string on_disk = contents;
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
+
+	cache = contents;
+	return true;
+}
+
+}  // namespace
+
+void Clan::save_clan_file(const std::string &filename) const {
+	write_if_changed(filename, build_clan_file(), saved_clan_file_);
 }
 
 // сохранение кланов в файлы
 void Clan::ClanSave() {
-	std::ofstream index(LIB_HOUSE "index");
+	std::ofstream index(LIB_CLANS "index");
 	if (!index.is_open()) {
-		log("Error open file: %s! (%s %s %d)", LIB_HOUSE "index", __FILE__, __func__, __LINE__);
+		log("Error open file: %s! (%s %s %d)", LIB_CLANS "index", __FILE__, __func__, __LINE__);
 		return;
 	}
 
@@ -754,10 +830,16 @@ void Clan::ClanSave() {
 		// именем файла для клана служит его аббревиатура (английский и нижний регистр)
 		std::string buffer = clan->abbrev;
 		CreateFileName(buffer);
+		// в индексе дружина остается всегда, иначе она пропадет из игры после перезагрузки
 		index << buffer << "\n";
 
-		std::string filepath = LIB_HOUSE + buffer + "/" + buffer;
-		std::string path = LIB_HOUSE + buffer;
+		// дружина без игроков считается распущенной: ее файлы больше не трогаем
+		if (clan->m_members.empty()) {
+			continue;
+		}
+
+		std::string filepath = LIB_CLANS + buffer + "/" + buffer;
+		std::string path = LIB_CLANS + buffer;
 		struct stat result;
 		if (stat(filepath.c_str(), &result)) {
 			if (mkdir(path.c_str(), 0700)) {
@@ -768,18 +850,7 @@ void Clan::ClanSave() {
 		// основной файл клана
 		clan->save_clan_file(filepath);
 		// пкл/дрл
-		std::ofstream pkFile((filepath + ".pkl").c_str());
-		if (!pkFile.is_open()) {
-			log("Error open file: %s! (%s %s %d)", (filepath + ".pkl").c_str(), __FILE__, __func__, __LINE__);
-			return;
-		}
-		for (auto it = clan->pkList.begin(); it != clan->pkList.end(); ++it)
-			pkFile << it->second->author << " " << it->first << " " << (*it).
-				second->time << " " << "0\n" << it->second->text << "\n~\n";
-		for (auto it = clan->frList.begin(); it != clan->frList.end(); ++it)
-			pkFile << it->second->author << " " << it->first << " " << (*it).
-				second->time << " " << "1\n" << it->second->text << "\n~\n";
-		pkFile.close();
+		write_if_changed(filepath + ".pkl", clan->build_pk_file(), clan->saved_pk_file_);
 	}
 	index.close();
 }
@@ -801,7 +872,7 @@ void Clan::SetClanData(CharData *ch) {
 
 	// если куда-то приписан, то дергаем сразу итераторы на клан и список членов
 	for (auto &clan : Clan::ClanList) {
-		const auto member = clan->m_members.find(GET_UID(ch));
+		const auto member = clan->m_members.find(ch->get_uid());
 		if (member != clan->m_members.end()) {
 			CLAN(ch) = clan;
 			CLAN_MEMBER(ch) = member->second;
@@ -816,7 +887,7 @@ void Clan::SetClanData(CharData *ch) {
 	}
 	// куда-то таки приписан
 	std::string buffer;
-	if (IS_MALE(ch))
+	if (IsMale(ch))
 		buffer = CLAN(ch)->ranks[CLAN_MEMBER(ch)->rank_num] + " " + CLAN(ch)->title;
 	else
 		buffer = CLAN(ch)->ranks_female[CLAN_MEMBER(ch)->rank_num] + " " + CLAN(ch)->title_female;
@@ -843,7 +914,7 @@ Clan::shared_ptr Clan::GetClanByRoom(RoomRnum room) {
 bool Clan::MayEnter(CharData *ch, RoomRnum room, bool mode) {
 	const auto clan = GetClanByRoom(room);
 	if (!clan
-		|| IS_GRGOD(ch)
+		|| privilege::IsGrGod(ch)
 		|| !ROOM_FLAGGED(room, ERoomFlag::kHouse)
 		|| clan->entranceMode
 		|| ch->IsFlagged(EPrf::kCoderinfo)) {
@@ -944,7 +1015,7 @@ void Clan::HouseInfo(CharData *ch) {
 	for (const auto &it : temp_list) {
 		if (temp != ranks[it->rank_num]) {
 			std::string rnk = ranks[it->rank_num];
-			rnk[0] = UPPER(rnk[0]);
+			native_text::capitalize_first(rnk);
 
 			if (temp == "") {
 				buffer << rnk << ": ";
@@ -1015,10 +1086,10 @@ void Clan::HouseInfo(CharData *ch) {
 		   << " Это очень круто :), но ничего вам не дает.\r\n"
 		   << "Ваша дружина имеет " << this->get_rep() << " очков репутации.\r\n"
 		   << "В хранилище замка может храниться до " << this->ChestMaxObjects()
-		   << " " << GetDeclensionInNumber(this->ChestMaxObjects(), EWhat::kObjU)
+		   << " " << grammar::GetDeclensionInNumber(this->ChestMaxObjects(), grammar::EWhat::kObjU)
 		   << " с общим весом не более чем " << this->ChestMaxWeight() << "\r\n"
 		   << "В хранилище ингредиентов может храниться до " << this->ingr_chest_max_objects()
-		   << " " << GetDeclensionInNumber(this->ingr_chest_max_objects(), EWhat::kObjU)
+		   << " " << grammar::GetDeclensionInNumber(this->ingr_chest_max_objects(), grammar::EWhat::kObjU)
 		   << ".\r\n";
 
 	// инфа о банке и хранилище
@@ -1028,25 +1099,25 @@ void Clan::HouseInfo(CharData *ch) {
 	int total_tax = cost + ingr_cost + options_tax;
 
 	buffer << "В хранилище вашей дружины " << this->chest_objcount << " "
-		   << GetDeclensionInNumber(this->chest_objcount, EWhat::kObject)
+		   << grammar::GetDeclensionInNumber(this->chest_objcount, grammar::EWhat::kObject)
 		   << " общим весом в " << this->chest_weight
-		   << " (" << cost << " " << GetDeclensionInNumber(cost, EWhat::kMoneyA) << " в день).\r\n"
+		   << " (" << cost << " " << MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom).c_str() << " в день).\r\n"
 		   << "В хранилище ингредиентов " << ingr_chest_objcount_ << " "
-		   << GetDeclensionInNumber(ingr_chest_objcount_, EWhat::kObject)
-		   << " (" << ingr_cost << " " << GetDeclensionInNumber(ingr_cost, EWhat::kMoneyA) << " в день).\r\n\r\n"
+		   << grammar::GetDeclensionInNumber(ingr_chest_objcount_, grammar::EWhat::kObject)
+		   << " (" << ingr_cost << " " << MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(ingr_cost, grammar::ECase::kNom).c_str() << " в день).\r\n\r\n"
 		   << "Состояние казны: " << this->bank << " "
-		   << GetDeclensionInNumber(this->bank, EWhat::kMoneyA) << ".\r\n"
+		   << MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(this->bank, grammar::ECase::kNom).c_str() << ".\r\n"
 		   << "Расходы на инфраструктуру замка: " << options_tax << " "
-		   << GetDeclensionInNumber(options_tax, EWhat::kMoneyA)
+		   << MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(options_tax, grammar::ECase::kNom).c_str()
 		   << " в день, Общие расходы: " << total_tax << " "
-		   << GetDeclensionInNumber(total_tax, EWhat::kMoneyA) << " в день.\r\n";
+		   << MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(total_tax, grammar::ECase::kNom).c_str() << " в день.\r\n";
 
 	if (total_tax <= 0) {
 		buffer << "Ваших денег хватит на нереальное количество дней.\r\n";
 	} else {
 		buffer << "Ваших денег хватит примерно на "
 			   << bank / total_tax << " "
-			   << GetDeclensionInNumber(bank / total_tax, EWhat::kDay) << ".\r\n";
+			   << grammar::GetDeclensionInNumber(bank / total_tax, grammar::EWhat::kDay) << ".\r\n";
 	}
 	buffer << "Налог для ратников дружины: " << get_gold_tax_pct() << "%\r\n";
 
@@ -1069,8 +1140,8 @@ void Clan::HouseAdd(CharData *ch, std::string &buffer) {
 		return;
 	}
 	std::string name = buffer2;
-	name[0] = UPPER(name[0]);
-	if (unique == GET_UID(ch)) {
+	native_text::capitalize_first(name);
+	if (unique == ch->get_uid()) {
 		SendMsgToChar("Сам себя повысил, самому себе вынес благодарность?\r\n", ch);
 		return;
 	}
@@ -1111,8 +1182,9 @@ void Clan::HouseAdd(CharData *ch, std::string &buffer) {
 								  kColorWht,
 								  (*it).c_str(),
 								  kColorNrm);
-					sprintf(buf, "Звание в дружине изменено на %s", (*it).c_str());
-					AddKarma(d->character.get(), buf, ch->get_name().c_str());
+					AddKarma(d->character.get(),
+							 fmt::format("Звание в дружине изменено на {}", *it),
+							 ch->get_name());
 				}
 
 				// оповещение соклановцев о изменении звания
@@ -1141,7 +1213,7 @@ void Clan::HouseAdd(CharData *ch, std::string &buffer) {
 	}
 
 	DescriptorData *d = DescriptorByUid(unique);
-	if (!d || !CAN_SEE(ch, d->character)) {
+	if (!d || !sight::CanSee(ch, d->character)) {
 		SendMsgToChar("Этого персонажа нет в игре!\r\n", ch);
 		return;
 	}
@@ -1164,11 +1236,6 @@ void Clan::HouseAdd(CharData *ch, std::string &buffer) {
 			SendMsgToChar("Он уже приглашен в другую дружину, дождитесь его ответа и пригласите снова.\r\n", ch);
 			return;
 		}
-	}
-
-	if (GET_KIN(d->character) != GET_KIN(ch)) {
-		SendMsgToChar("Вы не можете сражаться в одном строю с иноплеменником.\r\n", ch);
-		return;
 	}
 
 	GetOneParam(buffer, buffer2);
@@ -1237,15 +1304,14 @@ void Clan::remove_member(const ClanMembersList::key_type &key, char *reason) {
 	if (k && k->character) {
 		Clan::SetClanData(k->character.get());
 		SendMsgToChar(k->character.get(), "Вас исключили из дружины '%s'!\r\n", this->name.c_str());
-		sprintf(buf, "Исключен(а) из дружины '%s'", this->name.c_str());
-		AddKarma(k->character.get(), buf, reason);
+		AddKarma(k->character.get(), fmt::format("Исключен(а) из дружины '{}'", this->name), reason);
 		const auto clan = Clan::GetClanByRoom(k->character->in_room);
 		if (clan) {
 			char_from_room(k->character);
 			act("$n был$g выдворен$a за пределы замка!", true, k->character.get(), nullptr, nullptr, kToRoom);
 			SendMsgToChar("Вы были выдворены за пределы замка!\r\n", k->character.get());
 			PlaceCharToRoom(k->character.get(), GetRoomRnum(clan->out_rent));
-			look_at_room(k->character.get(), GetRoomRnum(clan->out_rent));
+			sight::look_at_room(k->character.get(), GetRoomRnum(clan->out_rent));
 			act("$n свалил$u с небес, выкрикивая какие-то ругательства!",
 				true,
 				k->character.get(),
@@ -1257,8 +1323,7 @@ void Clan::remove_member(const ClanMembersList::key_type &key, char *reason) {
 		Player p_vict;
 		CharData *vict = &p_vict;
 		if (LoadPlayerCharacter(name.c_str(), vict, ELoadCharFlags::kFindId) > -1) {
-			sprintf(buf, "Исключен(а) из дружины '%s'", this->name.c_str());
-			AddKarma(vict, buf, reason);
+			AddKarma(vict, fmt::format("Исключен(а) из дружины '{}'", this->name), reason);
 			vict->save_char();
 		}
 	}
@@ -1266,7 +1331,7 @@ void Clan::remove_member(const ClanMembersList::key_type &key, char *reason) {
 		if (d->character
 			&& CLAN(d->character)
 			&& CLAN(d->character)->GetRent() == this->GetRent()) {
-			name[0] = UPPER(name[0]);
+			native_text::capitalize_first(name);
 			SendMsgToChar(d->character.get(), "%s более не является членом вашей дружины.\r\n", name.c_str());
 		}
 	}
@@ -1283,7 +1348,7 @@ void Clan::HouseRemove(CharData *ch, std::string &buffer) {
 		SendMsgToChar("Укажите имя персонажа.\r\n", ch);
 	} else if (!unique) {
 		SendMsgToChar("Неизвестный персонаж.\r\n", ch);
-	} else if (unique == GET_UID(ch)) {
+	} else if (unique == ch->get_uid()) {
 		SendMsgToChar("Выглядит довольно странно...\r\n", ch);
 	}
 
@@ -1305,7 +1370,7 @@ void Clan::HouseLeave(CharData *ch) {
 		return;
 	}
 
-	const auto member_id = GET_UID(ch);
+	const auto member_id = ch->get_uid();
 	const auto it = this->m_members.find(member_id);
 	if (it != this->m_members.end()) {
 		char tmpstr[kMaxInputLength];
@@ -1318,8 +1383,8 @@ void Clan::HouseLeave(CharData *ch) {
 int Clan::delete_obj(int vnum) {
 	int num = 0;
 	for (auto &clan : Clan::ClanList) {
-		ObjData *temp, *chest;
-		for (chest = world[GetRoomRnum(clan->chest_room)]->contents; chest; chest = chest->get_next_content()) {
+		ObjData *temp;
+		for (auto chest : world[GetRoomRnum(clan->chest_room)]->contents) {
 			if (Clan::is_clan_chest(chest)) {
 				for (temp = chest->get_contains(); temp; temp = temp->get_next_content()) {
 					if (GET_OBJ_VNUM(temp) == vnum) {
@@ -1331,6 +1396,37 @@ int Clan::delete_obj(int vnum) {
 		}
 	}
 	return num;
+}
+
+// Предмет рассыпался по таймеру внутри кланового хранилища. Savers сундука и ингр-храна --
+// dirty-трекеры (сохраняют только помеченные кланы), а распад сам по себе dirty не метил:
+// файл не переписывался, и предмет возвращался из него после ребута. Метим владельца dirty и
+// уменьшаем счётчик вещей (при take он уменьшается, при распаде забывали). Вызывается из
+// obj_point_update, пока предмет ещё лежит в сундуке (до ExtractObjFromWorld).
+void Clan::OnChestObjDecay(ObjData *j) {
+	ObjData *container = j ? j->get_in_obj() : nullptr;
+	if (!container) {
+		return;
+	}
+	const int room_vnum = GET_ROOM_VNUM(container->get_in_room());
+	for (auto &clan : Clan::ClanList) {
+		if (Clan::is_clan_chest(container) && clan->GetRent() == room_vnum) {
+			if (clan->chest_objcount > 0) {
+				clan->chest_objcount--;
+			}
+			GlobalObjects::chest_saver().mark_dirty(clan.get());
+			return;
+		}
+		if (Clan::is_ingr_chest(container)
+			&& clan->get_ingr_chest_room_rnum() >= 0
+			&& GET_ROOM_VNUM(clan->get_ingr_chest_room_rnum()) == room_vnum) {
+			if (clan->ingr_chest_objcount_ > 0) {
+				clan->ingr_chest_objcount_--;
+			}
+			GlobalObjects::ingr_chest_saver().mark_dirty(clan.get());
+			return;
+		}
+	}
 }
 
 // * hcontrol outcast имя - отписывание любого персонажа от дружины, кроме воеводы.
@@ -1353,7 +1449,7 @@ void Clan::hcon_outcast(CharData *ch, std::string &buffer) {
 			char tmpstr[kMaxInputLength];
 			sprintf(tmpstr, "Богом %s", GET_NAME(ch));
 			clan->remove_member(member_uid, tmpstr);
-			name[0] = UPPER(name[0]);
+			native_text::capitalize_first(name);
 			SendMsgToChar(ch, "%s исключен(a) из дружины '%s'.\r\n", name.c_str(), clan->name.c_str());
 			return;
 		}
@@ -1379,15 +1475,11 @@ void Clan::GodToChannel(CharData *ch, std::string text, int subcmd) {
 					&& d->state == EConState::kPlaying
 					&& CLAN(d->character).get() == this
 					&& !AFF_FLAGGED(d->character, EAffect::kDeafness)) {
-					SendMsgToChar(d->character.get(),
-								  "%s ВАШЕЙ дружине: %s'%s'%s\r\n",
-								  GET_NAME(ch),
-								  kColorBoldRed,
-								  text.c_str(),
-								  kColorNrm);
+					SendWrappedToChar(fmt::format("{} ВАШЕЙ дружине: &R'{}'&w\r\n", GET_NAME(ch), text),
+									  d->character.get());
 				}
 			}
-			SendMsgToChar(ch, "Вы дружине %s: %s'%s'.%s\r\n", this->abbrev.c_str(), kColorBoldRed, text.c_str(), kColorNrm);
+			SendWrappedToChar(fmt::format("Вы дружине {}: &R'{}'.&w\r\n", this->abbrev, text), ch);
 			break;
 
 			// он же в канал союзников этой дружины, если они вообще есть
@@ -1403,23 +1495,21 @@ void Clan::GodToChannel(CharData *ch, std::string text, int subcmd) {
 						// проверка на альянс с обеих сторон, иначе это не альянс
 						if (CLAN(d->character).get() != this) {
 							if (CLAN(d->character)->CheckPolitics(this->rent) == kPoliticsAlliance) {
-								SendMsgToChar(d->character.get(),
-											  "%s ВАШИМ СОЮЗНИКАМ: %s'%s'%s\r\n",
-											  GET_NAME(ch),
-											  kColorBoldGrn,
-											  text.c_str(),
-											  kColorNrm);
+								SendWrappedToChar(fmt::format("{} ВАШИМ СОЮЗНИКАМ: &G'{}'&w\r\n",
+															  GET_NAME(ch), text),
+												  d->character.get());
 							}
 						}
 							// первоначальному клану выдается всегда
 						else {
-							SendMsgToChar(d->character.get(),
-										  "%s ВАШИМ СОЮЗНИКАМ: %s'%s'%s\r\n", GET_NAME(ch), kColorBoldGrn, text.c_str(), kColorNrm);
+							SendWrappedToChar(fmt::format("{} ВАШИМ СОЮЗНИКАМ: &G'{}'&w\r\n",
+														  GET_NAME(ch), text),
+											  d->character.get());
 						}
 					}
 				}
 			}
-			SendMsgToChar(ch, "Вы союзникам %s: %s'%s'.%s\r\n", abbrev.c_str(), kColorBoldGrn, text.c_str(), kColorNrm);
+			SendWrappedToChar(fmt::format("Вы союзникам {}: &G'{}'.&w\r\n", abbrev, text), ch);
 			break;
 	}
 }
@@ -1433,7 +1523,7 @@ void Clan::CharToChannel(CharData *ch, std::string text, int subcmd) {
 	}
 
 	if (AFF_FLAGGED(ch, EAffect::kSilence)) {
-		SendMsgToChar(SIELENCE, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kSilenced) + "\r\n", ch);
 		return;
 	}
 
@@ -1444,10 +1534,10 @@ void Clan::CharToChannel(CharData *ch, std::string text, int subcmd) {
 
 	switch (subcmd) {
 		// своей дружине
-		case kScmdChannel:
+		case kScmdChannel: {
+			const std::string clan_text = fmt::format("{} дружине: &R'{}'.&w\r\n", GET_NAME(ch), text);
 			// вспомнить
-			snprintf(buf, kMaxStringLength, "%s дружине: &R'%s'.&n\r\n", GET_NAME(ch), text.c_str());
-			CLAN(ch)->add_remember(buf, Remember::CLAN);
+			CLAN(ch)->add_remember(clan_text, Remember::CLAN);
 
 			for (auto d = descriptor_list; d; d = d->next) {
 				if (d->character
@@ -1456,38 +1546,27 @@ void Clan::CharToChannel(CharData *ch, std::string text, int subcmd) {
 					&& CLAN(d->character) == CLAN(ch)
 					&& !AFF_FLAGGED(d->character, EAffect::kDeafness)
 					&& !ignores(d->character.get(), ch, EIgnore::kClan)) {
-					snprintf(buf,
-							 kMaxStringLength,
-							 "%s дружине: %s'%s'.%s\r\n",
-							 GET_NAME(ch),
-							 kColorBoldRed,
-							 text.c_str(),
-							 kColorNrm);
-					d->character->remember_add(buf, Remember::ALL);
-					SendMsgToChar(buf, d->character.get());
+					d->character->remember_add(clan_text, Remember::ALL);
+					SendWrappedToChar(clan_text, d->character.get());
 				}
 			}
 
-			snprintf(buf,
-					 kMaxStringLength,
-					 "Вы дружине: %s'%s'.%s\r\n",
-					 kColorBoldRed,
-					 text.c_str(),
-					 kColorNrm);
-			ch->remember_add(buf, Remember::ALL);
-			SendMsgToChar(buf, ch);
+			const std::string clan_self = fmt::format("Вы дружине: &R'{}'.&w\r\n", text);
+			ch->remember_add(clan_self, Remember::ALL);
+			SendWrappedToChar(clan_self, ch);
 
 			break;
+		}
 
 			// союзникам
-		case kScmdAchannel:
-			// вспомнить
-			snprintf(buf, kMaxStringLength, "%s союзникам: &G'%s'.&n\r\n", GET_NAME(ch), text.c_str());
+		case kScmdAchannel: {
+			const std::string ally_text = fmt::format("{} союзникам: &G'{}'.&w\r\n", GET_NAME(ch), text);
 			for (auto &clan : Clan::ClanList) {
 				if ((CLAN(ch)->CheckPolitics(clan->GetRent()) == kPoliticsAlliance
 					&& clan->CheckPolitics(CLAN(ch)->GetRent()) == kPoliticsAlliance)
 					|| CLAN(ch) == clan) {
-					clan->add_remember(buf, Remember::ALLY);
+					// вспомнить
+					clan->add_remember(ally_text, Remember::ALLY);
 				}
 			}
 
@@ -1503,30 +1582,19 @@ void Clan::CharToChannel(CharData *ch, std::string text, int subcmd) {
 						// проверка на альянс с обеих сторон, шоб не спамили друг другу на зло
 						if ((CLAN(d->character)->CheckPolitics(CLAN(ch)->GetRent()) == kPoliticsAlliance)
 							|| CLAN(ch) == CLAN(d->character)) {
-							snprintf(buf,
-									 kMaxStringLength,
-									 "%s союзникам: %s'%s'.%s\r\n",
-									 GET_NAME(ch),
-									 kColorBoldGrn,
-									 text.c_str(),
-									 kColorNrm);
-							d->character->remember_add(buf, Remember::ALL);
-							SendMsgToChar(buf, d->character.get());
+							d->character->remember_add(ally_text, Remember::ALL);
+							SendWrappedToChar(ally_text, d->character.get());
 						}
 					}
 				}
 			}
 
-			snprintf(buf,
-					 kMaxStringLength,
-					 "Вы союзникам: %s'%s'.%s\r\n",
-					 kColorBoldGrn,
-					 text.c_str(),
-					 kColorNrm);
-			ch->remember_add(buf, Remember::ALL);
-			SendMsgToChar(buf, ch);
+			const std::string ally_self = fmt::format("Вы союзникам: &G'{}'.&w\r\n", text);
+			ch->remember_add(ally_self, Remember::ALL);
+			SendWrappedToChar(ally_self, ch);
 
 			break;
+		}
 	} // switch
 }
 
@@ -1789,7 +1857,8 @@ void Clan::hcontrol_rank(CharData *ch, std::string &text) {
 		SendMsgToChar(HCONTROL_FORMAT, ch);
 		return;
 	}
-	if (rank_male.size() > MAX_RANK_LENGHT || rank_female.size() > MAX_RANK_LENGHT) {
+	if (native_text::char_count(rank_male) > MAX_RANK_LENGHT
+		|| native_text::char_count(rank_female) > MAX_RANK_LENGHT) {
 		SendMsgToChar(ch, "Звание не должно быть длиннее %d символов.\r\n", MAX_RANK_LENGHT);
 		return;
 	}
@@ -1849,12 +1918,13 @@ void Clan::hcontrol_exphistory(CharData *ch, std::string &text) {
 	}
 	for (std::multimap<long long, std::string>::const_reverse_iterator i = tmp_list.rbegin(), iend = tmp_list.rend();
 		 i != iend; ++i) {
-		SendMsgToChar(ch, "%5s - %s\r\n", i->second.c_str(), ExpFormat(i->first).c_str());
+		// Аббревиатура клана русская, ширину поля считает fmt (issue #3797).
+		SendMsgToChar(fmt::format("{:>5} - {}\r\n", i->second, ExpFormat(i->first)), ch);
 	}
 }
 
 void Clan::hcontrol_set_ingr_chest(CharData *ch, std::string &text) {
-	if (!ch->IsFlagged(EPrf::kCoderinfo) || !IS_IMPL(ch)) {
+	if (!ch->IsFlagged(EPrf::kCoderinfo) || !privilege::IsImpl(ch)) {
 		SendMsgToChar(HCONTROL_FORMAT, ch);
 		return;
 	}
@@ -1900,8 +1970,7 @@ void Clan::hcontrol_set_ingr_chest(CharData *ch, std::string &text) {
 	bool chest_moved = false;
 	// хран под ингры уже был
 	if ((*i)->ingr_chest_active()) {
-		for (ObjData *chest = world[(*i)->get_ingr_chest_room_rnum()]->contents; chest;
-			 chest = chest->get_next_content()) {
+		for (auto chest : world[(*i)->get_ingr_chest_room_rnum()]->contents) {
 			if (is_ingr_chest(chest)) {
 				RemoveObjFromRoom(chest);
 				PlaceObjToRoom(chest, room_rnum);
@@ -2001,7 +2070,7 @@ void Clan::HcontrolBuild(CharData *ch, std::string &buffer) {
 	tempClan->chest_room = rent;
 	tempClan->guard = guard;
 	// пишем воеводу
-	owner[0] = UPPER(owner[0]);
+	native_text::capitalize_first(owner);
 	tempClan->owner = owner;
 	const auto tempMember = std::make_shared<ClanMember>();
 	tempMember->name = owner;
@@ -2085,11 +2154,9 @@ void Clan::fix_clan_members_load_room(Clan::shared_ptr clan) {
 			continue;
 		}
 
-		for (tch = descriptor_list; tch; tch = tch->next) // чары онлайн
-		{
-			if (nullptr
-				== tch->character)    // it is possible to have character == nullptr because character is being created later than descriptor
-			{
+		for (tch = descriptor_list; tch; tch = tch->next) {
+			// it is possible to have character == nullptr because character is being created later than descriptor
+			if (nullptr == tch->character) {
 				continue;
 			}
 
@@ -2102,18 +2169,16 @@ void Clan::fix_clan_members_load_room(Clan::shared_ptr clan) {
 			}
 		}
 
-		if (!tch) // если нет онлайн
-		{
+		if (!tch) {
 			cbuf = new Player;
-			if (LoadPlayerCharacter(player_table[i].name(), cbuf, ELoadCharFlags::kFindId) > -1) {
+			if (LoadPlayerCharacter(player_table[i].name().c_str(), cbuf, ELoadCharFlags::kFindId) > -1) {
 				GET_LOADROOM(cbuf) = mortal_start_room;
 				cbuf->save_char();
 			}
 			delete cbuf;
 		}
 
-		sprintf(buf, "CLAN: Роспуск, удаляю игрока %s [%s]", player_table[i].name(), clan->name.c_str());
-		log("%s", buf);
+		log(fmt::format("CLAN: Роспуск, удаляю игрока {} [{}]", player_table[i].name().c_str(), clan->name.c_str()));
 	}
 }
 
@@ -2137,8 +2202,8 @@ void Clan::DestroyClan(Clan::shared_ptr clan, char *reason) {
 	clan->storehouse = 0;
 	clan->pkList.clear();
 	clan->frList.clear();
-	ObjData *temp, *chest, *obj_next;
-	for (chest = world[GetRoomRnum(clan->chest_room)]->contents; chest; chest = chest->get_next_content()) {
+	ObjData *temp, *obj_next;
+	for (auto chest : world[GetRoomRnum(clan->chest_room)]->contents) {
 		if (Clan::is_clan_chest(chest)) {
 			for (temp = chest->get_contains(); temp; temp = obj_next) {
 				obj_next = temp->get_next_content();
@@ -2171,6 +2236,7 @@ void Clan::DestroyClan(Clan::shared_ptr clan, char *reason) {
 
 	}
 	clan->m_members.clear();                    // remove all members from clan
+	clan->owner.clear();
 
 }
 
@@ -2189,7 +2255,7 @@ const char *CLAN_PKLIST_FORMAT[] =
 bool check_online_state(long uid) {
 	for (const auto &tch : character_list) {
 		if (tch->IsNpc()
-			|| GET_UID(tch) != uid
+			|| tch->get_uid() != uid
 			|| (!tch->desc && !NORENTABLE(tch))) {
 			continue;
 		}
@@ -2225,42 +2291,37 @@ bool Clan::PutChest(CharData *ch, ObjData *obj, ObjData *chest) {
 
 	if (obj->get_type() == EObjType::kMoney) {
 		long gold = GET_OBJ_VAL(obj, 0);
-		if (IS_IMMORTAL(ch)) {
+		if (privilege::IsImmortal(ch)) {
 			RemoveObjFromChar(obj);
 			ExtractObjFromWorld(obj);
-			ch->add_gold(gold);
+			currencies::AddHand(*ch, currencies::kGold, gold);
 			SendMsgToChar(ch, "Вам это не положено! Вы вновь обрели %ld %s.\r\n",
-						  gold, GetDeclensionInNumber(gold, EWhat::kMoneyU));
+						  gold, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(gold, grammar::ECase::kNom).c_str());
 			return true;
 		}
 		// здесь и далее: в случае переполнения  - кладем сколько можем, остальное возвращаем чару
 		if ((CLAN(ch)->bank + gold) < 0) {
 			long over = std::numeric_limits<long>::max() - CLAN(ch)->bank;
 			CLAN(ch)->bank += over;
-			CLAN(ch)->m_members.add_money(GET_UID(ch), over);
+			CLAN(ch)->m_members.add_money(ch->get_uid(), over);
 			gold -= over;
-			ch->add_gold(gold);
+			currencies::AddHand(*ch, currencies::kGold, gold);
 			RemoveObjFromChar(obj);
 			ExtractObjFromWorld(obj);
 			SendMsgToChar(ch,
 						  "Вам удалось вложить в казну дружины только %ld %s.\r\n",
 						  over,
-						  GetDeclensionInNumber(over, EWhat::kMoneyU));
+						  MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(over, grammar::ECase::kNom).c_str());
 			return true;
 		}
 		CLAN(ch)->bank += gold;
-		CLAN(ch)->m_members.add_money(GET_UID(ch), gold);
+		CLAN(ch)->m_members.add_money(ch->get_uid(), gold);
 		RemoveObjFromChar(obj);
 		ExtractObjFromWorld(obj);
-		SendMsgToChar(ch, "Вы вложили в казну дружины %ld %s.\r\n", gold, GetDeclensionInNumber(gold, EWhat::kMoneyU));
+		SendMsgToChar(ch, "Вы вложили в казну дружины %ld %s.\r\n", gold, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(gold, grammar::ECase::kNom).c_str());
 
 	} else if (obj->has_flag(EObjFlag::kNodrop)
-		|| obj->has_flag(EObjFlag::kZonedacay)
-		|| obj->has_flag(EObjFlag::kRepopDecay)
-		|| obj->get_type() == EObjType::kKey
-		|| obj->has_flag(EObjFlag::kNorent)
-		|| obj->get_rent_off() < 0
-		|| obj->get_rnum() <= kNothing
+		|| obj->is_unrentable()
 		|| obj->has_flag(EObjFlag::kNamed)
 		|| obj->get_owner()) {
 		act("Неведомая сила помешала положить $o3 в $O3.", false, ch, obj, chest, kToChar);
@@ -2268,8 +2329,8 @@ bool Clan::PutChest(CharData *ch, ObjData *obj, ObjData *chest) {
 		&& obj->get_contains()) {
 		act("В $o5 что-то лежит.", false, ch, obj, nullptr, kToChar);
 	} else if (SetSystem::is_norent_set(ch, obj, true) && obj->has_flag(EObjFlag::kNotOneInClanChest)) {
-		snprintf(buf, kMaxStringLength, "%s - требуется две и более вещи из набора.\r\n", obj->get_PName(ECase::kNom).c_str());
-		SendMsgToChar(utils::CAP(buf), ch);
+		SendMsgToChar(utils::CAP(fmt::format("{} - требуется две и более вещи из набора.\r\n",
+											 obj->get_PName(grammar::ECase::kNom))), ch);
 		return false;
 	} else {
 		if ((chest->get_weight() + obj->get_weight()) > CLAN(ch)->ChestMaxWeight()
@@ -2288,7 +2349,7 @@ bool Clan::PutChest(CharData *ch, ObjData *obj, ObjData *chest) {
 		ObjSaveSync::add(ch->get_uid(), CLAN(ch)->GetRent(), ObjSaveSync::CLAN_SAVE);
 
 		CLAN(ch)->chest_log.add(fmt::format("{} сдал{} {}{}\r\n",
-											ch->get_name(), GET_CH_SUF_1(ch), obj->get_PName(ECase::kAcc),
+											ch->get_name(), grammar::SexEnding((ch)->get_sex(), 1), obj->get_PName(grammar::ECase::kAcc),
 											clan_get_custom_label(obj, CLAN(ch))));
 
 		// канал хранилища
@@ -2299,9 +2360,13 @@ bool Clan::PutChest(CharData *ch, ObjData *obj, ObjData *chest) {
 				&& CLAN(d->character)
 				&& CLAN(d->character) == CLAN(ch)
 				&& d->character->IsFlagged(EPrf::kTakeMode)) {
-				SendMsgToChar(d->character.get(), "[Хранилище]: %s'%s сдал%s %s%s.'%s\r\n",
-							  kColorBoldRed, GET_NAME(ch), GET_CH_SUF_1(ch), obj->get_PName(ECase::kAcc).c_str(),
-							  clan_get_custom_label(obj, CLAN(ch)).c_str(), kColorNrm);
+				// Цвет повторяем после имени предмета: у именных вещей оно само цветное и
+				// закрывается сбросом (&n), из-за чего хвост фразы терял цвет.
+				SendMsgToChar(fmt::format("[Хранилище]: &R'{} сдал{} {}{}&R.'&n\r\n",
+										  GET_NAME(ch), grammar::SexEnding(ch->get_sex(), 1),
+										  obj->get_PName(grammar::ECase::kAcc),
+										  clan_get_custom_label(obj, CLAN(ch))),
+							  d->character.get());
 			}
 		}
 
@@ -2310,6 +2375,7 @@ bool Clan::PutChest(CharData *ch, ObjData *obj, ObjData *chest) {
 		}
 
 		CLAN(ch)->chest_objcount++;
+		GlobalObjects::chest_saver().mark_dirty(CLAN(ch).get());
 	}
 
 	return true;
@@ -2331,7 +2397,7 @@ bool Clan::TakeChest(CharData *ch, ObjData *obj, ObjData *chest) {
 
 	if (obj->get_carried_by() == ch) {
 		std::string log_text = fmt::format("{} забрал{} {}{}\r\n",
-										   GET_NAME(ch), GET_CH_SUF_1(ch), obj->get_PName(ECase::kAcc),
+										   GET_NAME(ch), grammar::SexEnding((ch)->get_sex(), 1), obj->get_PName(grammar::ECase::kAcc),
 										   clan_get_custom_label(obj, CLAN(ch)));
 		CLAN(ch)->chest_log.add(log_text);
 
@@ -2343,11 +2409,11 @@ bool Clan::TakeChest(CharData *ch, ObjData *obj, ObjData *chest) {
 				&& CLAN(d->character)
 				&& CLAN(d->character) == CLAN(ch)
 				&& d->character->IsFlagged(EPrf::kTakeMode)) {
-				SendMsgToChar(d->character.get(), "[Хранилище]: %s'%s забрал%s %s%s.'%s\r\n",
-							  kColorBoldRed, GET_NAME(ch), GET_CH_SUF_1(ch),
-							  obj->get_PName(ECase::kAcc).c_str(),
-							  clan_get_custom_label(obj, CLAN(d->character)).c_str(),
-							  kColorNrm);
+				SendMsgToChar(fmt::format("[Хранилище]: &R'{} забрал{} {}{}&R.'&n\r\n",
+										  GET_NAME(ch), grammar::SexEnding(ch->get_sex(), 1),
+										  obj->get_PName(grammar::ECase::kAcc),
+										  clan_get_custom_label(obj, CLAN(d->character))),
+							  d->character.get());
 			}
 		}
 
@@ -2355,6 +2421,7 @@ bool Clan::TakeChest(CharData *ch, ObjData *obj, ObjData *chest) {
 			act("Вы взяли $o3 из $O1.", false, ch, obj, chest, kToChar);
 		}
 		CLAN(ch)->chest_objcount--;
+		GlobalObjects::chest_saver().mark_dirty(CLAN(ch).get());
 	}
 	return true;
 }
@@ -2363,11 +2430,13 @@ void Clan::save_chest() {
 	log("Save obj: %s", this->abbrev.c_str());
 	ObjSaveSync::check(this->GetRent(), ObjSaveSync::CLAN_SAVE);
 
+	// Имя каталога дружины строится из байтов KOI8-R, как и до миграции: под UTF-8 байтовый
+	// AtoL резал русскую букву пополам, и добро дружины уезжало в каталог с другим именем
+	// (issue #3681).
 	std::string buffer = this->abbrev;
-	for (unsigned i = 0; i != buffer.length(); ++i)
-		buffer[i] = LOWER(AtoL(buffer[i]));
-	std::string filename = LIB_HOUSE + buffer + "/" + buffer + ".obj";
-	for (ObjData *chest = world[GetRoomRnum(this->chest_room)]->contents; chest; chest = chest->get_next_content()) {
+	CreateFileName(buffer);
+	std::string filename = LIB_CLANS + buffer + "/" + buffer + ".obj";
+	for (auto chest : world[GetRoomRnum(this->chest_room)]->contents) {
 		if (Clan::is_clan_chest(chest)) {
 			std::stringstream out;
 			out << "* Items file\n";
@@ -2381,8 +2450,9 @@ void Clan::save_chest() {
 				log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
 				return;
 			}
-			file << out.rdbuf();
-			file.close();
+			// Граница записи: userdata хранится в нативной кодировке, пишем как есть (#3787).
+			const std::string on_disk = out.str();
+			file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 			break;
 		}
 	}
@@ -2392,9 +2462,7 @@ void Clan::save_chest() {
 // пользует write_one_object (мне кажется это разуменее, чем плодить свои форматы везде и потом
 // заниматься с ними сексом при изменении параметров на шмотках)
 void Clan::SaveChestAll() {
-	for (ClanListType::const_iterator clan = Clan::ClanList.begin(); clan != Clan::ClanList.end(); ++clan) {
-		(*clan)->save_chest();
-	}
+	GlobalObjects::chest_saver().run();
 }
 
 // чтение файлов клановых сундуков
@@ -2407,12 +2475,21 @@ void Clan::ChestLoad() {
 
 	// на случай релоада - чистим перед этим все что было в сундуках
 	for (ClanListType::const_iterator clan = Clan::ClanList.begin(); clan != Clan::ClanList.end(); ++clan) {
-		for (auto chest = world[GetRoomRnum((*clan)->chest_room)]->contents; chest; chest = chest->get_next_content()) {
+		for (auto chest : world[GetRoomRnum((*clan)->chest_room)]->contents) {
 			if (Clan::is_clan_chest(chest)) {
+				int wiped = 0;
 				for (temp = chest->get_contains(); temp; temp = obj_next) {
 					obj_next = temp->get_next_content();
 					RemoveObjFromObj(temp);
 					ExtractObjFromWorld(temp);
+					++wiped;
+				}
+				// issue #3737: зачистка молчала, и потерю содержимого сундука нельзя было связать
+				// с релоадом. Штатно она безобидна -- вещи тут же читаются обратно из файла,
+				// но если файл отстал, в логе останется след, с чего всё началось.
+				if (wiped > 0) {
+					log("<Clan> ChestLoad: сундук дружины %s очищен перед перечитыванием, предметов: %d",
+						(*clan)->abbrev.c_str(), wiped);
 				}
 				ExtractObjFromWorld(chest);
 				break;
@@ -2427,10 +2504,8 @@ void Clan::ChestLoad() {
 
 	for (ClanListType::const_iterator clan = Clan::ClanList.begin(); clan != Clan::ClanList.end(); ++clan) {
 		buffer = (*clan)->abbrev;
-		for (unsigned i = 0; i != buffer.length(); ++i) {
-			buffer[i] = LOWER(AtoL(buffer[i]));
-		}
-		std::string filename = LIB_HOUSE + buffer + "/" + buffer + ".obj";
+		CreateFileName(buffer);
+		std::string filename = LIB_CLANS + buffer + "/" + buffer + ".obj";
 
 		//лоадим сундук. в зонах его лоадить не нужно.
 		const auto chest = world_objects.create_from_prototype_by_vnum(CLAN_CHEST_VNUM);
@@ -2464,8 +2539,18 @@ void Clan::ChestLoad() {
 		}
 		fclose(fl);
 
+		// Граница чтения: сундук на диске в UTF-8, но написанный до миграции файл ещё может
+		// оказаться кои-восьмым. from_disk_text распознаёт то и другое; без него имена и метки
+		// вещей в сундуке уезжали в транслит при первом же сохранении дружины (issue #3681).
+		{
+			const std::string native = native_text::from_disk_text(std::string(databuf, static_cast<std::size_t>(fsize)));
+			delete[] databuf;
+			databuf = new char[native.size() + 1];
+			std::memcpy(databuf, native.data(), native.size());
+			databuf[native.size()] = '\0';
+		}
+
 		data = databuf;
-		*(data + fsize) = '\0';
 
 		for (fsize = 0; *data && *data != '$'; fsize++) {
 			const auto obj = read_one_object_new(&data, &error);
@@ -2509,8 +2594,8 @@ void Clan::ChestUpdate() {
 		// TODO: а тут придется опять искать, ибо выше сундук уже похерен, надо фиксить
 		if ((*clan)->bank < 0) {
 			(*clan)->bank = 0;
-			ObjData *temp, *chest, *obj_next;
-			for (chest = world[GetRoomRnum((*clan)->chest_room)]->contents; chest; chest = chest->get_next_content()) {
+			ObjData *temp, *obj_next;
+			for (auto chest : world[GetRoomRnum((*clan)->chest_room)]->contents) {
 				if (Clan::is_clan_chest(chest)) {
 					for (temp = chest->get_contains(); temp; temp = obj_next) {
 						obj_next = temp->get_next_content();
@@ -2522,6 +2607,7 @@ void Clan::ChestUpdate() {
 			}
 			// пуржим ингры, если есть
 			(*clan)->purge_ingr_chest();
+			GlobalObjects::chest_saver().mark_dirty(clan->get());
 		}
 	}
 }
@@ -2529,18 +2615,18 @@ void Clan::ChestUpdate() {
 // * Запись сообщения дружины в файл и поле клана.
 void Clan::write_mod(const std::string &arg) {
 	std::string abbrev = this->get_abbrev();
-	for (unsigned i = 0; i != abbrev.length(); ++i) {
-		abbrev[i] = LOWER(AtoL(abbrev[i]));
-	}
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + ".mod";
+	CreateFileName(abbrev);
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + ".mod";
 
 	std::ofstream file(filename.c_str());
 	if (!file.is_open()) {
 		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
 	file << arg;
-	file.close();
 
 	mod_text = arg;
 }
@@ -2559,10 +2645,12 @@ bool Clan::print_mod(CharData *ch) const {
 // * Загрузка сообщения дружины.
 void Clan::load_mod() {
 	std::string abbrev = this->get_file_abbrev();
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + ".mod";
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + ".mod";
 
-	std::ifstream file(filename.c_str(), std::ios::binary);
-	if (!file.is_open()) {
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(filename.c_str()));
+	if (file.str().empty()) {
 		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
@@ -2582,10 +2670,9 @@ bool Clan::BankManage(CharData *ch, char *arg) {
 	GetOneParam(buffer, buffer2);
 
 	if (CompareParam(buffer2, "баланс") || CompareParam(buffer2, "balance")) {
-		SendMsgToChar(ch,
-					  "На счету вашей дружины ровно %ld %s.\r\n",
-					  CLAN(ch)->bank,
-					  GetDeclensionInNumber(CLAN(ch)->bank, EWhat::kMoneyA));
+		SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kClanBalance)),
+				fmt::arg("amount", CLAN(ch)->bank),
+				fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(CLAN(ch)->bank, grammar::ECase::kNom).c_str())) + "\r\n", ch);
 		return true;
 
 	} else if (CompareParam(buffer2, "вложить") || CompareParam(buffer2, "deposit")) {
@@ -2594,92 +2681,90 @@ bool Clan::BankManage(CharData *ch, char *arg) {
 		try {
 			gold = std::stol(buffer2, nullptr, 10);
 			if (gold <= 0) {
-				SendMsgToChar("Сколько вы хотите вложить?\r\n", ch);
+				SendMsgToChar(specials::BankMsg(specials::EBankMsg::kDepositHowMuch) + "\r\n", ch);
 				return true;
 			}
-			if (ch->get_gold() < gold) {
-				SendMsgToChar("О такой сумме вы можете только мечтать!\r\n", ch);
+			if (currencies::GetHand(*ch, currencies::kGold) < gold) {
+				SendMsgToChar(specials::BankMsg(specials::EBankMsg::kCantAfford) + "\r\n", ch);
 				return true;
 			}
 		}
 		catch (const std::invalid_argument &) {
-			SendMsgToChar("Формат команды казна вложить <число>\r\n", ch);
+			SendMsgToChar(specials::BankMsg(specials::EBankMsg::kClanDepositFormat) + "\r\n", ch);
 		}
 		// на случай переполнения казны
 		if ((CLAN(ch)->bank + gold) < 0) {
 			long over = std::numeric_limits<long int>::max() - CLAN(ch)->bank;
 			CLAN(ch)->bank += over;
-			CLAN(ch)->m_members.add_money(GET_UID(ch), over);
-			ch->remove_gold(over);
-			SendMsgToChar(ch,
-						  "Вам удалось вложить в казну дружины только %ld %s.\r\n",
-						  over,
-						  GetDeclensionInNumber(over, EWhat::kMoneyU));
-			act("$n произвел$g финансовую операцию.", true, ch, nullptr, nullptr, kToRoom);
+			CLAN(ch)->m_members.add_money(ch->get_uid(), over);
+			currencies::RemoveHand(*ch, currencies::kGold, over);
+			SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kClanDepositPartial)),
+				fmt::arg("amount", over),
+				fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(over, grammar::ECase::kNom).c_str())) + "\r\n", ch);
+			act(specials::BankMsg(specials::EBankMsg::kFinancialOp), true, ch, nullptr, nullptr, kToRoom);
 			std::string log_text = fmt::format("{} вложил%s в казну {} {}\r\n",
-											   GET_NAME(ch), GET_CH_SUF_1(ch), over,
-											   GetDeclensionInNumber(over, EWhat::kMoneyU));
+											   GET_NAME(ch), grammar::SexEnding((ch)->get_sex(), 1), over,
+											   MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(over, grammar::ECase::kNom).c_str());
 			CLAN(ch)->chest_log.add(log_text);
 			return true;
 		}
-		ch->remove_gold(gold);
+		currencies::RemoveHand(*ch, currencies::kGold, gold);
 		CLAN(ch)->bank += gold;
-		CLAN(ch)->m_members.add_money(GET_UID(ch), gold);
-		SendMsgToChar(ch, "Вы вложили %ld %s.\r\n", gold, GetDeclensionInNumber(gold, EWhat::kMoneyU));
-		act("$n произвел$g финансовую операцию.", true, ch, 0, nullptr, kToRoom);
+		CLAN(ch)->m_members.add_money(ch->get_uid(), gold);
+		SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kDeposited)), fmt::arg("amount", gold), fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(gold, grammar::ECase::kNom).c_str())) + "\r\n", ch);
+		act(specials::BankMsg(specials::EBankMsg::kFinancialOp), true, ch, 0, nullptr, kToRoom);
 		std::string log_text = fmt::format("{} вложил%s в казну {} {}\r\n",
 										   GET_NAME(ch),
-										   GET_CH_SUF_1(ch),
+										   grammar::SexEnding((ch)->get_sex(), 1),
 										   gold,
-										   GetDeclensionInNumber(gold, EWhat::kMoneyU));
+										   MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(gold, grammar::ECase::kNom).c_str());
 		CLAN(ch)->chest_log.add(log_text);
 		return true;
 	} else if (CompareParam(buffer2, "получить") || CompareParam(buffer2, "withdraw")) {
 		if (!CLAN(ch)->privileges[CLAN_MEMBER(ch)->rank_num][MAY_CLAN_BANK]) {
-			SendMsgToChar("К сожалению, у вас нет возможности транжирить средства дружины.\r\n", ch);
+			SendMsgToChar(specials::BankMsg(specials::EBankMsg::kClanNoWithdraw) + "\r\n", ch);
 			return true;
 		}
 		GetOneParam(buffer, buffer2);
 		long gold = atol(buffer2.c_str());
 
 		if (gold <= 0) {
-			SendMsgToChar("Уточните количество денег, которые вы хотите получить?\r\n", ch);
+			SendMsgToChar(specials::BankMsg(specials::EBankMsg::kWithdrawHowMuch) + "\r\n", ch);
 			return true;
 		}
 		if (CLAN(ch)->bank < gold) {
-			SendMsgToChar("К сожалению, ваша дружина не так богата.\r\n", ch);
+			SendMsgToChar(specials::BankMsg(specials::EBankMsg::kClanTooPoor) + "\r\n", ch);
 			return true;
 		}
 
 		// на случай переполнения персонажа
-		if ((ch->get_gold() + gold) < 0) {
+		if ((currencies::GetHand(*ch, currencies::kGold) + gold) < 0) {
 			long over = std::numeric_limits<long>::max() - CLAN(ch)->bank;
-			ch->add_gold(over);
+			currencies::AddHand(*ch, currencies::kGold, over);
 			CLAN(ch)->bank -= over;
-			CLAN(ch)->m_members.sub_money(GET_UID(ch), over);
-			SendMsgToChar(ch,
-						  "Вам удалось снять только %ld %s.\r\n",
-						  over,
-						  GetDeclensionInNumber(over, EWhat::kMoneyU));
-			act("$n произвел$g финансовую операцию.", true, ch, 0, nullptr, kToRoom);
+			CLAN(ch)->m_members.sub_money(ch->get_uid(), over);
+			SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kClanWithdrawPartial)),
+				fmt::arg("amount", over),
+				fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(over, grammar::ECase::kNom).c_str())) + "\r\n", ch);
+			act(specials::BankMsg(specials::EBankMsg::kFinancialOp), true, ch, 0, nullptr, kToRoom);
 			std::string log_text = fmt::format("{} получил%s из казны {} {}\r\n",
-											   GET_NAME(ch), GET_CH_SUF_1(ch), over,
-											   GetDeclensionInNumber(over, EWhat::kMoneyU));
+											   GET_NAME(ch), grammar::SexEnding((ch)->get_sex(), 1), over,
+											   MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(over, grammar::ECase::kNom).c_str());
 			CLAN(ch)->chest_log.add(log_text);
 			return true;
 		}
 		CLAN(ch)->bank -= gold;
-		CLAN(ch)->m_members.sub_money(GET_UID(ch), gold);
-		ch->add_gold(gold);
-		SendMsgToChar(ch, "Вы сняли %ld %s.\r\n", gold, GetDeclensionInNumber(gold, EWhat::kMoneyU));
-		act("$n произвел$g финансовую операцию.", true, ch, nullptr, nullptr, kToRoom);
+		CLAN(ch)->m_members.sub_money(ch->get_uid(), gold);
+		currencies::AddHand(*ch, currencies::kGold, gold);
+		SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kWithdrawn)), fmt::arg("amount", gold), fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(gold, grammar::ECase::kNom).c_str())) + "\r\n", ch);
+		act(specials::BankMsg(specials::EBankMsg::kFinancialOp), true, ch, nullptr, nullptr, kToRoom);
 		std::string log_text = fmt::format("{} получил%s из казны {} {}\r\n",
-										   GET_NAME(ch), GET_CH_SUF_1(ch),
-										   gold, GetDeclensionInNumber(gold, EWhat::kMoneyU));
+										   GET_NAME(ch), grammar::SexEnding((ch)->get_sex(), 1),
+										   gold, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(gold, grammar::ECase::kNom).c_str());
 		CLAN(ch)->chest_log.add(log_text);
 		return true;
 	} else
-		SendMsgToChar(ch, "Формат команды: казна вложить|получить|баланс сумма.\r\n");
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kClanFormat) + "\r\n", ch);
 	return true;
 }
 
@@ -2688,9 +2773,9 @@ void Clan::Manage(DescriptorData *d, const char *arg) {
 
 	switch (d->clan_olc->mode) {
 		case CLAN_MAIN_MENU:
-			switch (*arg) {
-				case 'в':
-				case 'В':
+			switch (native_text::first_char_code(arg)) {
+				case rus::kVe:
+				case rus::kVeUpper:
 				case 'q':
 				case 'Q':
 					// есть вариант, что за время в олц в клане изменят кол-во званий
@@ -2770,9 +2855,9 @@ void Clan::Manage(DescriptorData *d, const char *arg) {
 			break;
 
 		case CLAN_PRIVILEGE_MENU:
-			switch (*arg) {
-				case 'в':
-				case 'В':
+			switch (native_text::first_char_code(arg)) {
+				case rus::kVe:
+				case rus::kVeUpper:
 				case 'q':
 				case 'Q':
 					// выход в общее меню
@@ -2815,11 +2900,11 @@ void Clan::Manage(DescriptorData *d, const char *arg) {
 			break;
 
 		case CLAN_SAVE_MENU:
-			switch (*arg) {
+			switch (native_text::first_char_code(arg)) {
 				case 'y':
 				case 'Y':
-				case 'д':
-				case 'Д': d->clan_olc->clan->privileges.clear();
+				case rus::kDe:
+				case rus::kDeUpper: d->clan_olc->clan->privileges.clear();
 					d->clan_olc->clan->privileges = d->clan_olc->privileges;
 					d->clan_olc.reset();
 					// Clan::ClanSave();
@@ -2829,8 +2914,8 @@ void Clan::Manage(DescriptorData *d, const char *arg) {
 
 				case 'n':
 				case 'N':
-				case 'н':
-				case 'Н': d->clan_olc.reset();
+				case rus::kEn:
+				case rus::kEnUpper: d->clan_olc.reset();
 					d->state = EConState::kPlaying;
 					SendMsgToChar("Редактирование отменено.\r\n", d->character.get());
 					return;
@@ -2845,9 +2930,9 @@ void Clan::Manage(DescriptorData *d, const char *arg) {
 			break;
 
 		case CLAN_ADDALL_MENU:
-			switch (*arg) {
-				case 'в':
-				case 'В':
+			switch (native_text::first_char_code(arg)) {
+				case rus::kVe:
+				case rus::kVeUpper:
 				case 'q':
 				case 'Q':
 					// выход в общее меню с изменением всех званий
@@ -2899,9 +2984,9 @@ void Clan::Manage(DescriptorData *d, const char *arg) {
 			break;
 
 		case CLAN_DELALL_MENU:
-			switch (*arg) {
-				case 'в':
-				case 'В':
+			switch (native_text::first_char_code(arg)) {
+				case rus::kVe:
+				case rus::kVeUpper:
 				case 'q':
 				case 'Q':
 					// выход в общее меню с изменением всех званий
@@ -3362,12 +3447,12 @@ void Clan::add_offline_member(const std::string &name, int uid, int rank) {
 // игрок ранг
 void Clan::ClanAddMember(CharData *ch, int rank, std::string invite_name) {
 	if (ch->get_name_str().empty()) {
-		log("SYSERROR: zero player name (uid = %ld) (%s:%d %s)", GET_UID(ch),
+		log("SYSERROR: zero player name (uid = %ld) (%s:%d %s)", ch->get_uid(),
 			__FILE__, __LINE__, __func__);
 		return;
 	}
 
-	this->add_offline_member(ch->get_name_str(), GET_UID(ch), rank);
+	this->add_offline_member(ch->get_name_str(), ch->get_uid(), rank);
 	Clan::SetClanData(ch);
 	DescriptorData *d;
 	for (d = descriptor_list; d; d = d->next) {
@@ -3381,7 +3466,7 @@ void Clan::ClanAddMember(CharData *ch, int rank, std::string invite_name) {
 						  "%s%s приписан%s к вашей дружине, статус - '%s'.%s\r\n",
 						  kColorWht,
 						  GET_NAME(ch),
-						  GET_CH_SUF_6(ch),
+						  grammar::SexEnding((ch)->get_sex(), 6),
 						  (this->ranks[rank]).c_str(),
 						  kColorNrm);
 		}
@@ -3389,8 +3474,9 @@ void Clan::ClanAddMember(CharData *ch, int rank, std::string invite_name) {
 
 	SendMsgToChar(ch, "%sВас приписали к дружине '%s', статус - '%s'.%s\r\n",
 				  kColorWht, this->name.c_str(), (this->ranks[rank]).c_str(), kColorNrm);
-	sprintf(buf, "Принят в дружину '%s', статус - '%s'", this->name.c_str(), (this->ranks[rank]).c_str());
-	AddKarma(ch, buf, invite_name.c_str());
+	AddKarma(ch,
+			 fmt::format("Принят в дружину '{}', статус - '{}'", this->name, this->ranks[rank]),
+			 invite_name);
 	return;
 }
 
@@ -3405,39 +3491,34 @@ void Clan::HouseOwner(CharData *ch, std::string &buffer) {
 		SendMsgToChar("Укажите имя персонажа.\r\n", ch);
 	else if (!unique)
 		SendMsgToChar("Неизвестный персонаж.\r\n", ch);
-	else if (unique == GET_UID(ch))
+	else if (unique == ch->get_uid())
 		SendMsgToChar("Сменить себя на самого себя? Вы бредите.\r\n", ch);
-	else if (!d || !CAN_SEE(ch, d->character))
+	else if (!d || !sight::CanSee(ch, d->character))
 		SendMsgToChar("Этого персонажа нет в игре!\r\n", ch);
 	else if (CLAN(d->character) && CLAN(ch) != CLAN(d->character))
 		SendMsgToChar("Вы не можете передать свои права члену другой дружины.\r\n", ch);
 	else {
-		buffer2[0] = UPPER(buffer2[0]);
+		native_text::capitalize_first(buffer2);
 		// воевода идет рангом ниже
-		this->m_members.set_rank(GET_UID(ch), 1);
+		this->m_members.set_rank(ch->get_uid(), 1);
 		Clan::SetClanData(ch);
 		// ставим нового воеводу (если он был в клане - меняем только ранг)
 		if (CLAN(d->character)) {
-			this->m_members.set_rank(GET_UID(d->character), 0);
+			this->m_members.set_rank(d->character->get_uid(), 0);
 			Clan::SetClanData(d->character.get());
 		} else {
 			this->ClanAddMember(d->character.get(), 0, ch->get_name());
 		}
 		this->owner = buffer2;
 		SendMsgToChar(ch, "Поздравляем, вы передали свои полномочия %s!\r\n", GET_PAD(d->character, 2));
-		if (IS_MALE(ch))
-			sprintf(buf,
-					"&RВнимание!!!&n %s ушел на пенсию и добровольно передал руководство дружины %s игроку %s.\r\n",
-					GET_NAME(ch),
-					CLAN(d->character)->GetAbbrev(),
-					GET_PAD(d->character, 2));
-		else
-			sprintf(buf,
-					"&RВнимание!!!&n %s ушла на пенсию и добровольно передала руководство дружины %s игроку %s.\r\n",
-					GET_NAME(ch),
-					CLAN(d->character)->GetAbbrev(),
-					GET_PAD(d->character, 2));
-		SendMsgToAll(buf);
+		// Формат строки выбираем целиком: тернарник внутри fmt::format не годится,
+		// формат проверяется на этапе компиляции и должен быть константой.
+		const std::string retirement = IsMale(ch)
+			? fmt::format("&RВнимание!!!&n {} ушел на пенсию и добровольно передал руководство дружины {} игроку {}.\r\n",
+						  GET_NAME(ch), CLAN(d->character)->GetAbbrev(), GET_PAD(d->character, 2))
+			: fmt::format("&RВнимание!!!&n {} ушла на пенсию и добровольно передала руководство дружины {} игроку {}.\r\n",
+						  GET_NAME(ch), CLAN(d->character)->GetAbbrev(), GET_PAD(d->character, 2));
+		SendMsgToAll(retirement.c_str());
 	}
 }
 
@@ -3539,13 +3620,13 @@ void Clan::CheckPkList(CharData *ch) {
 	ClanPkList::iterator it;
 	for (ClanListType::const_iterator clan = Clan::ClanList.begin(); clan != Clan::ClanList.end(); ++clan) {
 		// пкл
-		if ((it = (*clan)->pkList.find(GET_UID(ch))) != (*clan)->pkList.end())
+		if ((it = (*clan)->pkList.find(ch->get_uid())) != (*clan)->pkList.end())
 			SendMsgToChar(ch,
 						  "Находитесь в списке врагов дружины '%s', добавивший: %s.\r\n",
 						  (*clan)->name.c_str(),
 						  it->second->authorName.c_str());
 		// дрл
-		if ((it = (*clan)->frList.find(GET_UID(ch))) != (*clan)->frList.end())
+		if ((it = (*clan)->frList.find(ch->get_uid())) != (*clan)->frList.end())
 			SendMsgToChar(ch,
 						  "Находитесь в списке друзей дружины '%s', добавивший: %s.\r\n",
 						  (*clan)->name.c_str(),
@@ -3572,7 +3653,6 @@ void Clan::HouseStat(CharData *ch, std::string &buffer) {
 	// т.к. в кои8-р русские буквы не попорядку
 	const char *pSortAlph = "яюэьыъщшчцхфутсрпонмлкизжёедгвба";
 	// первая буква имени
-	char pcFirstChar[2];
 
 	// для избежания путаницы с именами фильтр начинается со знака "!"
 	// формат команды:
@@ -3657,11 +3737,11 @@ void Clan::HouseStat(CharData *ch, std::string &buffer) {
 			DescriptorData *d = DescriptorByUid(it.first);
 			if (!d) {
 				continue;
-			} else if (!IS_IMMORTAL(d->character)) {
+			} else if (!privilege::IsImmortal(d->character.get())) {
 				it.second->level = GetRealLevel(d->character);
 				it.second->class_abbr = MUD::Class(d->character->GetClass()).GetAbbr();
 				it.second->remort = GET_GOD_FLAG(d->character, EGf::kRemort) ? true : false;
-				it.second->remorts_amount = d->character->get_remort();
+				it.second->remorts_amount = remort::GetRealRemort(d->character);
 			}
 		} else if (name) {
 			if (!CompareParam(buffer2, it.second->name)) {
@@ -3684,11 +3764,23 @@ void Clan::HouseStat(CharData *ch, std::string &buffer) {
 			case SORT_STAT_BY_LOGON: lSortParam = GetLastlogonByUnique(it.first);
 				break;
 			case SORT_STAT_BY_NAME: {
-				pcFirstChar[0] = LOWER(it.second->name[0]);
-				pcFirstChar[1] = '\0';
-				char const *pTmp = strpbrk(pSortAlph, pcFirstChar);
-				if (pTmp) lSortParam = pTmp - pSortAlph; // индекс первой буквы в массиве
-				else lSortParam = pcFirstChar[0]; // или не русская буква или я хз
+				// Индекс первой БУКВЫ имени в алфавите. Под UTF-8 буква занимает два байта, и
+				// strpbrk по одному байту находил бы что попало, а то и вовсе ничего
+				// (issue #3681). Идём по алфавиту символ за символом.
+				char first_letter[8] = {0};
+				native_text::copy_lower_char(it.second->name.c_str(), first_letter);
+				lSortParam = -1;
+				long letter_index = 0;
+				for (const char *p = pSortAlph; *p; p += native_text::char_bytes(p), ++letter_index) {
+					if (native_text::chars_equal_ci(p, first_letter)) {
+						lSortParam = letter_index;
+						break;
+					}
+				}
+				if (lSortParam < 0) {
+					// не русская буква -- пусть уедет в конец, но в стабильном порядке
+					lSortParam = static_cast<long>(native_text::first_char_code(first_letter));
+				}
 				break;
 			}
 				// на всякий случай
@@ -3754,10 +3846,10 @@ void Clan::ChestInvoice() {
 }
 
 int Clan::ChestTax() {
-	ObjData *temp, *chest;
+	ObjData *temp;
 	int cost = 0;
 	int count = 0;
-	for (chest = world[GetRoomRnum(this->chest_room)]->contents; chest; chest = chest->get_next_content()) {
+	for (auto chest : world[GetRoomRnum(this->chest_room)]->contents) {
 		if (Clan::is_clan_chest(chest)) {
 			// перебираем шмот
 			for (temp = chest->get_contains(); temp; temp = temp->get_next_content()) {
@@ -3793,8 +3885,8 @@ bool Clan::ChestShow(ObjData *obj, CharData *ch) {
 					  "Всего вещей: %d, Рента в день: %d %s\r\n\r\n",
 					  CLAN(ch)->chest_objcount,
 					  cost,
-					  GetDeclensionInNumber(cost, EWhat::kMoneyA));
-		list_obj_to_char(obj->get_contains(), ch, 1, 3);
+					  MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom).c_str());
+		sight::list_obj_to_char(obj->get_contains(), ch, 1, 3);
 	} else {
 		SendMsgToChar("Не на что тут глазеть, пусто, вот те крест.\r\n",
 					  ch); // засланым казачкам показываем хер, а не хранилище
@@ -4010,12 +4102,12 @@ void Clan::clan_invoice(CharData *ch, bool enter) {
 			&& d->character->IsFlagged(EPrf::kClanmembersMode)) {
 			if (enter) {
 				SendMsgToChar(d->character.get(), "%sДружинни%s %s вош%s в мир.%s\r\n",
-							  kColorBoldBlk, IS_MALE(ch) ? "к" : "ца", GET_NAME(ch),
-							  GET_CH_SUF_5(ch), kColorNrm);
+							  kColorBoldBlk, IsMale(ch) ? "к" : "ца", GET_NAME(ch),
+							  grammar::SexEnding((ch)->get_sex(), 5), kColorNrm);
 			} else {
 				SendMsgToChar(d->character.get(), "%sДружинни%s %s покинул%s мир.%s\r\n",
-							  kColorBoldBlk, IS_MALE(ch) ? "к" : "ца", GET_NAME(ch),
-							  GET_CH_SUF_1(ch), kColorNrm);
+							  kColorBoldBlk, IsMale(ch) ? "к" : "ца", GET_NAME(ch),
+							  grammar::SexEnding((ch)->get_sex(), 1), kColorNrm);
 			}
 		}
 	}
@@ -4025,13 +4117,12 @@ void Clan::clan_invoice(CharData *ch, bool enter) {
 std::string Clan::print_imm_where_obj(const ObjData *obj) {
 	std::string str;
 	for (Clan::shared_ptr ptr_clan : Clan::ClanList) {
-		for (ObjData *chest = world[GetRoomRnum(ptr_clan->chest_room)]->contents; chest;
-			 chest = chest->get_next_content()) {
+		for (auto chest : world[GetRoomRnum(ptr_clan->chest_room)]->contents) {
 			if (Clan::is_clan_chest(chest)) {
 				for (ObjData *chest_content = chest->get_contains(); chest_content; chest_content = chest_content->get_next_content()) {
 					if (obj->get_id() == chest_content->get_id()) {
 						str = fmt::format("наход{}ся в хранилище дружины '{}'.\r\n",
-								  GET_OBJ_POLY_1(ch, (chest_content)),
+								  grammar::ObjPluralVerbEnding(((chest_content))->get_sex()),
 								  ptr_clan->GetAbbrev());
 						return str;
 					}
@@ -4040,47 +4131,6 @@ std::string Clan::print_imm_where_obj(const ObjData *obj) {
 		}
 	}
 	return str;
-}
-
-int Clan::print_spell_locate_object(CharData *ch, int count, std::string name) {
-	for (ClanListType::const_iterator clan = Clan::ClanList.begin(); clan != Clan::ClanList.end(); ++clan) {
-		ObjData *temp, *chest;
-		for (chest = world[GetRoomRnum((*clan)->chest_room)]->contents; chest; chest = chest->get_next_content()) {
-			if (Clan::is_clan_chest(chest)) {
-				for (temp = chest->get_contains(); temp; temp = temp->get_next_content()) {
-					if (!IS_GOD(ch)) {
-						if (number(1, 100) > (40 + MAX((GetRealInt(ch) - 25) * 2, 0))) {
-							continue;
-						}
-						if (temp->has_flag(EObjFlag::kNolocate)) {
-							continue;
-						}
-					}
-
-					if (!isname(name, temp->get_aliases().c_str())) {
-						continue;
-					}
-
-					sprintf(buf, "%s наход%sся в хранилище дружины '%s'.",
-							temp->get_short_description().c_str(),
-							GET_OBJ_POLY_1(ch, temp),
-							(*clan)->GetAbbrev());
-//					CAP(buf);
-					if (IS_GRGOD(ch)) {
-						sprintf(buf2, " Vnum предмета: %d", GET_OBJ_VNUM(temp));
-						strcat(buf, buf2);
-					}
-					strcat(buf, "\r\n");
-					SendMsgToChar(buf, ch);
-					if (--count <= 0) {
-						return count;
-					}
-				}
-				break;
-			}
-		}
-	}
-	return count;
 }
 
 int Clan::GetClanWars(CharData *ch) {
@@ -4162,9 +4212,7 @@ std::string Clan::get_remember(unsigned int num, int flag) const {
 
 std::string Clan::get_file_abbrev() const {
 	std::string text = this->get_abbrev();
-	for (unsigned i = 0; i != text.length(); ++i) {
-		text[i] = LOWER(AtoL(text[i]));
-	}
+	CreateFileName(text);
 	return text;
 }
 
@@ -4180,7 +4228,7 @@ void Clan::init_ingr_chest() {
 	}
 
 	// на случай релоада
-	for (ObjData *chest = world[get_ingr_chest_room_rnum()]->contents; chest; chest = chest->get_next_content()) {
+	for (auto chest : world[get_ingr_chest_room_rnum()]->contents) {
 		if (is_ingr_chest(chest)) {
 			ObjData *obj_next;
 			for (ObjData *temp = chest->get_contains(); temp; temp = obj_next) {
@@ -4194,7 +4242,7 @@ void Clan::init_ingr_chest() {
 	}
 
 	std::string file_abbrev = get_file_abbrev();
-	std::string filename = LIB_HOUSE + file_abbrev + "/" + file_abbrev + ".ing";
+	std::string filename = LIB_CLANS + file_abbrev + "/" + file_abbrev + ".ing";
 
 	const auto chest = world_objects.create_from_prototype_by_vnum(INGR_CHEST_VNUM);
 	if (!chest) {
@@ -4251,42 +4299,8 @@ void Clan::init_ingr_chest() {
 	delete[] databuf;
 }
 
-// сохраняем храны ингров всех кланов в файлы
 void ClanSystem::save_ingr_chests() {
-	for (const auto &i : Clan::ClanList) {
-
-		if (!i->ingr_chest_active()) {
-			continue;
-		}
-		utils::CExecutionTimer timer;
-
-		std::string file_abbrev = i->get_file_abbrev();
-		std::string filename = LIB_HOUSE + file_abbrev + "/" + file_abbrev + ".ing";
-
-		for (ObjData *chest = world[i->get_ingr_chest_room_rnum()]->contents; chest; chest = chest->get_next_content()) {
-
-			if (!is_ingr_chest(chest)) {
-				continue;
-			}
-			utils::CExecutionTimer timer;
-
-			std::stringstream out;
-			out << "* Items file\n";
-			for (ObjData *temp = chest->get_contains(); temp; temp = temp->get_next_content()) {
-				write_one_object(out, temp, 0);
-			}
-			out << "\n$\n$\n";
-			std::ofstream file(filename.c_str());
-			if (!file.is_open()) {
-				log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
-				return;
-			}
-			file << out.rdbuf();
-			file.close();
-			break;
-		}
-		log(fmt::format("saving clan chest {} done, timer {:.10f}", i->GetAbbrev(), timer.delta().count()));
-	}
+	GlobalObjects::ingr_chest_saver().run();
 }
 
 bool Clan::put_ingr_chest(CharData *ch, ObjData *obj, ObjData *chest) {
@@ -4297,20 +4311,20 @@ bool Clan::put_ingr_chest(CharData *ch, ObjData *obj, ObjData *chest) {
 		return false;
 	}
 
-	if (obj->get_type() != EObjType::kMagicIngredient
+	if (obj->get_type() != EObjType::kMagicComponent
 		&& obj->get_type() != EObjType::kCraftMaterial) {
 		SendMsgToChar(ch, "%s - Хранилище ингредиентов не предназначено для предметов данного типа.\r\n",
-					  obj->get_PName(ECase::kNom).c_str());
+					  obj->get_PName(grammar::ECase::kNom).c_str());
 
 		if (obj->get_type() == EObjType::kMoney) {
 			int howmany = GET_OBJ_VAL(obj, 0);
 			RemoveObjFromChar(obj);
 			ExtractObjFromWorld(obj);
-			ch->add_gold(howmany);
-			SendMsgToChar(ch, "Вы вновь обрели %d %s.\r\n", howmany, GetDeclensionInNumber(howmany, EWhat::kMoneyU));
+			currencies::AddHand(*ch, currencies::kGold, howmany);
+			SendMsgToChar(ch, "Вы вновь обрели %d %s.\r\n", howmany, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(howmany, grammar::ECase::kNom).c_str());
 		}
 	} else if (obj->has_flag(EObjFlag::kNodrop)
-		|| obj->has_flag(EObjFlag::kZonedacay)
+		|| obj->has_flag(EObjFlag::kZonedecay)
 		|| obj->has_flag(EObjFlag::kRepopDecay)
 		|| obj->has_flag(EObjFlag::kNorent)
 		|| obj->get_rent_off() < 0
@@ -4331,6 +4345,7 @@ bool Clan::put_ingr_chest(CharData *ch, ObjData *obj, ObjData *chest) {
 		PlaceObjIntoObj(obj, chest);
 		act("Вы положили $o3 в $O3.", false, ch, obj, chest, kToChar);
 		CLAN(ch)->ingr_chest_objcount_++;
+		GlobalObjects::ingr_chest_saver().mark_dirty(CLAN(ch).get());
 	}
 	return true;
 }
@@ -4347,6 +4362,7 @@ bool Clan::take_ingr_chest(CharData *ch, ObjData *obj, ObjData *chest) {
 	if (obj->get_carried_by() == ch) {
 		act("Вы взяли $o3 из $O1.", false, ch, obj, chest, kToChar);
 		CLAN(ch)->ingr_chest_objcount_--;
+		GlobalObjects::ingr_chest_saver().mark_dirty(CLAN(ch).get());
 	}
 	return true;
 }
@@ -4363,8 +4379,8 @@ bool ClanSystem::show_ingr_chest(ObjData *obj, CharData *ch) {
 		int cost = CLAN(ch)->ingr_chest_tax();
 		SendMsgToChar(ch, "Всего вещей: %d/%d, Рента в день: %d %s\r\n\r\n",
 					  CLAN(ch)->get_ingr_chest_objcount(), CLAN(ch)->ingr_chest_max_objects(),
-					  cost, GetDeclensionInNumber(cost, EWhat::kMoneyA));
-		list_obj_to_char(obj->get_contains(), ch, 1, 4);
+					  cost, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom).c_str());
+		sight::list_obj_to_char(obj->get_contains(), ch, 1, 4);
 	} else {
 		SendMsgToChar("Не на что тут глазеть, пусто, вот те крест.\r\n", ch);
 	}
@@ -4381,7 +4397,7 @@ int Clan::ingr_chest_tax() {
 	int cost = 0;
 	int count = 0;
 
-	for (ObjData *chest = world[get_ingr_chest_room_rnum()]->contents; chest; chest = chest->get_next_content()) {
+	for (auto chest : world[get_ingr_chest_room_rnum()]->contents) {
 		if (is_ingr_chest(chest)) {
 			for (ObjData *temp = chest->get_contains(); temp; temp = temp->get_next_content()) {
 				cost += temp->get_rent_off();
@@ -4400,7 +4416,7 @@ void Clan::purge_ingr_chest() {
 	if (!ingr_chest_active()) {
 		return;
 	}
-	for (ObjData *chest = world[get_ingr_chest_room_rnum()]->contents; chest; chest = chest->get_next_content()) {
+	for (auto chest : world[get_ingr_chest_room_rnum()]->contents) {
 		if (is_ingr_chest(chest)) {
 			ObjData *obj_next;
 			for (ObjData *temp = chest->get_contains(); temp; temp = obj_next) {
@@ -4411,6 +4427,7 @@ void Clan::purge_ingr_chest() {
 			break;
 		}
 	}
+	GlobalObjects::ingr_chest_saver().mark_dirty(this);
 }
 
 int Clan::calculate_clan_tax() const {
@@ -4424,10 +4441,13 @@ int Clan::calculate_clan_tax() const {
 }
 
 bool Clan::ingr_chest_active() const {
-	if (ingr_chest_room_rnum_ > 0) {
-		return true;
+	// Распущенная дружина (без членов) не должна считаться владельцем
+	// сундука для ингров: платить налог, отображать его в olc, etc.
+	// См. issue #3191.
+	if (m_members.empty()) {
+		return false;
 	}
-	return false;
+	return ingr_chest_room_rnum_ > 0;
 }
 
 void Clan::set_ingr_chest(CharData *ch) {
@@ -4439,7 +4459,7 @@ void Clan::set_ingr_chest(CharData *ch) {
 	bool chest_moved = false;
 	// хран под ингры уже был
 	if (ingr_chest_active()) {
-		for (ObjData *chest = world[get_ingr_chest_room_rnum()]->contents; chest; chest = chest->get_next_content()) {
+		for (auto chest : world[get_ingr_chest_room_rnum()]->contents) {
 			if (is_ingr_chest(chest)) {
 				RemoveObjFromRoom(chest);
 				PlaceObjToRoom(chest, ch->in_room);
@@ -4469,7 +4489,7 @@ void Clan::disable_ingr_chest(CharData *ch) {
 		return;
 	}
 
-	for (ObjData *chest = world[get_ingr_chest_room_rnum()]->contents; chest; chest = chest->get_next_content()) {
+	for (auto chest : world[get_ingr_chest_room_rnum()]->contents) {
 		if (is_ingr_chest(chest)) {
 			if (chest->get_contains()) {
 				SendMsgToChar("Во избежание недоразумений отключить можно только пустое хранилище.\r\n", ch);
@@ -4479,7 +4499,7 @@ void Clan::disable_ingr_chest(CharData *ch) {
 			break;
 		}
 	}
-	ingr_chest_room_rnum_ = -1;
+	ingr_chest_room_rnum_ = 0;
 	SendMsgToChar("Хранилище отключено.\r\n", ch);
 }
 
@@ -4508,8 +4528,7 @@ void init_xhelp() {
 		   "  Список сайтов дружин:\r\n\r\n";
 
 	for (const auto &i : Clan::ClanList) {
-		out << "    $COLORW" << std::setw(7) << std::left
-			<< i->GetAbbrev() << "$COLORn --   $COLORC"
+		out << "    $COLORW" << fmt::format("{:<7}", i->GetAbbrev()) << "$COLORn --   $COLORC"
 			<< (i->get_web_url().empty() ? "$COLORW[ НЕТ ИНФОРМАЦИИ ]" : i->get_web_url())
 			<< "$COLORn\r\n";
 	}
@@ -4553,7 +4572,7 @@ void tax_manage(CharData *ch, std::string &buffer) {
 long do_gold_tax(CharData *ch, long gold) {
 	if (gold >= MIN_GOLD_TAX_AMOUNT
 #ifndef TEST_BUILD
-		&& !IS_IMMORTAL(ch)
+		&& !privilege::IsImmortal(ch)
 #endif
 		&& CLAN(ch) && CLAN(ch)->get_gold_tax_pct() > 0
 		&& CLAN_MEMBER(ch)) {
@@ -4566,15 +4585,15 @@ long do_gold_tax(CharData *ch, long gold) {
 			|| tax % 10 == 0) {
 			SendMsgToChar(ch,
 						  "%ld %s было немедленно отправлено в казну вашей дружины.\r\n",
-						  tax, GetDeclensionInNumber(tax, EWhat::kMoneyA));
+						  tax, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(tax, grammar::ECase::kNom).c_str());
 		} else if (tax % 10 == 1) {
 			SendMsgToChar(ch,
 						  "%ld %s была немедленно отправлена в казну вашей дружины.\r\n",
-						  tax, GetDeclensionInNumber(tax, EWhat::kMoneyA));
+						  tax, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(tax, grammar::ECase::kNom).c_str());
 		} else {
 			SendMsgToChar(ch,
 						  "%ld %s были немедленно отправлены в казну вашей дружины.\r\n",
-						  tax, GetDeclensionInNumber(tax, EWhat::kMoneyA));
+						  tax, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(tax, grammar::ECase::kNom).c_str());
 		}
 		// 1 куну за транзакцию, если сумма налога позволяет
 		const long real_tax = tax > 1 ? tax - 1 : tax;
@@ -4611,8 +4630,7 @@ void Clan::house_web_url(CharData *ch, const std::string &buffer) {
 		SendMsgToChar("Адрес сайта вашей дружины установлен.\r\n"
 					  "Обновление справки 'сайтыдружин' состоится в течении минуты.\r\n", ch);
 
-		snprintf(buf, sizeof(buf), "%s sets new clan website: %s", GET_NAME(ch), url.c_str());
-		mudlog(buf, LGH, kLvlImmortal, SYSLOG, true);
+		mudlog(fmt::format("{} sets new clan website: {}", GET_NAME(ch), url.c_str()), LGH, kLvlImmortal, SYSLOG, true);
 	}
 
 	HelpSystem::need_update = true;
@@ -4622,16 +4640,16 @@ void Clan::house_web_url(CharData *ch, const std::string &buffer) {
 // возвращает клан-метку с ведущим пробелом
 std::string clan_get_custom_label(ObjData *obj, Clan::shared_ptr clan) {
 	if (obj->get_custom_label()
-		&& obj->get_custom_label()->text_label
-		&& obj->get_custom_label()->clan_abbrev
+		&& !obj->get_custom_label()->text_label.empty()
+		&& !obj->get_custom_label()->clan_abbrev.empty()
 		&& clan
-		&& !strcmp(clan->GetAbbrev(), obj->get_custom_label()->clan_abbrev)) {
+		&& !strcmp(clan->GetAbbrev(), obj->get_custom_label()->clan_abbrev.c_str())) {
 		return fmt::format(" *{}*", obj->get_custom_label()->text_label);
 	} else {
 		return "";
 	}
 }
-bool is_alliance_by_abbr(const CharData *ch, char *abbrev) {
+bool is_alliance_by_abbr(const CharData *ch, const char *abbrev) {
 	if (!str_cmp(CLAN(ch)->get_abbrev().c_str(), abbrev))
 		return true;
 	for (auto &ClanTmp : Clan::ClanList) {
@@ -4646,20 +4664,20 @@ bool is_alliance_by_abbr(const CharData *ch, char *abbrev) {
 
 bool CHECK_CUSTOM_LABEL_CORE(const ObjData *obj, const CharData *ch) {
 	return (obj->get_custom_label()->author == (ch)->get_uid()
-		&& !(obj->get_custom_label()->clan_abbrev))
-		|| IS_IMPL(ch)
+		&& obj->get_custom_label()->clan_abbrev.empty())
+		|| privilege::IsImpl(ch)
 		|| ((ch)->player_specials->clan
-			&& obj->get_custom_label()->clan_abbrev != nullptr
-			&& is_alliance_by_abbr(ch, obj->get_custom_label()->clan_abbrev))
-		|| (obj->get_custom_label()->author_mail
-			&& !strcmp(GET_EMAIL(ch), obj->get_custom_label()->author_mail));
+			&& !obj->get_custom_label()->clan_abbrev.empty()
+			&& is_alliance_by_abbr(ch, obj->get_custom_label()->clan_abbrev.c_str()))
+		|| (!obj->get_custom_label()->author_mail.empty()
+			&& !strcmp(GET_EMAIL(ch), obj->get_custom_label()->author_mail.c_str()));
 }
 
 bool CHECK_CUSTOM_LABEL(const char *arg, const ObjData *obj, const CharData *ch) {
 	return obj->get_custom_label()
-		&& obj->get_custom_label()->text_label
+		&& !obj->get_custom_label()->text_label.empty()
 		&& (ch->IsNpc()
-			? ((IS_CHARMICE(ch) && ch->has_master())
+			? ((IsCharmice(ch) && ch->has_master())
 			   ? CHECK_CUSTOM_LABEL_CORE(obj, ch->get_master())
 			   : 0)
 			: CHECK_CUSTOM_LABEL_CORE(obj, ch))
@@ -4668,9 +4686,9 @@ bool CHECK_CUSTOM_LABEL(const char *arg, const ObjData *obj, const CharData *ch)
 
 bool AUTH_CUSTOM_LABEL(const ObjData *obj, const CharData *ch) {
 	return obj->get_custom_label()
-		&& obj->get_custom_label()->text_label
+		&& !obj->get_custom_label()->text_label.empty()
 		&& (ch->IsNpc()
-			? ((IS_CHARMICE(ch) && ch->has_master())
+			? ((IsCharmice(ch) && ch->has_master())
 			   ? CHECK_CUSTOM_LABEL_CORE(obj, ch->get_master())
 			   : 0)
 			: CHECK_CUSTOM_LABEL_CORE(obj, ch));
@@ -4704,7 +4722,7 @@ void ClanSystem::check_player_in_house() {
 				act("$n был$g выдворен$a за пределы замка!", true, d->character.get(), 0, 0, kToRoom);
 				SendMsgToChar("Вы были выдворены за пределы замка!\r\n", d->character.get());
 				char_to_room(d->character, GetRoomRnum(clan->GetOutRent()));
-				look_at_room(d->character.get(), GetRoomRnum(clan->GetOutRent()));
+				sight::look_at_room(d->character.get(), GetRoomRnum(clan->GetOutRent()));
 				act("$n свалил$u с небес, выкрикивая какие-то ругательства!", true, d->character.get(), 0, 0, kToRoom);
 			}
 		}
@@ -4792,7 +4810,7 @@ void DoClanChannel(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	std::string buffer = argument;
 
 	// большой неклановый или 34 клановый БОГ говорит какой-то дружине
-	if (IS_IMPL(ch) || (IS_GRGOD(ch) && !CLAN(ch))) {
+	if (privilege::IsImpl(ch) || (privilege::IsGrGod(ch) && !CLAN(ch))) {
 		std::string buffer2;
 		GetOneParam(buffer, buffer2);
 
@@ -4823,7 +4841,7 @@ void DoClanChannel(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		}
 
 		// ограничения на клан-канал не канают на любое звание, если это БОГ
-		if (!IS_IMMORTAL(ch)
+		if (!privilege::IsImmortal(ch)
 			&& (!(CLAN(ch))->privileges[CLAN_MEMBER(ch)->rank_num][MAY_CLAN_CHANNEL]
 				|| ch->IsFlagged(EPlrFlag::kDumbed))) {
 			SendMsgToChar("Вы не можете пользоваться каналом дружины.\r\n", ch);
@@ -4845,27 +4863,36 @@ void DoClanList(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		for (const auto &clan : Clan::ClanList) {
 			sort_clan.insert(std::make_pair(clan->exp, clan));
 		}
-		std::ostringstream out;
-		// \todo Тут нужно использовать table_wrapper::Table а не формат.
-		std::string_view clanTopFormat{" {:5}  {:6}   {:<30} {:14}{:14} {:9}\r\n"};
-		out << "В игре зарегистрированы следующие дружины:\r\n"
-			<< "     #           Название                       Всего опыта   За 30 дней         Человек\r\n\r\n";
+		SendMsgToChar("В игре зарегистрированы следующие дружины:\r\n", ch);
+		table_wrapper::Table table;
+		table << table_wrapper::kHeader
+			  << "#" << "Аббр" << "Название" << "Всего опыта" << "За 30 дней" << "Человек"
+			  << table_wrapper::kEndRow;
 		int count = 1;
 		for (const auto &it : reverse(sort_clan)) {
 			if (it.second->m_members.size() == 0) {
 				continue;
 			}
 			const auto &clan = it.second;
-			if (clan->is_pk())
-				out << fmt::format(fmt::runtime(clanTopFormat), count, clan->abbrev, clan->name, ExpFormat(clan->exp),
-								   ExpFormat(clan->last_exp.get_exp()), clan->m_members.size());
-			else
-				out << "&g"
-					<< fmt::format(fmt::runtime(clanTopFormat), count, clan->abbrev, clan->name, ExpFormat(clan->exp),
-								   ExpFormat(clan->last_exp.get_exp()), clan->m_members.size()) << "&n";
+			// Цвет у не-пк дружин прежний, только ставится на каждую ячейку: таблица считает
+			// ширину по видимым символам, а строку целиком в цвет обернуть уже негде.
+			const std::string color = clan->is_pk() ? "" : "&g";
+			const std::string nrm = clan->is_pk() ? "" : "&n";
+			table << color + std::to_string(count) + nrm
+				  << color + clan->abbrev + nrm
+				  << color + clan->name + nrm
+				  << color + ExpFormat(clan->exp) + nrm
+				  << color + ExpFormat(clan->last_exp.get_exp()) + nrm
+				  << color + std::to_string(clan->m_members.size()) + nrm
+				  << table_wrapper::kEndRow;
 			++count;
 		}
-		SendMsgToChar(out.str(), ch);
+		table.SetColumnAlign(0, table_wrapper::align::kRight);
+		table.SetColumnAlign(3, table_wrapper::align::kRight);
+		table.SetColumnAlign(4, table_wrapper::align::kRight);
+		table.SetColumnAlign(5, table_wrapper::align::kRight);
+		table_wrapper::DecorateNoBorderTable(ch, table);
+		table_wrapper::PrintTableToChar(ch, table);
 		return;
 	}
 
@@ -4900,8 +4927,8 @@ void DoClanList(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		if (d->character
 			&& d->character->in_room != kNowhere
 			&& CLAN(d->character)
-			&& CAN_SEE_CHAR(ch, d->character)
-			&& !IS_IMMORTAL(d->character)
+			&& sight::CanSeeIgnoringLight(ch, d->character)
+			&& !privilege::IsImmortal(d->character.get())
 			&& !d->character->IsFlagged(EPrf::kCoderinfo)
 			&& (all || CLAN(d->character) == *clan)) {
 			temp_list.push_back(d->character);
@@ -4911,20 +4938,29 @@ void DoClanList(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	// до кучи сортировка по рангам
 	std::sort(temp_list.begin(), temp_list.end(), SortRank());
 
-	std::ostringstream buffer2;
-	buffer2 << "В игре зарегистрированы следующие дружины:\r\n" << "     #                  Глава Название\r\n\r\n";
-	std::string_view clanFormat{" {:5}  {:6} {:15} {}\r\n"};
-	std::string_view memberFormat{" {:>10} {}{}{} {}{}{}\r\n"};
+	SendMsgToChar("В игре зарегистрированы следующие дружины:\r\n", ch);
+	table_wrapper::Table table;
+	table << table_wrapper::kHeader
+		  << "#" << "Аббр" << "Глава" << "Название" << table_wrapper::kEndRow;
+
+	// Члены дружины идут строками той же таблицы: звание в колонке главы, имя -- в колонке
+	// названия. Так ширины считает таблица, а не расставленные руками пробелы.
+	const auto add_member = [&table](const Clan::shared_ptr &member_clan, CharData *member, bool by_sex) {
+		const auto &rank = (by_sex && !IsMale(member))
+						   ? member_clan->ranks_female[CLAN_MEMBER(member)->rank_num]
+						   : member_clan->ranks[CLAN_MEMBER(member)->rank_num];
+		std::string name = fmt::format("{}{}&n", GetPkNameColor(member), member->GetNameWithTitleOrRace());
+		if (member->IsFlagged(EPlrFlag::kKiller)) {
+			name += " &R(ДУШЕГУБ)&n";
+		}
+		table << "" << "" << rank << name << table_wrapper::kEndRow;
+	};
+
 	// если искали конкретную дружину - выводим ее
 	if (!all) {
-		buffer2 << fmt::format(fmt::runtime(clanFormat), 1, (*clan)->abbrev, (*clan)->owner, (*clan)->name);
+		table << "1" << (*clan)->abbrev << (*clan)->owner << (*clan)->name << table_wrapper::kEndRow;
 		for (const auto &it : temp_list) {
-			buffer2 << fmt::format(fmt::runtime(memberFormat), (IS_MALE(it) ? (*clan)->ranks[CLAN_MEMBER(it)->rank_num]
-																			: (*clan)->ranks_female[CLAN_MEMBER(it)->rank_num]),
-								   GetPkNameColor(it), (it)->GetNameWithTitleOrRace(),
-								   kColorNrm, kColorBoldRed,
-								   (it->IsFlagged(EPlrFlag::kKiller) ? "(ДУШЕГУБ)" : ""),
-								   kColorNrm);
+			add_member(*clan, it.get(), true);
 		}
 	}
 		// просто выводим все дружины и всех членов (без параметра 'все' в списке будут только дружины)
@@ -4935,23 +4971,22 @@ void DoClanList(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				continue;
 			}
 
-			buffer2 << fmt::format(fmt::runtime(clanFormat),
-								   count, (*clan_i)->abbrev, (*clan_i)->owner, (*clan_i)->name);
+			table << std::to_string(count) << (*clan_i)->abbrev << (*clan_i)->owner << (*clan_i)->name
+				  << table_wrapper::kEndRow;
 			for (const auto &it : temp_list) {
 				if (CLAN(it) == *clan_i) {
-					buffer2 << fmt::format(fmt::runtime(memberFormat), (*clan_i)->ranks[CLAN_MEMBER(it)->rank_num],
-										   GetPkNameColor(it), it->GetNameWithTitleOrRace(),
-										   kColorNrm, kColorBoldRed,
-										   (it->IsFlagged(EPlrFlag::kKiller) ? "(ДУШЕГУБ)" : ""),
-										   kColorNrm);
+					add_member(*clan_i, it.get(), false);
 				}
 			}
 			++count;
 		}
 	}
 
-	buffer2 << "\r\nВсего игроков - " << temp_list.size() << "\r\n";
-	SendMsgToChar(buffer2.str(), ch);
+	table.SetColumnAlign(0, table_wrapper::align::kRight);
+	table.SetColumnAlign(2, table_wrapper::align::kRight);
+	table_wrapper::DecorateNoBorderTable(ch, table);
+	table_wrapper::PrintTableToChar(ch, table);
+	SendMsgToChar(fmt::format("\r\nВсего игроков - {}\r\n", temp_list.size()), ch);
 }
 
 void DoClanPkList(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
@@ -4977,13 +5012,13 @@ void DoClanPkList(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 				continue;
 			// пкл
 			if (!subcmd) {
-				it = CLAN(ch)->pkList.find(GET_UID(tch));
+				it = CLAN(ch)->pkList.find(tch->get_uid());
 				if (it != CLAN(ch)->pkList.end())
 					print_pkl(ch, info, it);
 			}
 				// дрл
 			else {
-				it = CLAN(ch)->frList.find(GET_UID(tch));
+				it = CLAN(ch)->frList.find(tch->get_uid());
 				if (it != CLAN(ch)->frList.end())
 					print_pkl(ch, info, it);
 			}
@@ -5062,7 +5097,7 @@ void DoClanPkList(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 
 		// собственно пишем новую жертву/друга
 		ClanPkPtr tempRecord(new ClanPk);
-		tempRecord->author = GET_UID(ch);
+		tempRecord->author = ch->get_uid();
 		tempRecord->authorName = GET_NAME(ch);
 		tempRecord->victimName = buffer2;
 		name_convert(tempRecord->victimName);
@@ -5406,7 +5441,6 @@ void do_show_alliance(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/)
 
 // вобщем это копи-паст из биржи + флаги
 void DoStoreHouse(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	ObjData *chest;
 	if (ch->IsNpc() || !CLAN(ch)) {
 		SendMsgToChar("Чаво?\r\n", ch);
 		return;
@@ -5415,41 +5449,41 @@ void DoStoreHouse(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("Ваш воевода зажал денег и отключил эту возможность! :(\r\n", ch);
 		return;
 	}
-	char *stufina = one_argument(argument, arg);
+	char mode[kMaxInputLength];
+	char *stufina = one_argument(argument, mode);
 
-	if (!str_cmp(arg, "все") || !str_cmp(arg, "all")) {
-		for (chest = world[GetRoomRnum(CLAN(ch)->chest_room)]->contents; chest; chest = chest->get_next_content()) {
+	if (!str_cmp(mode, "все") || !str_cmp(mode, "all")) {
+		for (auto chest : world[GetRoomRnum(CLAN(ch)->chest_room)]->contents) {
 			if (Clan::is_clan_chest(chest)) {
 				Clan::ChestShow(chest, ch);
 				return;
 			}
 		}
 	}
-	if (utils::IsAbbr(arg, "характеристики") || utils::IsAbbr(arg, "identify") || utils::IsAbbr(arg, "опознать")) {
-		if ((ch->get_bank() < kChestIdentPay) && (GetRealLevel(ch) < kLvlImplementator)) {
+	if (utils::IsAbbr(mode, "характеристики") || utils::IsAbbr(mode, "identify") || utils::IsAbbr(mode, "опознать")) {
+		if ((currencies::GetBank(*ch, currencies::kGold) < kChestIdentPay) && (GetRealLevel(ch) < kLvlImplementator)) {
 			SendMsgToChar("У вас недостаточно денег в банке для такого исследования.\r\n", ch);
 			return;
 		}
 
-		for (chest = world[GetRoomRnum(CLAN(ch)->chest_room)]->contents; chest; chest = chest->get_next_content()) {
+		for (auto chest : world[GetRoomRnum(CLAN(ch)->chest_room)]->contents) {
 			if (Clan::is_clan_chest(chest)) {
 				ObjData *tmp_obj = get_obj_in_list_vis(ch, stufina, chest->get_contains());
 				if (tmp_obj) {
 					SendMsgToChar(ch, "Характеристики предмета: %s\r\n", stufina);
-					mort_show_obj_values(tmp_obj, ch, 200);
-					ch->remove_bank(kChestIdentPay);
+					MortShowObjValues(tmp_obj, ch, 200);
+					currencies::RemoveBank(*ch, currencies::kGold, kChestIdentPay);
 					SendMsgToChar(ch,
 								  "%sЗа информацию о предмете с вашего банковского счета сняли %d %s%s\r\n",
 								  kColorBoldGrn,
 								  kChestIdentPay,
-								  GetDeclensionInNumber(kChestIdentPay, EWhat::kMoneyU),
+								  MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(kChestIdentPay, grammar::ECase::kNom).c_str(),
 								  kColorNrm);
 					return;
 				}
 			}
 		}
-		sprintf(buf1, "Ничего похожего на %s в хранилище ненайдено! Будьте внимательнее.\r\n", stufina);
-		SendMsgToChar(buf1, ch);
+		SendMsgToChar(fmt::format("Ничего похожего на {} в хранилище ненайдено! Будьте внимательнее.\r\n", stufina), ch);
 		return;
 	}
 
@@ -5462,12 +5496,11 @@ void DoStoreHouse(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	SetWait(ch, 1, false);
 
 	std::string out;
-	for (chest = world[GetRoomRnum(CLAN(ch)->chest_room)]->contents;
-		 chest; chest = chest->get_next_content()) {
+	for (auto chest : world[GetRoomRnum(CLAN(ch)->chest_room)]->contents) {
 		if (Clan::is_clan_chest(chest)) {
 			for (ObjData *obj = chest->get_contains(); obj; obj = obj->get_next_content()) {
 				if (filter.check(obj, ch)) {
-					out += show_obj_to_char(obj, ch, 1, 3, 1);
+					out += sight::show_obj_to_char(obj, ch, 1, 3, 1);
 				}
 			}
 			break;
@@ -5496,7 +5529,8 @@ void do_clanstuff(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 	std::string title = CLAN(ch)->GetClanTitle();
 
-	half_chop(argument, arg, buf);
+	char name_filter[kMaxInputLength], rest[kMaxInputLength];
+	half_chop(argument, name_filter, rest);
 
 	auto it = CLAN(ch)->clanstuff.begin();
 	for (; it != CLAN(ch)->clanstuff.end(); it++) {
@@ -5511,26 +5545,24 @@ void do_clanstuff(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			continue;
 		}
 
-		if (*arg && !strstr(obj_proto[rnum]->get_short_description().c_str(), arg)) {
+		if (*name_filter && !strstr(obj_proto[rnum]->get_short_description().c_str(), name_filter)) {
 			continue;
 		}
 
-		sprintf(buf, "%s %s clan%d!", it->name.c_str(), title.c_str(), CLAN(ch)->GetRent());
-		obj->set_aliases(buf);
+		obj->set_aliases(fmt::format("{} {} clan{}!", it->name, title, CLAN(ch)->GetRent()));
 		obj->set_short_description(it->PNames[0] + " " + title);
 
-		for (int i = ECase::kFirstCase; i <= ECase::kLastCase; i++) {
-			obj->set_PName(static_cast<ECase>(i), it->PNames[i] + " " + title);
+		for (int i = grammar::ECase::kFirstCase; i <= grammar::ECase::kLastCase; i++) {
+			obj->set_PName(static_cast<grammar::ECase>(i), it->PNames[i] + " " + title);
 		}
 
 		obj->set_description(it->desc);
 
 		if (it->longdesc.length() > 0) {
-			ExtraDescription::shared_ptr new_descr(new ExtraDescription());
-			new_descr->keyword = str_dup(obj->get_short_description().c_str());
-			new_descr->description = str_dup(it->longdesc.c_str());
-			new_descr->next = nullptr;
-			obj->set_ex_description(new_descr);
+			ExtraDescription new_descr;
+			new_descr.keyword = obj->get_short_description();
+			new_descr.description = it->longdesc;
+			obj->ex_descriptions().assign(1, std::move(new_descr));
 		}
 
 		if (!cnt) {
@@ -5540,8 +5572,8 @@ void do_clanstuff(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 		int gold = obj->get_cost();
 
-		if (ch->get_gold() >= gold) {
-			ch->remove_gold(gold);
+		if (currencies::GetHand(*ch, currencies::kGold) >= gold) {
+			currencies::RemoveHand(*ch, currencies::kGold, gold);
 			gold_total += gold;
 		} else {
 			SendMsgToChar(ch, "Кончились денюжки!\r\n");
@@ -5551,17 +5583,18 @@ void do_clanstuff(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		PlaceObjToInventory(obj.get(), ch);
 		cnt++;
 
-		sprintf(buf, "$n взял$g %s из сундука", obj->get_PName(ECase::kNom).c_str());
-		sprintf(buf2, "Вы взяли %s из сундука", obj->get_PName(ECase::kNom).c_str());
-		act(buf, false, ch, 0, 0, kToRoom);
-		act(buf2, false, ch, 0, 0, kToChar);
+		act(fmt::format("$n взял$g {} из сундука", obj->get_PName(grammar::ECase::kNom)).c_str(),
+			false, ch, 0, 0, kToRoom);
+		act(fmt::format("Вы взяли {} из сундука", obj->get_PName(grammar::ECase::kNom)).c_str(),
+			false, ch, 0, 0, kToChar);
 	}
 
 	if (cnt) {
-		sprintf(buf2, "\r\nЭкипировка обошлась вам в %d %s.", gold_total,
-				GetDeclensionInNumber(gold_total, EWhat::kMoneyU));
+		const std::string cost = fmt::format("\r\nЭкипировка обошлась вам в {} {}.", gold_total,
+											 MUD::Currency(currencies::kGoldVnum)
+												 .GetNameWithAmount(gold_total, grammar::ECase::kNom));
 		act("\r\n$n закрыл$g крышку сундука", false, ch, 0, 0, kToRoom);
-		act(buf2, false, ch, 0, 0, kToChar);
+		act(cost.c_str(), false, ch, 0, 0, kToChar);
 	} else {
 		act("\r\n$n порыл$u в сундуке со стандартной экипировкой, но ничего не наш$y", false, ch, 0, 0, kToRoom);
 		act("\r\nВы порылись в сундуке со стандартной экипировкой, но не нашли ничего подходящего",

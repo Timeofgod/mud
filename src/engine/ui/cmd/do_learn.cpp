@@ -1,10 +1,15 @@
+#include <fmt/format.h>
+
 #include "do_learn.h"
 
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "engine/entities/char_data.h"
 #include "gameplay/classes/classes_spell_slots.h"
-#include "gameplay/classes/classes.h"
+#include "gameplay/classes/pc_classes.h"
 #include "gameplay/magic/spells_info.h"
 #include "engine/db/global_objects.h"
+#include "gameplay/core/remort.h"
 
 namespace do_learn {
 
@@ -23,8 +28,8 @@ bool IsLearningFailed(CharData *ch, ObjData *obj) {
 	auto addchance = LIKE_ROOM(ch) ? 10 : 0;
 	addchance += (GET_OBJ_VAL(obj, 0) == EBook::kSpell) ? 0 : 10;
 
-	if (!obj->has_flag(EObjFlag::KNofail)
-		&& number(1, 100) > int_app[POSI(GetRealInt(ch))].spell_aknowlege + addchance) {
+	if (!obj->has_flag(EObjFlag::kNofail)
+		&& number(1, 100) > IntApp(Posi(GetRealInt(ch))).spell_aknowlege + addchance) {
 		return true;
 	}
 	return false;
@@ -35,7 +40,7 @@ void SendSuccessLearningMessage(CharData *ch, ObjData *book, const std::string &
 	static const std::string stype2[] = {"заклинания", "умения", "умения", "рецепта", "способности"};
 
 	std::ostringstream out;
-	out << "Вы взяли в руки " << book->get_PName(ECase::kAcc) << " и начали изучать." << "\r\n" <<
+	out << "Вы взяли в руки " << book->get_PName(grammar::ECase::kAcc) << " и начали изучать." << "\r\n" <<
 		"Постепенно, незнакомые доселе, буквы стали складываться в понятные слова и фразы." << "\r\n" <<
 		"Буквально через несколько минут вы узнали " <<
 		((GET_OBJ_VAL(book, 0) == EBook::kSkillUpgrade) ? stype0[0] : stype0[1]) <<
@@ -93,7 +98,7 @@ void LearnSkillBook(CharData *ch, ObjData *obj) {
 	}
 
 	auto skill_name = MUD::Skill(skill_id).GetName();
-	if (ch->GetSkill(skill_id)) {
+	if (GetSkill(ch, skill_id)) {
 		throw AlreadyKnown(skill_name);
 	}
 	if (!CanGetSkill(ch, skill_id, GET_OBJ_VAL(obj, 2))) {
@@ -103,7 +108,7 @@ void LearnSkillBook(CharData *ch, ObjData *obj) {
 		throw LearningFail();
 	}
 
-	ch->set_skill(skill_id, 5);
+	SetSkill(ch, skill_id, 5);
 	SendSuccessLearningMessage(ch, obj, skill_name);
 }
 
@@ -116,8 +121,8 @@ void LearnSkillUpgradeBook(CharData *ch, ObjData *obj) {
 
 	const auto book_skill_cap = GET_OBJ_VAL(obj, 3);
 	auto skill_name = MUD::Skill(skill_id).GetName();
-	if ((book_skill_cap > 0 && ch->GetMorphSkill(skill_id) >= book_skill_cap) ||
-		(book_skill_cap <= 0 && ch->GetMorphSkill(skill_id) >= CalcSkillRemortCap(ch))) {
+	if ((book_skill_cap > 0 && GetSkillBonus(ch, skill_id) >= book_skill_cap) ||
+		(book_skill_cap <= 0 && GetSkillBonus(ch, skill_id) >= CalcSkillRemortCap(ch))) {
 		throw AlreadyKnown(skill_name);
 	}
 	if (!CanGetSkill(ch, skill_id, GET_OBJ_VAL(obj, 2))) {
@@ -128,11 +133,11 @@ void LearnSkillUpgradeBook(CharData *ch, ObjData *obj) {
 	}
 
 	SendSuccessLearningMessage(ch, obj, skill_name);
-	const auto left_skill_level = ch->GetMorphSkill(skill_id) + GET_OBJ_VAL(obj, 2);
+	const auto left_skill_level = GetSkillBonus(ch, skill_id) + GET_OBJ_VAL(obj, 2);
 	if (book_skill_cap > 0) {
-		ch->set_skill(skill_id, std::min(left_skill_level, GET_OBJ_VAL(obj, 3)));
+		SetSkill(ch, skill_id, std::min(left_skill_level, GET_OBJ_VAL(obj, 3)));
 	} else {
-		ch->set_skill(skill_id, std::min(left_skill_level, CalcSkillRemortCap(ch)));
+		SetSkill(ch, skill_id, std::min(left_skill_level, CalcSkillRemortCap(ch)));
 	}
 }
 
@@ -145,20 +150,16 @@ void LearnReceiptBook(CharData *ch, ObjData *obj) {
 		SendMsgToChar("РЕЦЕПТ НЕ ОПРЕДЕЛЕН - сообщите Богам!\r\n", ch);
 		throw LearningError();
 	}
-	if (imrecipes[receipt_id].classknow[(int) ch->GetClass()] != kKnownRecipe) {
+	// issue.class-recipes: доступность рецепта - свойство класса (cfg/classes/pc_*.xml).
+	if (!MUD::Class(ch->GetClass()).FindIngredientRecipe(imrecipes[receipt_id].str_id)) {
 		throw NotAvailable();
 	}
 	im_rskill *receipt_skill = im_get_char_rskill(ch, receipt_id);
 	if (receipt_skill) {
 		throw AlreadyKnown(receipt_name);
 	}
-	if (MAX(GET_OBJ_VAL(obj, 2), imrecipes[receipt_id].level) <= GetRealLevel(ch) &&
-		imrecipes[receipt_id].remort <= GetRealRemort(ch)) {
-		if (imrecipes[receipt_id].level == -1 || imrecipes[receipt_id].remort == -1) {
-			SendMsgToChar("Некорректная запись рецепта для вашего класса - сообщите Богам.\r\n", ch);
-			throw LowRemortOrLvl();
-		}
-	}
+	// Класс владеет рецептом => уровень/реморт всегда корректны (прежняя проверка на "-1",
+	// сигнализировавшая о битой записи class.recipes.lst, больше не нужна).
 	if (IsLearningFailed(ch, obj)) {
 		throw LearningFail();
 	}
@@ -230,15 +231,16 @@ bool IncorrectBookType(ObjData *obj) {
 }
 
 ObjData *FindBook(CharData *ch, char *argument) {
-	one_argument(argument, arg);
-	if (!*arg) {
+	char name[kMaxInputLength];
+	one_argument(argument, name);
+	if (!*name) {
 		SendMsgToChar("Вы принялись внимательно изучать свои ногти. Да, пора бы и подстричь.\r\n", ch);
 		act("$n удивленно уставил$u на свои ногти. Подстриг бы их кто-нибудь $m.",
 			false, ch, nullptr, nullptr, kToRoom | kToArenaListen);
 		return nullptr;
 	}
 
-	auto book = get_obj_in_list_vis(ch, arg, ch->carrying);
+	auto book = get_obj_in_list_vis(ch, name, ch->carrying);
 	if (!book) {
 		SendMsgToChar("А у вас этого нет.\r\n", ch);
 		return nullptr;
@@ -265,22 +267,21 @@ void ProcessLowRemortOrLevelException(CharData *ch, ObjData *book) {
 	const char *what = number(0, 1) ? "жука" : (number(0, 1) ? "бабочку" : "русалку");
 	const char
 		*whom = book->get_sex() == EGender::kFemale ? "нее" : (book->get_sex() == EGender::kPoly ? "них" : "него");
-	sprintf(buf,
-			"- \"Какие интересные буковки! Особенно %s, похожая на %s\".\r\n"
-			"Полюбовавшись еще несколько минут на сию красоту, вы с чувством выполненного\r\n"
-			"долга закрыли %s. До %s вы еще не доросли.\r\n",
-			positon, what, book->get_PName(ECase::kAcc).c_str(), whom);
-	SendMsgToChar(buf, ch);
+	SendMsgToChar(fmt::format(
+		"- \"Какие интересные буковки! Особенно {}, похожая на {}\".\r\n"
+		"Полюбовавшись еще несколько минут на сию красоту, вы с чувством выполненного\r\n"
+		"долга закрыли {}. До {} вы еще не доросли.\r\n",
+		positon, what, book->get_PName(grammar::ECase::kAcc), whom), ch);
 	act("$n с интересом осмотрел$g $o3, крякнул$g от досады и положил$g обратно.",
 		false, ch, book, nullptr, kToRoom);
 }
 
 void ProcessLearningFailException(CharData *ch, ObjData *book) {
-	sprintf(buf, "Вы взяли в руки %s и начали изучать.\r\n"
-				 "Непослушные буквы никак не хотели выстраиваться в понятные и доступные фразы.\r\n"
-				 "Промучившись несколько минут, вы бросили это унылое занятие, с удивлением отметив исчезновение %s.\r\n",
-			book->get_PName(ECase::kAcc).c_str(), book->get_PName(ECase::kGen).c_str());
-	SendMsgToChar(buf, ch);
+	SendMsgToChar(fmt::format(
+		"Вы взяли в руки {} и начали изучать.\r\n"
+		"Непослушные буквы никак не хотели выстраиваться в понятные и доступные фразы.\r\n"
+		"Промучившись несколько минут, вы бросили это унылое занятие, с удивлением отметив исчезновение {}.\r\n",
+		book->get_PName(grammar::ECase::kAcc), book->get_PName(grammar::ECase::kGen)), ch);
 	act("$n взял$g в руки $o3 и принял$u изучать, но промучившись несколько минут, бросил$g это занятие.\r\n"
 		"Вы с удивлением увидели, как $o замерцал$G и растаял$G.",
 		false, ch, book, nullptr, kToRoom);
@@ -288,10 +289,10 @@ void ProcessLearningFailException(CharData *ch, ObjData *book) {
 }
 
 void ProcessLearningNotAvailable(CharData *ch, ObjData *book) {
-	sprintf(buf, "Вы взяли в руки %s и начали изучать.\r\n"
-			"Какая-то бормотуха получится, решили вы.\r\n",
-			book->get_PName(ECase::kAcc).c_str());
-	SendMsgToChar(buf, ch);
+	SendMsgToChar(fmt::format(
+		"Вы взяли в руки {} и начали изучать.\r\n"
+		"Какая-то бормотуха получится, решили вы.\r\n",
+		book->get_PName(grammar::ECase::kAcc)), ch);
 	act("$n взял$g в руки $o3 и принял$u изучать, но почесав макушку, бросил$g это занятие.\r\n",
 			false, ch, book, nullptr, kToRoom);
 }
@@ -300,10 +301,10 @@ void ProcessAlreadyKnownException(CharData *ch, ObjData *book, const AlreadyKnow
 	static const std::string talent_type[] = {"заклинание", "умение", "умение", "рецепт", "рецепт", "способность"};
 
 	std::ostringstream out;
-	out << "Вы открыли " << book->get_PName(ECase::kAcc) << " и принялись с интересом изучать." << "\r\n" <<
+	out << "Вы открыли " << book->get_PName(grammar::ECase::kAcc) << " и принялись с интересом изучать." << "\r\n" <<
 		"Каким же было разочарование, когда ";
 	if (GET_OBJ_VAL(book, 0) == EBook::kSkillUpgrade) {
-		out << "изучив " << book->get_PName(ECase::kAcc).c_str() << " от корки до корки вы так и не узнали ничего нового.";
+		out << "изучив " << book->get_PName(grammar::ECase::kAcc).c_str() << " от корки до корки вы так и не узнали ничего нового.";
 	} else {
 		out << "прочитав " <<
 			(number(0, 1) ? "несколько страниц, " : number(0, 1) ? "пару строк," : "почти до конца,") <<

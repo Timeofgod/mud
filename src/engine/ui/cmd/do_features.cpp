@@ -1,7 +1,13 @@
 #include "engine/ui/color.h"
-#include "engine/core/handler.h"
+#include <fmt/format.h>
+#include "gameplay/core/remort.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/abilities/timed_abilities.h"
 #include "gameplay/mechanics/player_races.h"
 #include "engine/db/global_objects.h"
+
+#include <string>
+#include <vector>
 
 int feat_slot_lvl(int remort, int slot_for_remort, int slot) {
 	int result = 0;
@@ -12,7 +18,7 @@ int feat_slot_lvl(int remort, int slot_for_remort, int slot) {
 	}
 	/*
 	  ВНИМАНИЕ: формула содрана с CalcFeatLvl (feats.h)!
-	  (1+GetRealLevel(ch)*(5+GetRealRemort(ch)/MUD::Classes(ch->get_class()).GetRemortsNumForFeatSlot()/kLastFeatSlotLvl)
+	  (1+GetRealLevel(ch)*(5+remort::GetRealRemort(ch)/MUD::Classes(ch->get_class()).GetRemortsNumForFeatSlot()/kLastFeatSlotLvl)
 	  сделано это потому, что "обратная" формула, использованная ранее в list_feats,
 	  выдавала неверные результаты ввиду нюансов округления
 	  */
@@ -32,33 +38,22 @@ int feat_slot_lvl(int remort, int slot_for_remort, int slot) {
 */
 void DisplayFeats(CharData *ch, CharData *vict, bool all_feats) {
 	int i = 0, j = 0, slot, max_slot = 0;
-	char msg[kMaxStringLength];
 	bool sfound;
 
 	//Найдем максимальный слот, который вобще может потребоваться данному персонажу на текущем морте
 	max_slot = CalcFeatSlotsAmountPerRemort(ch);
-	char **names = new char *[max_slot];
-
-	for (int k = 0; k < max_slot; k++) {
-		names[k] = new char[kMaxStringLength];
-	}
+	std::vector<std::string> names(max_slot);
 
 	if (all_feats) {
-		sprintf(names[0], "\r\nКруг 1  (1  уровень):\r\n");
-	} else {
-		*names[0] = '\0';
-	}
-	for (i = 1; i < max_slot; i++) {
-		if (all_feats) {
+		names[0] = "\r\nКруг 1  (1  уровень):\r\n";
+		for (i = 1; i < max_slot; i++) {
 			// на каком уровне будет слот i?
 			j = feat_slot_lvl(ch->get_remort(), MUD::Class(ch->GetClass()).GetRemortsNumForFeatSlot(), i);
-			sprintf(names[i], "\r\nКруг %-2d (%-2d уровень):\r\n", i + 1, j);
-		} else {
-			*names[i] = '\0';
+			names[i] = fmt::format("\r\nКруг {:<2} ({:<2} уровень):\r\n", i + 1, j);
 		}
 	}
 
-	sprintf(buf2, "\r\nВрожденные способности :\r\n");
+	std::string inborn = "\r\nВрожденные способности :\r\n";
 	j = 0;
 	if (all_feats) {
 		if (!ch->IsFlagged(EPrf::kBlindMode)) {
@@ -75,68 +70,53 @@ void DisplayFeats(CharData *ch, CharData *vict, bool all_feats) {
 		}
 		for (const auto &feat : MUD::Class(ch->GetClass()).feats) {
 			if (feat.IsUnavailable() &&
-				!PlayerRace::FeatureCheck((int) GET_KIN(ch), (int) GET_RACE(ch), to_underlying(feat.GetId()))) {
+				!MUD::PcRaces()[GET_RACE(ch)].HasFeature(feat.GetId())) {
 				continue;
 			}
+			const char *mark = ch->HaveFeat(feat.GetId()) ? "[И]"
+							   : CanGetFeat(ch, feat.GetId()) ? "[Д]" : "[Н]";
+			std::string line;
 			if (!ch->IsFlagged(EPrf::kBlindMode)) {
-				sprintf(buf, "        %s%s %-30s%s\r\n",
-						ch->HaveFeat(feat.GetId()) ? kColorGrn :
-						CanGetFeat(ch, feat.GetId()) ? kColorNrm : kColorRed,
-						ch->HaveFeat(feat.GetId()) ? "[И]" :
-						CanGetFeat(ch, feat.GetId()) ? "[Д]" : "[Н]",
-						MUD::Feat(feat.GetId()).GetCName(), kColorNrm);
+				const char *color = ch->HaveFeat(feat.GetId()) ? "&g"
+									: CanGetFeat(ch, feat.GetId()) ? "&w" : "&r";
+				line = fmt::format("        {}{} {:<30}&w\r\n", color, mark, MUD::Feat(feat.GetId()).GetCName());
 			} else {
-				sprintf(buf, "    %s %-30s\r\n",
-						ch->HaveFeat(feat.GetId()) ? "[И]" :
-						CanGetFeat(ch, feat.GetId()) ? "[Д]" : "[Н]",
-						MUD::Feat(feat.GetId()).GetCName());
+				line = fmt::format("    {} {:<30}\r\n", mark, MUD::Feat(feat.GetId()).GetCName());
 			}
 
 			if (feat.IsInborn() ||
-				PlayerRace::FeatureCheck((int) GET_KIN(ch), (int) GET_RACE(ch), to_underlying(feat.GetId()))) {
-				strcat(buf2, buf);
+				MUD::PcRaces()[GET_RACE(ch)].HasFeature(feat.GetId())) {
+				inborn += line;
 				j++;
 			} else if (feat.GetSlot() < max_slot) {
-				strcat(names[feat.GetSlot()], buf);
+				names[feat.GetSlot()] += line;
 			}
 		}
-		sprintf(buf1, "--------------------------------------");
+
+		std::string out = "--------------------------------------";
 		for (i = 0; i < max_slot; i++) {
-			if (strlen(buf1) >= kMaxStringLength - 60) {
-				strcat(buf1, "***ПЕРЕПОЛНЕНИЕ***\r\n");
-				break;
-			}
-			sprintf(buf1 + strlen(buf1), "%s", names[i]);
+			out += names[i];
 		}
-
-		SendMsgToChar(buf1, vict);
-//		page_string(ch->desc, buf, 1);
-		if (j)
-			SendMsgToChar(buf2, vict);
-
-		for (int k = 0; k < max_slot; k++)
-			delete[] names[k];
-
-		delete[] names;
+		SendMsgToChar(out, vict);
+		if (j) {
+			SendMsgToChar(inborn, vict);
+		}
 
 		return;
 	}
 
 // ======================================================
 
-	sprintf(buf1, "Вы обладаете следующими способностями :\r\n");
+	std::string out = "Вы обладаете следующими способностями :\r\n";
 
 	for (const auto &feat : MUD::Class(ch->GetClass()).feats) {
-		if (strlen(buf2) >= kMaxStringLength - 60) {
-			strcat(buf2, "***ПЕРЕПОЛНЕНИЕ***\r\n");
-			break;
-		}
 		if (ch->HaveFeat(feat.GetId())) {
 			if (MUD::Feat(feat.GetId()).IsInvalid()) {
 				ch->UnsetFeat(feat.GetId());
 				continue;
 			}
 
+			std::string line;
 			switch (feat.GetId()) {
 				case EFeat::kBerserker:
 				case EFeat::kLightWalk:
@@ -144,9 +124,9 @@ void DisplayFeats(CharData *ch, CharData *vict, bool all_feats) {
 				case EFeat::kRelocate:
 				case EFeat::kShadowThrower:
 					if (IsTimedByFeat(ch, feat.GetId())) {
-						sprintf(buf, "[%3d] ", IsTimedByFeat(ch, feat.GetId()));
+						line = fmt::format("[{:3}] ", IsTimedByFeat(ch, feat.GetId()));
 					} else {
-						sprintf(buf, "[-!-] ");
+						line = "[-!-] ";
 					}
 					break;
 				case EFeat::kPowerAttack:
@@ -158,33 +138,31 @@ void DisplayFeats(CharData *ch, CharData *vict, bool all_feats) {
 				case EFeat::kTripleThrower:
 				case EFeat::kSerratedBlade:
 					if (ch->IsFlagged(GetPrfWithFeatNumber(feat.GetId()))) {
-						sprintf(buf, "[-%s*%s-] ", kColorBoldGrn, kColorNrm);
+						line = "[-&G*&w-] ";
 					} else {
-						sprintf(buf, "[-:-] ");
+						line = "[-:-] ";
 					}
 					break;
-				default: sprintf(buf, "      ");
+				default: line = "      ";
 			}
 			if (CanUseFeat(ch, feat.GetId())) {
-				sprintf(buf + strlen(buf), "%s%s%s\r\n",
-						kColorBoldYel, MUD::Feat(feat.GetId()).GetCName(), kColorNrm);
+				line += fmt::format("&Y{}&w\r\n", MUD::Feat(feat.GetId()).GetCName());
 			} else if (!ch->IsFlagged(EPrf::kBlindMode)) {
-				sprintf(buf + strlen(buf), "%s\r\n", MUD::Feat(feat.GetId()).GetCName());
+				line += fmt::format("{}\r\n", MUD::Feat(feat.GetId()).GetCName());
 			} else {
-				sprintf(buf, "[-Н-] %s\r\n", MUD::Feat(feat.GetId()).GetCName());
+				line = fmt::format("[-Н-] {}\r\n", MUD::Feat(feat.GetId()).GetCName());
 			}
 			if (feat.IsInborn() ||
-				PlayerRace::FeatureCheck((int) GET_KIN(ch), (int) GET_RACE(ch), to_underlying(feat.GetId()))) {
-				sprintf(buf2 + strlen(buf2), "    ");
-				strcat(buf2, buf);
+				MUD::PcRaces()[GET_RACE(ch)].HasFeature(feat.GetId())) {
+				inborn += "    ";
+				inborn += line;
 				j++;
 			} else {
 				slot = feat.GetSlot();
 				sfound = false;
 				while (slot < max_slot) {
-					if (*names[slot] == '\0') {
-						sprintf(names[slot], " %s%-2d%s) ", kColorGrn, slot + 1, kColorNrm);
-						strcat(names[slot], buf);
+					if (names[slot].empty()) {
+						names[slot] = fmt::format(" &g{:<2}&w) ", slot + 1) + line;
 						sfound = true;
 						break;
 					} else {
@@ -194,9 +172,9 @@ void DisplayFeats(CharData *ch, CharData *vict, bool all_feats) {
 				if (!sfound) {
 					// Если способность не врожденная и под нее нет слота - удаляем
 					//	чтобы можно было менять слоты на лету и чтобы не читерили
-					sprintf(msg, "WARNING: Unset out of slots feature '%s' for character '%s'!",
-							MUD::Feat(feat.GetId()).GetCName(), GET_NAME(ch));
-					mudlog(msg, BRF, kLvlImplementator, SYSLOG, true);
+					mudlog(fmt::format("WARNING: Unset out of slots feature '{}' for character '{}'!",
+									   MUD::Feat(feat.GetId()).GetCName(), GET_NAME(ch)),
+						   BRF, kLvlImplementator, SYSLOG, true);
 					ch->UnsetFeat(feat.GetId());
 				}
 			}
@@ -205,21 +183,25 @@ void DisplayFeats(CharData *ch, CharData *vict, bool all_feats) {
 
 	auto max_slot_per_lvl = CalcMaxFeatSlotPerLvl(ch);
 	for (i = 0; i < max_slot; i++) {
-		if (*names[i] == '\0')
-			sprintf(names[i], " %s%-2d%s)       %s[пусто]%s\r\n", kColorGrn, i + 1, kColorNrm, kColorBoldBlk, kColorNrm);
+		if (names[i].empty()) {
+			names[i] = fmt::format(" &g{:<2}&w)       &K[пусто]&w\r\n", i + 1);
+		}
 		if (i >= max_slot_per_lvl)
 			break;
-		sprintf(buf1 + strlen(buf1), "%s", names[i]);
+		out += names[i];
 	}
-	SendMsgToChar(buf1, vict);
+	SendMsgToChar(out, vict);
 
-	if (j)
-		SendMsgToChar(buf2, vict);
-
-	for (int k = 0; k < max_slot; k++)
-		delete[] names[k];
-
-	delete[] names;
+	if (j) {
+		SendMsgToChar(inborn, vict);
+	}
+	const auto &race_features = MUD::PcRaces()[GET_RACE(ch)].GetFeatures();
+	if (race_features.size() > 0) {
+		SendMsgToChar(vict,  "Родовые способности :\r\n");
+		for (const EFeat feat_id : race_features) {
+			SendMsgToChar(vict, "          %s\r\n", MUD::Feat(feat_id).GetCName());
+		}
+	}
 }
 
 void DoFeatures(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {

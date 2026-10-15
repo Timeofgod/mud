@@ -1,15 +1,18 @@
 #include "world_objects.h"
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/entities/char_data.h"
 #include "obj_prototypes.h"
 #include "db.h"
 #include "gameplay/mechanics/liquid.h"
 #include "engine/scripting/dg_scripts.h"
+#include "engine/scripting/lua/lua_script_engine.h"
 #include "utils/utils.h"
 #include "global_objects.h"
 #include "utils/backtrace.h"
 #include "gameplay/mechanics/dungeons.h"
 
 #include <algorithm>
+#include <vector>
 
 void WorldObjects::WO_VNumChangeObserver::notify(CObjectPrototype &object, const ObjVnum old_vnum) {
 	if (old_vnum != object.get_vnum()) {
@@ -31,6 +34,17 @@ void WorldObjects::WO_VNumChangeObserver::notify(CObjectPrototype &object, const
 		// insert new entry to the index
 		const auto vnum = object_ptr->get_vnum();
 		m_parent.m_vnum_to_object_ptr[vnum].insert(object_ptr);
+
+		// update zone index
+		const auto old_zone = old_vnum / 100;
+		const auto new_zone = vnum / 100;
+		if (old_zone != new_zone) {
+			auto zone_i = m_parent.m_zone_to_object_ptr.find(old_zone);
+			if (zone_i != m_parent.m_zone_to_object_ptr.end()) {
+				zone_i->second.erase(object_ptr);
+			}
+			m_parent.m_zone_to_object_ptr[new_zone].insert(object_ptr);
+		}
 	}
 }
 
@@ -111,7 +125,7 @@ ObjData::shared_ptr WorldObjects::create_from_prototype_by_rnum(ObjRnum rnum) {
 			constexpr int TEST_OBJECT_TIMER = 30;
 			new_object->set_timer(TEST_OBJECT_TIMER);
 			new_object->set_extra_flag(EObjFlag::kNolocate);
-			new_object->set_extra_flag(EObjFlag::KLimitedTimer);
+			new_object->set_extra_flag(EObjFlag::kLimitedTimer);
 			new_object->set_extra_flag(EObjFlag::kTransformed);
 			new_object->set_extra_flag(EObjFlag::kNosell);
 		}
@@ -124,6 +138,7 @@ ObjData::shared_ptr WorldObjects::create_from_prototype_by_rnum(ObjRnum rnum) {
 		}
 
 		assign_triggers(new_object.get(), OBJ_TRIGGER);
+		update_obj_indices(new_object.get());
 	}
 
 	return new_object;
@@ -166,7 +181,7 @@ void WorldObjects::remove(ObjData *object) {
 	}
 
 	const ObjData::shared_ptr object_ptr = get_by_raw_ptr(object);
-
+	obj_proto.dec_number(object->get_rnum());
 	object_ptr->unsubscribe_from_id_change(m_id_change_observer);
 	object_ptr->unsubscribe_from_rnum_changes(m_rnum_change_observer);
 	object_ptr->unsubscribe_from_vnum_changes(m_vnum_change_observer);
@@ -174,6 +189,10 @@ void WorldObjects::remove(ObjData *object) {
 	m_id_to_object_ptr.erase(object_ptr->get_id());
 	m_vnum_to_object_ptr[object_ptr->get_vnum()].erase(object_ptr);
 	m_rnum_to_object_ptr[object_ptr->get_rnum()].erase(object_ptr);
+	m_zone_to_object_ptr[object_ptr->get_vnum() / 100].erase(object_ptr);
+	m_random_trigger_objs.erase(object);
+	m_named_objs.erase(object);
+	m_decay_manager.remove(object);
 	m_objects_list.erase(object_i->second);
 	m_object_raw_ptr_to_object_ptr.erase(object);
 
@@ -211,6 +230,42 @@ void WorldObjects::foreach_with_rnum(const ObjRnum rnum, const foreach_f &functi
 	if (set_i != m_rnum_to_object_ptr.end()) {
 		std::for_each(set_i->second.begin(), set_i->second.end(), function);
 	}
+}
+
+void WorldObjects::foreach_in_zone(const ZoneVnum zone_vnum, const foreach_f &function) const {
+	const auto set_i = m_zone_to_object_ptr.find(zone_vnum);
+	if (set_i != m_zone_to_object_ptr.end()) {
+		std::for_each(set_i->second.begin(), set_i->second.end(), function);
+	}
+}
+
+void WorldObjects::foreach_random_trigger_obj(const std::function<void(ObjData *)> &function) const {
+	for (auto *obj : m_random_trigger_objs) {
+		function(obj);
+	}
+}
+
+void WorldObjects::foreach_named_obj(const std::function<void(ObjData *)> &function) const {
+	for (auto *obj : m_named_objs) {
+		function(obj);
+	}
+}
+
+void WorldObjects::update_obj_indices(ObjData *obj) {
+	if (obj->has_flag(EObjFlag::kNamed)) {
+		m_named_objs.insert(obj);
+	} else {
+		m_named_objs.erase(obj);
+	}
+
+	if (obj->get_script()->has_triggers()) {
+		auto sc = obj->get_script().get();
+		if (IS_SET(SCRIPT_TYPES(sc), OTRIG_RANDOM_GLOBAL) || IS_SET(SCRIPT_TYPES(sc), OTRIG_RANDOM)) {
+			m_random_trigger_objs.insert(obj);
+			return;
+		}
+	}
+	m_random_trigger_objs.erase(obj);
 }
 
 ObjData::shared_ptr WorldObjects::find_if(const predicate_f &predicate) const {
@@ -285,14 +340,27 @@ ObjData::shared_ptr WorldObjects::find_by_vnum_and_dec_number(const ObjVnum vnum
 
 ObjData::shared_ptr WorldObjects::find_by_rnum(const ObjRnum rnum, unsigned number) const {
 	const auto set_i = m_rnum_to_object_ptr.find(rnum);
-	if (set_i != m_rnum_to_object_ptr.end()) {
-		for (const auto &object : set_i->second) {
-			if (0 == number) {
-				return object;
-			}
+	if (set_i == m_rnum_to_object_ptr.end()) {
+		return nullptr;
+	}
 
-			--number;
-		}
+	// Бакет хранится в std::unordered_set, поэтому порядок обхода не определён
+	// (зависит от хешей указателей, т.е. от раскладки кучи). Раньше это давало
+	// недетерминированный выбор, когда в мире несколько экземпляров одного
+	// прототипа: например, ресет зоны с командой 'P' клал предмет в случайный
+	// из нескольких одинаковых контейнеров. Упорядочиваем по get_id() (строго
+	// монотонный счётчик создания, max_id.allocate), чтобы выбор был стабильным
+	// и воспроизводимым. Путь холодный (единственный вызыватель -- ветка 'P' в
+	// ResetZoneEssential через SearchObjByRnum), бакет мал, так что сортировка
+	// ничего не стоит. См. issue #3371.
+	std::vector<ObjData::shared_ptr> ordered(set_i->second.begin(), set_i->second.end());
+	std::sort(ordered.begin(), ordered.end(),
+		[](const ObjData::shared_ptr &lhs, const ObjData::shared_ptr &rhs) {
+			return lhs->get_id() < rhs->get_id();
+		});
+
+	if (number < ordered.size()) {
+		return ordered[number];
 	}
 
 	return nullptr;
@@ -324,11 +392,12 @@ void WorldObjects::GetObjListByVnum(const ObjVnum vnum, std::list<ObjData *> &re
 }
 
 void WorldObjects::AddToExtractedList(ObjData *obj) {
+	if (obj) { log("[objlife] AddToExtractedList %s #%d room %d at %s", obj->get_PName(grammar::ECase::kNom).c_str(), GET_OBJ_VNUM(obj), get_room_where_obj(obj), ObjLocDesc(obj).c_str()); }
+	lua_scripting::LuaScriptEngine::CancelWaitsForObject(obj);
 	const ObjData::shared_ptr object_ptr = get_by_raw_ptr(obj);
 
 	object_ptr->unsubscribe_from_rnum_changes(m_rnum_change_observer);
 	m_rnum_to_object_ptr[object_ptr->get_rnum()].erase(object_ptr);
-	log("add obj to extracted list %s %d", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_VNUM(obj));
 	obj->set_extracted_list(true);
 //	obj->get_script()->set_purged(true);
 	m_extracted_list.insert(obj);
@@ -336,7 +405,6 @@ void WorldObjects::AddToExtractedList(ObjData *obj) {
 
 void WorldObjects::PurgeExtractedList() {
 	if (!m_extracted_list.empty()) {
-		log("Start obj PurgeExtractedList");
 		for (auto it : m_extracted_list) {
 			ExtractObjFromWorld(it, false);
 		}
@@ -350,6 +418,7 @@ void WorldObjects::add_to_index(const list_t::iterator &object_i) {
 	m_vnum_to_object_ptr[vnum].insert(object);
 	m_id_to_object_ptr[object->get_id()] = object;
 	m_rnum_to_object_ptr[object->get_rnum()].insert(object);
+	m_zone_to_object_ptr[vnum / 100].insert(object);
 	m_object_raw_ptr_to_object_ptr.emplace(object.get(), object_i);
 }
 

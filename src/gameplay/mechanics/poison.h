@@ -12,7 +12,6 @@
 #include "gameplay/fight/fight_hit.h"
 
 void ProcessToxicMob(CharData *ch, CharData *victim, HitData &hit_data);
-void ProcessPoisonedWeapom(CharData *ch, CharData *victim, HitData &hit_data);
 
 bool poison_in_vessel(int liquid_num);
 void set_weap_poison(ObjData *weapon, int liquid_num);
@@ -21,7 +20,9 @@ void TryDrinkPoison(CharData *ch, ObjData *jar, int amount);
 std::string GetPoisonName(ESpell spell_id);
 bool IsSpellPoison(ESpell spell_id);
 
-int ProcessPoisonDmg(CharData *ch, const Affect<EApply>::shared_ptr &af);
+// issue.damage-over-time: regular-poison per-tick damage amount (GET_POISON based). Reused by the future
+// data-driven <damage source="poison"> path; identical to the value ProcessPoisonDmg deals for kPoison.
+int CalcPoisonDamage(CharData *ch);
 
 #endif // POISON_HPP_INCLUDED
 

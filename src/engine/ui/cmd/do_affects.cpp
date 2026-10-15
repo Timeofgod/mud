@@ -2,21 +2,62 @@
 // Created by Sventovit on 07.09.2024.
 //
 
+#include <fmt/format.h>
 #include "engine/entities/char_data.h"
-#include "gameplay/skills/morph.hpp"
+#include "gameplay/affects/affect_messages.h"
+#include "administration/privilege.h"
+#include "utils/grammar/declensions.h"
 #include "engine/ui/color.h"
 #include "engine/db/global_objects.h"
 #include "gameplay/mechanics/weather.h"
 #include "gameplay/mechanics/groups.h"
+#include "gameplay/affects/affect_data.h"
+
+#include <algorithm>
+#include <string>
+#include <vector>
 
 std::array<EAffect, 3> hiding = {EAffect::kSneak, EAffect::kHide, EAffect::kDisguise};
 
+namespace {
+
+// issue.affects-squash: a permanent (duration -1) or pulse-decayed affect is bucketed into a
+// remaining-time label. Factored out so the squashed (mortal) and full (immortal / "аффекты все")
+// renderers agree on the arithmetic.
+int AffectDisplayMod(const Affect<EApply>::shared_ptr &aff) {
+	// Pulse-decayed affects count down in ~1/25.5s pulses; convert to the tick scale used below.
+	if (aff->battleflag == AffectFlags{kAfPulsedec}) {
+		return aff->duration / 51;
+	}
+	return aff->duration;
+}
+
+std::string FormatAffectDuration(int mod) {
+	// A permanent affect (mod < 0) reads as unlimited, not "less than an hour".
+	if (mod < 0) {
+		return "(постоянно)";
+	}
+	const int hours = (mod + 1) / kSecsPerMudHour;
+	if (hours > 0) {
+		return fmt::format("({} {})", hours + 1, grammar::GetDeclensionInNumber(hours + 1, grammar::EWhat::kHour));
+	}
+	return "(менее часа)";
+}
+
+// issue.affects-squash: one displayed row, aggregating every affect that renders under the same name.
+struct SquashRow {
+	std::string name;      // affect short-desc (identity as the player sees it)
+	int count = 0;         // number of sources (stack-equivalents) collapsed into this row
+	int best_mod = 0;      // longest remaining time among timed sources
+	bool has_timed = false;
+	bool permanent = false;
+};
+
+}  // namespace
 
 void do_affects(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	char sp_name[kMaxStringLength];
-	const size_t agr_length = strlen(argument);
 
-	if (*argument && !strn_cmp(argument, "краткий", agr_length)) {
+	if (*argument && utils::IsAbbr(argument, "краткий")) {
 		if (!ch->get_master()) {
 			group::print_one_line(ch, ch, true, 0);
 		} else {
@@ -24,115 +65,115 @@ void do_affects(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		}
 		return;
 	}
+
+	// issue.affects-squash: "аффекты все" forces the full, un-collapsed per-source list. Mortals
+	// otherwise get one row per distinct effect (duplicate sources collapsed, longest duration shown);
+	// immortals always see every slot (with modifier/potency detail).
+	const bool show_all = (*argument && utils::IsAbbr(argument, "все"));
+	const bool squash = !privilege::IsImmortal(ch) && !show_all;
+
 	// Show the bitset without "hiding" etc.
 	auto aff_copy = ch->char_specials.saved.affected_by;
 	for (auto j : hiding) {
 		aff_copy.unset(j);
 	}
 
-	aff_copy.sprintbits(affected_bits, buf2, ",");
-	snprintf(buf, kMaxStringLength, "Аффекты: %s%s%s\r\n", kColorBoldYel, buf2, kColorNrm);
-	SendMsgToChar(buf, ch);
+	std::vector<std::string> out_str = utils::Split(affects::DescribeActive(aff_copy, ", "), ',');
+	// "Аффекты: " передаём префиксом: учитывается в ширине строки, но не
+	// склеивается через ", " (иначе после метки была бы лишняя запятая).
+	SendMsgToChar(fmt::format("&y{}&w\r\n",
+							  utils::OutWordsList(out_str, ch->player_specials->saved.stringLength, ", ", "Аффекты: ")),
+				  ch);
 
-	// Routine to show what spells a char is affected by
-	if (!ch->affected.empty()) {
-		for (auto affect_i = ch->affected.begin(); affect_i != ch->affected.end(); ++affect_i) {
-			const auto aff = *affect_i;
-
-			if (aff->type == ESpell::kSolobonus) {
-				continue;
-			}
-
-			*buf2 = '\0';
-			strcpy(sp_name, MUD::Spell(aff->type).GetCName());
-			int mod = 0;
-			if (aff->battleflag == kAfPulsedec) {
-				mod = aff->duration / 51; //если в пульсах приводим к тикам 25.5 в сек 2 минуты
-			} else {
-				mod = aff->duration;
-			}
-			(mod + 1) / kSecsPerMudHour
-			? sprintf(buf2,
-					  "(%d %s)",
-					  (mod + 1) / kSecsPerMudHour + 1,
-					  GetDeclensionInNumber((mod + 1) / kSecsPerMudHour + 1, EWhat::kHour))
-			: sprintf(buf2, "(менее часа)");
-			snprintf(buf, kMaxStringLength, "%s%s%-21s %-12s%s ",
-					 *sp_name == '!' ? "Состояние  : " : "Заклинание : ",
-					 kColorBoldCyn, sp_name, buf2, kColorNrm);
-			*buf2 = '\0';
-			if (!IS_IMMORTAL(ch)) {
-				auto next_affect_i = affect_i;
-				++next_affect_i;
-				if (next_affect_i != ch->affected.end()) {
-					const auto &next_affect = *next_affect_i;
-					if (aff->type == next_affect->type) {
-						continue;
-					}
-				}
-			} else {
-				if (aff->modifier) {
-					sprintf(buf2, "%-3d к параметру: %s", aff->modifier, apply_types[(int) aff->location]);
-					strcat(buf, buf2);
-				}
-				if (aff->bitvector) {
-					if (*buf2) {
-						strcat(buf, ", устанавливает ");
-					} else {
-						strcat(buf, "устанавливает ");
-					}
-					strcat(buf, kColorBoldRed);
-					sprintbit(aff->bitvector, affected_bits, buf2);
-					strcat(buf, buf2);
-					strcat(buf, kColorNrm);
-				}
-			}
-			SendMsgToChar(strcat(buf, "\r\n"), ch);
-		}
-// отображение наград
-		for (const auto &aff : ch->affected) {
-			if (aff->type == ESpell::kSolobonus) {
-				int mod;
-				if (aff->battleflag == kAfPulsedec) {
-					mod = aff->duration / 51; //если в пульсах приводим к тикам	25.5 в сек 2 минуты
-				} else {
-					mod = aff->duration;
-				}
-				(mod + 1) / kSecsPerMudHour
-				? sprintf(buf2,
-						  "(%d %s)",
-						  (mod + 1) / kSecsPerMudHour + 1,
-						  GetDeclensionInNumber((mod + 1) / kSecsPerMudHour + 1, EWhat::kHour))
-				: sprintf(buf2, "(менее часа)");
-				snprintf(buf,
-						 kMaxStringLength,
-						 "Заклинание : %s%-21s %-12s%s ",
-						 kColorBoldCyn,
-						 "награда",
-						 buf2,
-						 kColorNrm);
-				*buf2 = '\0';
-				if (aff->modifier) {
-					sprintf(buf2, "%s%-3d к параметру: %s%s%s", (aff->modifier > 0) ? "+" : "",
-							aff->modifier, kColorBoldRed, apply_types[(int) aff->location], kColorNrm);
-					strcat(buf, buf2);
-				}
-				SendMsgToChar(strcat(buf, "\r\n"), ch);
-			}
-		}
+	if (ch->affected.empty()) {
+		return;
 	}
 
-	if (ch->is_morphed()) {
-		*buf2 = '\0';
-		SendMsgToChar("Автоаффекты звериной формы: ", ch);
-		const IMorph::affects_list_t &affs = ch->GetMorphAffects();
-		for (auto it = affs.cbegin(); it != affs.cend();) {
-			sprintbit(to_underlying(*it), affected_bits, buf2);
-			SendMsgToChar(std::string(kColorBoldYel) + std::string(buf2) + std::string(kColorNrm), ch);
-			if (++it != affs.end()) {
-				SendMsgToChar(", ", ch);
+	// --- Squashed view (mortals): one row per distinct effect, longest remaining duration, [xN]. ---
+	if (squash) {
+		std::vector<SquashRow> rows;
+		for (const auto &aff : ch->affected) {
+			std::string name = affects::AffectMsg(aff->affect_type, affects::EAffectMsgType::kShortDesc).c_str();
+			const int mod = AffectDisplayMod(aff);
+			auto it = std::find_if(rows.begin(), rows.end(),
+								   [&name](const SquashRow &r) { return r.name == name; });
+			if (it == rows.end()) {
+				rows.push_back(SquashRow{name, 0, 0, false, false});
+				it = std::prev(rows.end());
+			}
+			// Count stack-equivalents so a single multi-stack affect still reads [xN] as before,
+			// and several items granting the same effect collapse into one [xN] row.
+			it->count += (aff->stacks > 1 ? aff->stacks : 1);
+			if (mod < 0) {
+				it->permanent = true;
+			} else if (!it->has_timed || mod > it->best_mod) {
+				it->best_mod = mod;
+				it->has_timed = true;
 			}
 		}
+		for (const auto &r : rows) {
+			// A permanent source wins the label; otherwise show the longest remaining time.
+			// Ширина колонок -- в символах: fmt для корректного UTF-8 меряет её в кодовых
+			// точках, printf мерил бы в байтах (issue #3681).
+			std::string line = fmt::format("{}&C{:<21} {:<12}&w",
+										   (!r.name.empty() && r.name[0] == '!') ? "Состояние  : " : "Заклинание : ",
+										   r.name,
+										   FormatAffectDuration(r.permanent ? -1 : r.best_mod));
+			if (r.count > 1) {
+				line += fmt::format(" [x{}]", r.count);
+			}
+			// issue #3739: a permanent source used to swallow the timed cast collapsed into the same
+			// row, so "(постоянно) [x2]" told the player neither whether the spell was cast at all,
+			// nor how long it had left. Show the timed remainder next to the permanent label.
+			if (r.permanent && r.has_timed) {
+				line += fmt::format(" временный {}", FormatAffectDuration(r.best_mod));
+			}
+			line += "\r\n";
+			SendMsgToChar(line.c_str(), ch);
+		}
+		return;
+	}
+
+	// --- Full view (immortals, or "аффекты все"): one line per affect slot, no collapsing. ---
+	const bool immortal = privilege::IsImmortal(ch);
+	for (auto affect_i = ch->affected.begin(); affect_i != ch->affected.end(); ++affect_i) {
+		const auto aff = *affect_i;
+
+		// issue.affect-migration: name the affect by its own identity (affect_type kShortDesc);
+		// fall back to the casting spell's name for affects not yet migrated off Affect::type.
+		const std::string sp_name = affects::AffectMsg(aff->affect_type, affects::EAffectMsgType::kShortDesc);
+		const std::string duration = FormatAffectDuration(AffectDisplayMod(aff));
+		// Ширина колонок -- в символах: fmt для корректного UTF-8 меряет её в кодовых
+		// точках, printf мерил бы в байтах (issue #3681).
+		std::string line = fmt::format("{}&C{:<21} {:<12}&w ",
+									   !sp_name.empty() && sp_name[0] == '!' ? "Состояние  : " : "Заклинание : ",
+									   sp_name, duration);
+		if (immortal) {
+			bool has_modifier = false;
+			if (aff->modifier) {
+				line += fmt::format("{:<3} к параметру: {}", aff->modifier, apply_types[(int) aff->location]);
+				has_modifier = true;
+			}
+			// Show the affect's short-desc; an anonymous affect (kDefault/kUndefined) resolves
+			// via the shared kDefault sheaf fallback to "странное ощущение".
+			if (!sp_name.empty()) {
+				line += has_modifier ? ", устанавливает " : "устанавливает ";
+				line += fmt::format("&R{}&w", sp_name);
+			}
+		}
+		// Stack count (issue.affect-stacks): show [xN] for a multi-stack affect.
+		if (aff->stacks > 1) {
+			line += fmt::format(" [x{}]", aff->stacks);
+		}
+		// Potency for immortals / testers: the cast-roll strength (dice+skill+stat)
+		// recorded on the affect at impose time; drives the dispel comparison in
+		// CastUnaffects::DispelSucceeds. 0 means "not recorded" (charms, name-tied
+		// affects, etc.).
+		if (immortal || ch->IsFlagged(EPrf::kTester)) {
+			line += fmt::format(" [p: {:.1f}]", aff->potency);
+		}
+		line += "\r\n";
+		SendMsgToChar(line, ch);
 	}
 }
 

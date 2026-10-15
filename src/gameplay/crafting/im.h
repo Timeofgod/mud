@@ -17,14 +17,16 @@
 class ObjData;    // forward declaration to avoid inclusion of obj.hpp and any dependencies of that header.
 struct RoomData;    //
 
-// Определение основных классов ингредиентов: росль, живь, твердь
-#define        IM_CLASS_ROSL        0
-#define        IM_CLASS_JIV        1
-#define        IM_CLASS_TVERD        2
+// Классы ингредиентов (росль/живь/твердь) -- см. enum EIngredientClass в
+// entities_constants.h (заменил старые #define IM_CLASS_*).
 
-#define    IM_POWER_SLOT        1
-#define        IM_TYPE_SLOT        2
-#define     IM_INDEX_SLOT       3
+// Слоты значений магингредиента (индексы в values). Plain enum: имена
+// по-прежнему используются как int-индексы в GET_OBJ_VAL/set_val.
+enum EIngredientSlot {
+	IM_POWER_SLOT = 1,   // val[1] -- уровень (сила) ингредиента
+	IM_TYPE_SLOT = 2,    // val[2] -- номер типа (из im.lst)
+	IM_INDEX_SLOT = 3    // val[3] -- уровень ингредиента или VNUM моба
+};
 
 #define        IM_NPARAM            3
 
@@ -70,13 +72,13 @@ typedef struct _im_addon_tag im_addon;
 const int IM_MSG_OK = 0;
 const int IM_MSG_FAIL = 1;
 const int kImMsgDam = 2;
-const int kKnownRecipe = 1;
 extern int top_imtypes;
 
 // Описание рецепта
 struct _im_recipe_tag {
 	int id;            // номер из im.lst
 	char *name;        // название рецепта
+	char *str_id;      // уникальный строковый id (англ., CamelCase)
 	int k_improve;        // сложность прокачки
 	int result;        // VNUM прототипа результата
 	float k[IM_NPARAM], kp;    // курсы перевода
@@ -86,11 +88,11 @@ struct _im_recipe_tag {
 	std::array<char *, 3> msg_char;    // сообщения OK,FAIL,DAM
 	std::array<char *, 3> msg_room;    // сообщения OK,FAIL,DAM
 	int x, y;        // XdY - повреждения
-// +newbook.patch (Alisher)
-	std::array<int, kNumPlayerClasses> classknow; // владеет ли класс данным рецептом
-	int level; // на каком уровне можно выучить рецепт
-	int remort; // сколько ремортов необходимо для рецепта
-// -newbook.patch (Alisher)
+	bool damage_enabled;    // наносить ли урон при критическом провале
+	// issue.class-recipes: принадлежность рецепта классам (владение, уровень, реморт)
+	// больше НЕ хранится здесь. Это свойство класса, а не рецепта: см. секцию
+	// <ingredient_magic> в cfg/classes/pc_*.xml и CharClassInfo::FindIngredientRecipe().
+	// Рецепт адресуется из класса по str_id.
 };
 typedef struct _im_recipe_tag im_recipe;
 
@@ -118,6 +120,7 @@ int im_get_char_rskill_count(CharData *ch);
 void trg_recipeturn(CharData *ch, int rid, int recipediff);
 void AddRecipe(CharData *ch, int rid, int recipediff);
 int im_get_recipe_by_name(char *name);
+int im_get_recipe_by_str_id(const char *str_id);
 im_rskill *im_get_char_rskill(CharData *ch, int rid);
 void compose_recipe(CharData *ch, char *argument, int subcmd);
 void forget_recipe(CharData *ch, char *argument, int subcmd);

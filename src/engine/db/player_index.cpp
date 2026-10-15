@@ -1,0 +1,525 @@
+/**
+\file player_index.cpp - a part of the Bylins engine.
+\authors Created by Sventovit.
+\date 22.11.2025.
+\brief Brief description.
+\detail Detail description.
+*/
+
+#include <fmt/format.h>
+
+#include "player_index.h"
+#include "utils/native_text.h"
+
+#include "administration/accounts.h"
+#include "global_objects.h"
+#include "engine/entities/char_player.h"
+#include "gameplay/statistics/top.h"
+#include "engine/network/descriptor_data.h"
+#include "engine/core/comm.h"
+#include "gameplay/clans/house.h"
+#include "administration/names.h"
+#include "engine/db/db.h"
+#include "engine/structs/structs.h"
+#include "utils/utils_parse.h"
+
+PlayersIndex &player_table = GlobalObjects::player_table();
+
+bool MustBeDeleted(CharData *short_ch);
+
+PlayerIndexElement::PlayerIndexElement(std::string_view name) {
+	set_name(name);
+}
+
+void PlayerIndexElement::set_name(std::string_view name) {
+	name_ = name;
+	utils::ConvertToLow(name_);
+}
+
+// ===============================================================================
+
+const std::size_t PlayersIndex::NOT_FOUND = ~static_cast<std::size_t>(0);
+
+PlayersIndex::~PlayersIndex() {
+	log("~PlayersIndex()");
+	// issue #3574: timer -- сырой SaveInfo*, аллоцируется при boot и живёт весь ран.
+	// Освобождаем в деструкторе контейнера (один раз, безопасно). В деструкторе
+	// элемента нельзя -- при росте вектора элементы копируются/перемещаются и был бы
+	// double-free. Без этого LeakSanitizer репортит таймеры как утечку на shutdown.
+	for (auto &element : *this) {
+		delete element.timer;
+		element.timer = nullptr;
+	}
+}
+
+std::size_t PlayersIndex::Append(const PlayerIndexElement &element) {
+	const auto index = size();
+
+	push_back(element);
+	m_id_to_index.emplace(element.uid(), index);
+	AddNameToIndex(element.name(), index);
+
+	return index;
+}
+
+std::size_t PlayersIndex::GetIndexByName(const char *name) const {
+	const auto i = m_name_to_index.find(name);
+	if (i != m_name_to_index.end()) {
+		return i->second;
+	}
+
+	return NOT_FOUND;
+}
+
+void PlayersIndex::SetName(const std::size_t index, const char *name) {
+	const auto i = m_name_to_index.find(operator[](index).name());
+	m_name_to_index.erase(i);
+	operator[](index).set_name(name);
+	AddNameToIndex(name, index);
+}
+
+void PlayersIndex::AddNameToIndex(const std::string &name, const std::size_t index) {
+	if (m_name_to_index.find(name) != m_name_to_index.end()) {
+		log("SYSERR: Detected attempt to create player with duplicate name.");
+		abort();
+	}
+
+	m_name_to_index.emplace(name, index);
+}
+
+namespace {
+template <std::size_t N>
+struct fnv_params;
+template <>
+struct fnv_params<8> {
+	static constexpr std::size_t offset_basis = 14695981039346656037ULL;
+	static constexpr std::size_t prime        = 1099511628211ULL;
+};
+template <>
+struct fnv_params<4> {
+	static constexpr std::size_t offset_basis = 2166136261U;
+	static constexpr std::size_t prime        = 16777619U;
+};
+}  // namespace
+std::size_t PlayersIndex::hasher::operator()(const std::string &value) const {
+	// FNV-1a implementation
+	using p = fnv_params<sizeof(std::size_t)>;
+	std::size_t result = p::offset_basis;
+	// Регистр сворачивается ПО СИМВОЛУ, а не по байту (issue #3681): побайтная свёртка
+	// оставляет многобайтные буквы нетронутыми, из-за чего "Дрегвий" и "дрегвий" дают разные
+	// хэши и точный поиск персонажа промахивается. Компаратор ниже обязан согласоваться.
+	std::string folded = value;
+	native_text::to_lower(folded);
+	for (unsigned char c : folded) {
+		result ^= static_cast<std::size_t>(c);
+		result *= p::prime;
+	}
+	return result;
+}
+
+bool PlayersIndex::equal_to::operator()(const std::string &left, const std::string &right) const {
+	// Посимвольное сравнение без учёта регистра -- в паре к hasher выше.
+	if (native_text::compare_ci(left, right) != 0) {
+		return false;
+	}
+
+	return true;
+}
+
+/// ==================== TOOLS ================================
+
+bool IsPlayerExists(const long id) { return player_table.IsPlayerExists(id); }
+
+long CmpPtableByName(char *name, int len) {
+	// len -- в символах: вызывающие передают kMinNameLength, то есть «столько букв».
+	len = std::min(len, static_cast<int>(native_text::char_count(name)));
+	char search_name[kMaxInputLength];
+	one_argument(name, search_name);
+	/* Anton Gorev (2015/12/29): I am not sure but I guess that linear search is not the best solution here.
+	 * TODO: make map helper (MAPHELPER). */
+	for (std::size_t i = 0; i < player_table.size(); i++) {
+		std::string_view pname = player_table[i].name();
+		if (utils::IsSamePrefix(pname.data(), search_name,
+								std::min<std::size_t>(len, native_text::char_count(pname)))) {
+			return static_cast<long>(i);
+		}
+	}
+	return -1;
+}
+
+long GetPlayerTablePosByName(const char *name) {
+	char search_name[kMaxInputLength];
+	one_argument(name, search_name);
+	// Ищем по имени в хэше индекса, а не линейным перебором всей таблицы (MAPHELPER).
+	// «Нет в индексе» -- обычный ответ, а не ошибка: запись в индексе заводится только
+	// после подтверждения почты (DoAfterEmailConfirm), поэтому недосозданный персонаж
+	// сюда попадает штатно. Места, где отсутствие действительно ошибка, пишут в лог сами.
+	const auto index = player_table.GetIndexByName(search_name);
+	if (index == PlayersIndex::NOT_FOUND) {
+		return -1;
+	}
+	return static_cast<long>(index);
+}
+
+long GetPtableByUnique(long unique) {
+	/* Anton Gorev (2015/12/29): see (MAPHELPER) comment. */
+	for (std::size_t i = 0; i < player_table.size(); i++) {
+		if (player_table[i].uid() == unique) {
+			return static_cast<long>(i);
+		}
+	}
+	return 0;
+}
+
+long GetPlayerIdByName(char *name) {
+	char search_name[kMaxInputLength];
+	one_argument(name, search_name);
+	/* Anton Gorev (2015/12/29): see (MAPHELPER) comment. */
+	for (const auto &i : player_table) {
+		if (!str_cmp(i.name(), search_name)) {
+			return (i.uid());
+		}
+	}
+
+	return (-1);
+}
+
+int GetPlayerUidByName(int id) {
+	/* Anton Gorev (2015/12/29): see (MAPHELPER) comment. */
+	for (auto &i : player_table) {
+		if (i.uid() == id) {
+			return i.uid();
+		}
+	}
+	return -1;
+}
+
+std::string GetNameById(long id) {
+	/* Anton Gorev (2015/12/29): see (MAPHELPER) comment. */
+	for (const auto &i : player_table) {
+		if (i.uid() == id) {
+			return i.name();
+		}
+	}
+	return {};
+}
+
+std::string GetPlayerNameByUnique(int unique) {
+	/* Anton Gorev (2015/12/29): see (MAPHELPER) comment. */
+	for (auto &i : player_table) {
+		if (i.uid() == unique) {
+			return i.name();
+		}
+	}
+	return {};
+}
+
+int GetLevelByUnique(long unique) {
+	int level = 0;
+
+	/* Anton Gorev (2015/12/29): see (MAPHELPER) comment. */
+	for (auto &i : player_table) {
+		if (i.uid() == unique) {
+			level = i.level;
+		}
+	}
+	return level;
+}
+
+long GetLastlogonByUnique(long unique) {
+	long time = 0;
+
+	/* Anton Gorev (2015/12/29): see (MAPHELPER) comment. */
+	for (auto &i : player_table) {
+		if (i.uid() == unique) {
+			time = i.last_logon;
+		}
+	}
+	return time;
+}
+
+int IsCorrectUnique(int unique) {
+	/* Anton Gorev (2015/12/29): see (MAPHELPER) comment. */
+	for (auto &i : player_table) {
+		if (i.uid() == unique) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+void RecreateSaveinfo(size_t number) {
+	delete player_table[number].timer;
+	NEWCREATE(player_table[number].timer);
+}
+
+// данная функция работает с неполностью загруженным персонажем
+// подробности в комментарии к load_char_ascii
+void ActualizePlayersIndex(char *name) {
+	int deleted;
+	char filename[kMaxStringLength];
+
+	// По символу, а не по байту (issue #3681). Побайтная свёртка бьёт многобайтные буквы:
+	// у "г" второй байт UTF-8 равен 0xB3, а в KOI8-R это "Ё", и таблица опускала его в 0xA3 --
+	// буква превращалась в "У". Имя файла получалось неверным, персонаж не загружался и просто
+	// не попадал в индекс (в боевом мире так терялось 1278 из 9117 записей).
+	native_text::to_lower(name);
+	if (get_filename(name, filename, kPlayersFile)) {
+		Player t_short_ch;
+		Player *short_ch = &t_short_ch;
+		deleted = 1;
+		// персонаж загружается неполностью
+		if (LoadPlayerCharacter(name, short_ch, ELoadCharFlags::kReboot) > -1) {
+			// если чар удален или им долго не входили, то не создаем для него запись
+			if (!MustBeDeleted(short_ch)) {
+				deleted = 0;
+
+				PlayerIndexElement element(GET_NAME(short_ch));
+
+				element.mail = GET_EMAIL(short_ch);
+				for (auto &c : element.mail) c = LOWER(c);
+
+				element.last_ip = short_ch->player_specials->saved.LastIP;
+
+				element.set_uid(short_ch->get_uid());
+				element.level = GetRealLevel(short_ch);
+				element.remorts = short_ch->get_remort();
+				element.timer = nullptr;
+				element.plr_class = short_ch->GetClass();
+				if (short_ch->IsFlagged(EPlrFlag::kDeleted)) {
+					element.last_logon = -1;
+					element.activity = -1;
+				} else {
+					element.last_logon = short_ch->get_last_logon();
+					element.activity = number(0, kObjectSaveActivity - 1);
+				}
+
+#ifdef TEST_BUILD
+				log("entry: char:%s level:%d mail:%s ip:%s", element.name().c_str(), element.level, element.mail.c_str(), element.last_ip.c_str());
+#endif
+
+				top_idnum = std::max(top_idnum, short_ch->get_uid());
+				TopPlayer::Refresh(short_ch, true);
+
+				log("Adding new player %s", element.name().c_str());
+				player_table.Append(element);
+			} else {
+				log("Delete %s from account email: %s",
+					GET_NAME(short_ch),
+					short_ch->get_account()->get_email().c_str());
+				short_ch->get_account()->remove_player(short_ch->get_uid());
+			}
+		} else {
+			log("SYSERR: Failed to load player %s.", name);
+		}
+
+		// если чар уже удален, то стираем с диска его файл
+		if (deleted) {
+			log("Player %s already deleted - kill player file", name);
+			remove(filename);
+			// 2) Remove all other files
+			get_filename(name, filename, kAliasFile);
+			remove(filename);
+			get_filename(name, filename, kScriptVarsFile);
+			remove(filename);
+			get_filename(name, filename, kPersDepotFile);
+			remove(filename);
+			get_filename(name, filename, kShareDepotFile);
+			remove(filename);
+			get_filename(name, filename, kPurgeDepotFile);
+			remove(filename);
+			get_filename(name, filename, kTextCrashFile);
+			remove(filename);
+			get_filename(name, filename, kTimeCrashFile);
+			remove(filename);
+		}
+	}
+}
+
+void BuildPlayerIndexNew() {
+	FILE *players;
+	char name[kMaxInputLength], playername[kMaxInputLength];
+
+	if (!(players = fopen(LIB_PLRS "players.lst", "r"))) {
+		log("Players list empty...");
+		return;
+	}
+
+	while (get_line(players, name)) {
+		if (!*name || *name == ';')
+			continue;
+		if (sscanf(name, "%s ", playername) == 0)
+			continue;
+
+		// players.lst читается обычным fopen, минуя FBFILE, поэтому границу кодировки надо
+		// пройти здесь: иначе индекс останется в KOI8-R, а поиск пойдёт по нативной кодировке
+		// и ни одного существующего персонажа не найдёт (issue #3681).
+		const std::string native_name = native_text::from_disk_line(playername);
+		strncpy(playername, native_name.c_str(), sizeof(playername) - 1);
+		playername[sizeof(playername) - 1] = '\0';
+
+		if (!player_table.IsPlayerExists(playername)) {
+			ActualizePlayersIndex(playername);
+		}
+	}
+
+	fclose(players);
+
+	player_table.GetNameAdviser().init();
+}
+
+void FlushPlayerIndex() {
+	FILE *players;
+	char name[kMaxStringLength];
+
+	if (!(players = fopen(LIB_PLRS "players.lst", "w+"))) {
+		log("Can't save players list...");
+		return;
+	}
+
+	std::size_t saved = 0;
+	for (auto &i : player_table) {
+		if (i.name().empty()) {
+			continue;
+		}
+
+		++saved;
+		// Граница записи: индекс лежит в нативной кодировке, имя уходит как есть. Чтение
+		// (from_disk_line) принимает и старый KOI8-R (issue #3787).
+		sprintf(name, "%s %ld %d %d\n",
+				i.name().c_str(),
+				i.uid(), i.level, i.last_logon);
+		fputs(name, players);
+	}
+	fclose(players);
+	log("Сохранено индексов %zd (считано при загрузке %zd)", saved, player_table.size());
+}
+
+// данная функция работает с неполностью загруженным персонажем
+// подробности в комментарии к load_char_ascii
+bool MustBeDeleted(CharData *short_ch) {
+	int ci, timeout;
+
+	if (short_ch->IsFlagged(EPlrFlag::kNoDelete)) {
+		return false;
+	}
+
+	if (short_ch->IsFlagged(EPlrFlag::kDeleted)) {
+		return true;
+	}
+
+	if (short_ch->get_remort()) {
+		return false;
+	}
+
+	timeout = -1;
+	for (ci = 0; ci == 0 || pclean_criteria[ci].level > pclean_criteria[ci - 1].level; ci++) {
+		if (short_ch->GetLevel() <= pclean_criteria[ci].level) {
+			timeout = pclean_criteria[ci].days;
+			break;
+		}
+	}
+	if (timeout >= 0) {
+		timeout *= kSecsPerRealDay;
+		if ((time(nullptr) - short_ch->get_last_logon()) > timeout) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+
+// ---- Identity lookups moved from interpreter.cpp (issue.interpreter-cleaning Bucket 3) ----
+
+// ищет дескриптор игрока(онлайн состояние) по его УИДу
+DescriptorData *DescriptorByUid(long uid) {
+	DescriptorData *d = nullptr;
+
+	for (d = descriptor_list; d; d = d->next) {
+		if (d->character && d->character->get_uid() == uid) {
+			break;
+		}
+	}
+	return (d);
+}
+
+int GetUniqueByName(std::string name, bool god) {
+	for (auto &i : player_table) {
+		if (i.uid() != -1 && CompareParam(name, i.name(), true)) {
+			if (!god) {
+				return i.uid();
+			} else {
+				if (i.level < kLvlImmortal) {
+					return i.uid();
+				} else {
+					return -1;
+				}
+			}
+		}
+	}
+	return 0;
+}
+
+bool IsActiveUser(long unique) {
+	time_t currTime = time(nullptr);
+	time_t charLogon;
+	int inactivityDelay = /* day*/ (3600 * 24) * /*days count*/ 60;
+	for (auto &i : player_table) {
+		if (i.uid() == unique) {
+			charLogon = i.last_logon;
+			return currTime - charLogon < inactivityDelay;
+		}
+	}
+	return false;
+}
+
+// ищет имя игрока по его УИДу, второй необязательный параметр - учитывать или нет БОГОВ
+std::string GetNameByUnique(long unique, bool god) {
+	std::string empty;
+
+	for (auto &i : player_table) {
+		if (i.uid() == unique) {
+			if (!god) {
+				return i.name();
+			} else {
+				if (i.level < kLvlImmortal) {
+					return i.name();
+				} else {
+					return empty;
+				}
+			}
+		}
+	}
+
+	return empty;
+}
+
+// * Добровольное удаление персонажа через игровое меню.
+void DeletePcByHimself(const char *name) {
+	Player t_st;
+	Player *st = &t_st;
+	int id = LoadPlayerCharacter(name, st, ELoadCharFlags::kFindId);
+
+	if (id >= 0) {
+		st->SetFlag(EPlrFlag::kDeleted);
+		NewNames::remove(st);
+		if (NAME_FINE(st)) {
+			player_table.GetNameAdviser().add(GET_NAME(st));
+		}
+		Clan::remove_from_clan(st->get_uid());
+		st->save_char();
+
+		ClearCrashSavedObjects(id);
+		player_table[id].set_uid(0);
+		player_table[id].level = -1;
+		player_table[id].remorts = -1;
+		player_table[id].last_logon = -1;
+		player_table[id].activity = -1;
+		player_table[id].mail.clear();
+		player_table[id].last_ip.clear();
+	}
+}
+
+// vim: ts=4 sw=4 tw=0 noet syntax=cpp :

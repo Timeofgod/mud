@@ -9,12 +9,14 @@
 ***************************************************************************/
 
 #include "olc.h"
+#include <fmt/format.h>
 
 #include "engine/db/obj_prototypes.h"
 #include "engine/entities/obj_data.h"
 #include "engine/ui/interpreter.h"
 #include "engine/core/comm.h"
 #include "engine/db/db.h"
+#include "engine/db/world_data_source_manager.h"
 #include "engine/scripting/dg_olc.h"
 #include "engine/ui/color.h"
 #include "gameplay/crafting/item_creation.h"
@@ -102,12 +104,51 @@ olc_data::olc_data()
 	  script_mode(0),
 	  trigger_position(0),
 	  item_type(0),
+	  lua_format_request_id(0),
+	  lua_format_save_on_completion(false),
 	  script(0),
 	  storage(0) {
 
 }
 
 //------------------------------------------------------------
+
+// issue #3582: "<olc> save all" -- перезаписать на диск ВСЕ зоны данного типа
+// (redit->комнаты, oedit->объекты, medit->мобы, zedit->зоны, trigedit->триггеры)
+// текущим сериализатором.
+// Массовая операция по всему миру -- только для имплов. Удобно для разовой
+// конвертации формата мира (заменяет отдельную ветку-инструмент).
+static void olc_save_all(CharData *ch, int subcmd) {
+	if (!privilege::IsImpl(ch)) {
+		SendMsgToChar("Запись всех зон доступна только старшим богам.\r\n", ch);
+		return;
+	}
+	auto *data_source = world_loader::WorldDataSourceManager::Instance().GetDataSource();
+	if (!data_source) {
+		SendMsgToChar("Нет активного источника мира.\r\n", ch);
+		return;
+	}
+	// Save*-методы yaml-источника не бросают исключений (ошибки файла логируют
+	// и делают return), поэтому try/catch тут не нужен. Один switch по subcmd
+	// прямо в цикле пишет зону и заодно запоминает type для лога/сообщения.
+	const char *type = "";
+	for (ZoneRnum zrn = 0; zrn < static_cast<ZoneRnum>(zone_table.size()); zrn++) {
+		switch (subcmd) {
+			case kScmdOlcRedit: data_source->SaveRooms(zrn);   type = "room";   break;
+			case kScmdOlcZedit: data_source->SaveZone(zrn);    type = "zone";   break;
+			case kScmdOlcMedit: data_source->SaveMobs(zrn);    type = "mobile"; break;
+			case kScmdOlcOedit: data_source->SaveObjects(zrn); type = "object"; break;
+			case kScmdOlcTrigedit: data_source->SaveTriggers(zrn, -1, 0); type = "trigger"; break;
+			default:
+				SendMsgToChar("Для этого типа запись всех зон не поддерживается.\r\n", ch);
+				return;
+		}
+	}
+	const int count = static_cast<int>(zone_table.size());
+	mudlog(fmt::format("OLC: {} saves all {}s ({} zones).", GET_NAME(ch), type, count), LGH, std::max(kLvlImplementator, GET_INVIS_LEV(ch)), SYSLOG, true);
+	olc_log("%s save all %s (%d zones)", GET_NAME(ch), type, count);
+	SendMsgToChar(fmt::format("Записаны на диск все зоны ({}): {}.\r\n", type, count), ch);
+}
 
 /*
  * Exported ACMD do_olc function.
@@ -131,8 +172,9 @@ void do_olc(CharData *ch, char *argument, int cmd, int subcmd) {
 	}
 
 	// * Parse any arguments.
-	two_arguments(argument, buf1, buf2);
-	if (!*buf1)        // No argument given.
+	char first[kMaxInputLength], second[kMaxInputLength];
+	two_arguments(argument, first, second);
+	if (!*first)        // No argument given.
 	{
 		switch (subcmd) {
 			case kScmdOlcZedit:
@@ -140,15 +182,19 @@ void do_olc(CharData *ch, char *argument, int cmd, int subcmd) {
 				break;
 			case kScmdOlcTrigedit:
 			case kScmdOlcOedit:
-			case kScmdOlcMedit: sprintf(buf, "Укажите %s VNUM для редактирования.\r\n", olc_scmd_info[subcmd].text);
-				SendMsgToChar(buf, ch);
+			case kScmdOlcMedit: SendMsgToChar(fmt::format("Укажите {} VNUM для редактирования.\r\n", olc_scmd_info[subcmd].text), ch);
 				return;
 		}
-	} else if (!a_isdigit(*buf1)) {
-		if (strn_cmp("save", buf1, 4) == 0
-			|| (lock = !strn_cmp("lock", buf1, 4)) == true
-			|| (unlock = !strn_cmp("unlock", buf1, 6)) == true) {
-			if (!*buf2) {
+	} else if (!a_isdigit(*first)) {
+		if (utils::IsAbbr("save", first)
+			|| (lock = utils::IsAbbr("lock", first)) == true
+			|| (unlock = utils::IsAbbr("unlock", first)) == true) {
+			// issue #3582: "save all" -- записать на диск все зоны данного типа.
+			if (utils::IsAbbr("save", first) && *second && !str_cmp(second, "all")) {
+				olc_save_all(ch, subcmd);
+				return;
+			}
+			if (!*second) {
 				if (GET_OLC_ZONE(ch)) {
 					save = 1;
 					number = (GET_OLC_ZONE(ch) * 100);
@@ -158,7 +204,7 @@ void do_olc(CharData *ch, char *argument, int cmd, int subcmd) {
 				}
 			} else {
 				save = 1;
-				number = atoi(buf2) * 100;
+				number = atoi(second) * 100;
 			}
 		} else if (subcmd == kScmdOlcZedit && (GetRealLevel(ch) >= kLvlBuilder || ch->IsFlagged(EPrf::kCoderinfo))) {
 			SendMsgToChar("Создание новых зон отключено.\r\n", ch);
@@ -170,16 +216,14 @@ void do_olc(CharData *ch, char *argument, int cmd, int subcmd) {
 	}
 	// * If a numeric argument was given, get it.
 	if (number == -1) {
-		number = atoi(buf1);
+		number = atoi(first);
 	}
 
 	// * Check that whatever it isn't already being edited.
 	for (d = descriptor_list; d; d = d->next) {
 		if (d->state == olc_scmd_info[subcmd].con_type) {
 			if (d->olc && OLC_NUM(d) == number) {
-				sprintf(buf, "%s в настоящий момент редактируется %s.\r\n",
-						olc_scmd_info[subcmd].text, GET_PAD(d->character, 4));
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("{} в настоящий момент редактируется {}.\r\n", olc_scmd_info[subcmd].text, GET_PAD(d->character, 4)), ch);
 				return;
 			}
 		}
@@ -187,7 +231,7 @@ void do_olc(CharData *ch, char *argument, int cmd, int subcmd) {
 	d = ch->desc;
 
 	// лок/анлок редактирования зон только 34м и по привилегии
-	if ((lock || unlock) && !IS_IMPL(ch) && !privilege::CheckFlag(d->character.get(), privilege::kFullzedit)) {
+	if ((lock || unlock) && !privilege::IsImpl(ch) && !privilege::CheckFlag(d->character.get(), privilege::kFullzedit)) {
 		SendMsgToChar("Вы не можете использовать эту команду.\r\n", ch);
 		return;
 	}
@@ -205,10 +249,12 @@ void do_olc(CharData *ch, char *argument, int cmd, int subcmd) {
 	if (lock) {
 		zone_table[OLC_ZNUM(d)].locked = true;
 		SendMsgToChar("Защищаю зону от записи.\r\n", ch);
-		sprintf(buf, "(GC) %s has locked zone %d", GET_NAME(ch), zone_table[OLC_ZNUM(d)].vnum);
 		olc_log("%s locks zone %d", GET_NAME(ch), zone_table[OLC_ZNUM(d)].vnum);
-		mudlog(buf, LGH, kLvlImplementator, SYSLOG, true);
-		zedit_save_to_disk(OLC_ZNUM(d));
+		mudlog(fmt::format("(GC) {} has locked zone {}", GET_NAME(ch), zone_table[OLC_ZNUM(d)].vnum),
+			   LGH, kLvlImplementator, SYSLOG, true);
+		
+		auto* data_source = world_loader::WorldDataSourceManager::Instance().GetDataSource();
+			data_source->SaveZone(OLC_ZNUM(d));
 		delete d->olc;
 		return;
 	}
@@ -216,10 +262,12 @@ void do_olc(CharData *ch, char *argument, int cmd, int subcmd) {
 	if (unlock) {
 		zone_table[OLC_ZNUM(d)].locked = false;
 		SendMsgToChar("Снимаю защиту от записи.\r\n", ch);
-		sprintf(buf, "(GC) %s has unlocked zone %d", GET_NAME(ch), zone_table[OLC_ZNUM(d)].vnum);
 		olc_log("%s unlocks zone %d", GET_NAME(ch), zone_table[OLC_ZNUM(d)].vnum);
-		mudlog(buf, LGH, kLvlImplementator, SYSLOG, true);
-		zedit_save_to_disk(OLC_ZNUM(d));
+		mudlog(fmt::format("(GC) {} has unlocked zone {}", GET_NAME(ch), zone_table[OLC_ZNUM(d)].vnum),
+			   LGH, kLvlImplementator, SYSLOG, true);
+		
+		auto* data_source = world_loader::WorldDataSourceManager::Instance().GetDataSource();
+			data_source->SaveZone(OLC_ZNUM(d));
 		delete d->olc;
 		return;
 	}
@@ -257,20 +305,21 @@ void do_olc(CharData *ch, char *argument, int cmd, int subcmd) {
 			SendMsgToChar("Родной(ая,ое), объясни по людски - что записать.\r\n", ch);
 			return;
 		}
-		sprintf(buf, "Saving all %ss in zone %d.\r\n", type, zone_table[OLC_ZNUM(d)].vnum);
-		SendMsgToChar(buf, ch);
-		sprintf(buf, "OLC: %s saves %s info for zone %d.", GET_NAME(ch), type, zone_table[OLC_ZNUM(d)].vnum);
+		SendMsgToChar(fmt::format("Saving all {}s in zone {}.\r\n", type, zone_table[OLC_ZNUM(d)].vnum), ch);
 		olc_log("%s save %s in Z%d", GET_NAME(ch), type, zone_table[OLC_ZNUM(d)].vnum);
-		mudlog(buf, LGH, std::max(kLvlBuilder, GET_INVIS_LEV(ch)), SYSLOG, true);
+		mudlog(fmt::format("OLC: {} saves {} info for zone {}.", GET_NAME(ch), type, zone_table[OLC_ZNUM(d)].vnum),
+			   LGH, std::max(kLvlBuilder, GET_INVIS_LEV(ch)), SYSLOG, true);
+
+		auto* data_source = world_loader::WorldDataSourceManager::Instance().GetDataSource();
 
 		switch (subcmd) {
-			case kScmdOlcRedit: redit_save_to_disk(OLC_ZNUM(d));
+			case kScmdOlcRedit: data_source->SaveRooms(OLC_ZNUM(d));
 				break;
-			case kScmdOlcZedit: zedit_save_to_disk(OLC_ZNUM(d));
+			case kScmdOlcZedit: data_source->SaveZone(OLC_ZNUM(d));
 				break;
-			case kScmdOlcOedit: oedit_save_to_disk(OLC_ZNUM(d));
+			case kScmdOlcOedit: data_source->SaveObjects(OLC_ZNUM(d));
 				break;
-			case kScmdOlcMedit: medit_save_to_disk(OLC_ZNUM(d));
+			case kScmdOlcMedit: data_source->SaveMobs(OLC_ZNUM(d));
 				break;
 		}
 		delete d->olc;
@@ -338,8 +387,7 @@ void olc_saveinfo(CharData *ch) {
 	}
 
 	for (entry = olc_save_list; entry; entry = entry->next) {
-		sprintf(buf, " - %s for zone %d.\r\n", save_info_msg[(int) entry->type], entry->zone);
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format(" - {} for zone {}.\r\n", save_info_msg[(int) entry->type], entry->zone), ch);
 	}
 }
 
@@ -348,7 +396,7 @@ void olc_saveinfo(CharData *ch) {
 // ------------------------------------------------------------
 
 // * Add an entry to the 'to be saved' list.
-void olc_add_to_save_list(int zone, byte type) {
+void olc_add_to_save_list(int zone, int type) {
 	struct olc_save_info *lnew;
 
 	// * Return if it's already in the list.
@@ -364,7 +412,7 @@ void olc_add_to_save_list(int zone, byte type) {
 }
 
 // * Remove an entry from the 'to be saved' list.
-void olc_remove_from_save_list(int zone, byte type) {
+void olc_remove_from_save_list(int zone, int type) {
 	struct olc_save_info **entry;
 	struct olc_save_info *temp;
 
@@ -393,8 +441,9 @@ void disp_planes_values(DescriptorData *d, const char *names[], short num_column
 			c++;
 		if (d->character->GetLevel() < kLvlImplementator && *names[counter] == '*')
 			continue;
-		sprintf(buf, "&g%c%d&n) %-30.30s %s", c, plane, names[counter], !(++column % num_column) ? "\r\n" : "");
-		SendMsgToChar(buf, d->character.get());
+		SendMsgToChar(fmt::format("&g{}{}&n) {:<30.30} {}",
+								  c, plane, names[counter], !(++column % num_column) ? "\r\n" : ""),
+					  d->character.get());
 	}
 }
 
@@ -403,6 +452,11 @@ void disp_planes_values(DescriptorData *d, const char *names[], short num_column
  * saved to a file.  Use it only on buffers, not on the original
  * strings.
  */
+std::string strip_string(std::string text) {
+	std::erase(text, '\r');
+	return text;
+}
+
 void strip_string(char *buffer) {
 	char *ptr, *str;
 
@@ -422,8 +476,9 @@ void strip_string(char *buffer) {
  * attatched to a descriptor, sets all flags back to how they
  * should be.
  */
-void cleanup_olc(DescriptorData *d, byte cleanup_type) {
+void cleanup_olc(DescriptorData *d, int cleanup_type) {
 	if (d->olc) {
+		TrigeditSavePendingLuaOnCleanup(d);
 
 		// Освободить редактируемый триггер
 		if (OLC_TRIG(d)) {
@@ -490,6 +545,7 @@ void cleanup_olc(DescriptorData *d, byte cleanup_type) {
 				true, d->character.get(), 0, 0, kToRoom);
 		}
 		delete d->olc;
+		d->olc = nullptr;
 	}
 }
 

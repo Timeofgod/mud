@@ -10,7 +10,7 @@
 #include "engine/entities/obj_data.h"
 #include "engine/structs/structs.h"
 
-#include <stdarg.h>
+#include <cstdarg>
 
 #include <set>
 #include <map>
@@ -31,7 +31,7 @@ bool start();
 using id_t = std::string;    ///< Common type for IDs.
 
 class Cases {
-	using cases_t = std::array<std::string, ECase::kLastCase + 1>;
+	using cases_t = std::array<std::string, grammar::ECase::kLastCase + 1>;
 
  public:
 	using shared_ptr = std::shared_ptr<Cases>;

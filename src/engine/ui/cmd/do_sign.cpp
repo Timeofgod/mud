@@ -1,10 +1,13 @@
+#include <fmt/format.h>
+
 #include "engine/db/obj_prototypes.h"
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/clans/house.h"
 #include "gameplay/mechanics/liquid.h"
 #include "gameplay/fight/pk.h"
 #include "engine/core/utils_char_obj.inl"
+#include "utils/native_text.h"
 
 // чтоб не абузили длину. персональные пофиг, а клановые не надо.
 const int kMaxLabelLength = 32;
@@ -61,15 +64,20 @@ void DoSign(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("На чем царапаем?\r\n", ch);
 	} else {
 		if (!(target = get_obj_in_list_vis(ch, objname, ch->carrying))) {
-			sprintf(buf, "У вас нет \'%s\'.\r\n", objname);
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", objname), ch);
 		} else {
 			if (erase_only) {
 				target->remove_custom_label();
+				// issue #3568: логируем операции с метками -- для корреляции в Loki
+				// (custom_label нарушает rule-of-3, подозреваем double-free).
+				log("[Custom label] %s стёр метку с %s #%d",
+						GET_NAME(ch), target->get_short_description().c_str(), GET_OBJ_VNUM(target));
 				act("Вы затерли надписи на $o5.", false, ch, target, nullptr, kToChar);
 			} else if (labels) {
-				if (strlen(labels) > kMaxLabelLength)
-					labels[kMaxLabelLength] = '\0';
+				// Предел -- в символах: по байтам русская метка обрезалась вдвое короче
+				// и могла разрубить символ пополам (issue #3681).
+				if (native_text::char_count(labels) > static_cast<std::size_t>(kMaxLabelLength))
+					labels[native_text::char_offset(labels, kMaxLabelLength)] = '\0';
 
 				// убираем тильды
 				for (int i = 0; labels[i] != '\0'; i++)
@@ -77,16 +85,21 @@ void DoSign(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 						labels[i] = '-';
 
 				std::shared_ptr<custom_label> label(new custom_label());
-				label->text_label = str_dup(labels);
+				label->text_label = labels;
 				label->author = ch->get_uid();
-				label->author_mail = str_dup(GET_EMAIL(ch));
+				label->author_mail = GET_EMAIL(ch);
 
 				const char *msg = "Вы покрыли $o3 каракулями, которые никто кроме вас не разберет.";
 				if (clan && ch->player_specials->clan) {
-					label->clan_abbrev = str_dup(ch->player_specials->clan->GetAbbrev());
+					label->clan_abbrev = ch->player_specials->clan->GetAbbrev();
 					msg = "Вы покрыли $o3 каракулями, понятными разве что вашим соратникам.";
 				}
 				target->set_custom_label(label);
+				// issue #3568: логируем операции с метками -- для корреляции в Loki
+				// (custom_label нарушает rule-of-3, подозреваем double-free).
+				log("[Custom label] %s нанёс метку '%s'%s на %s #%d",
+						GET_NAME(ch), labels, clan ? " (клан)" : "",
+						target->get_short_description().c_str(), GET_OBJ_VNUM(target));
 				act(msg, false, ch, target, nullptr, kToChar);
 			}
 		}
@@ -108,8 +121,8 @@ std::string char_get_custom_label(ObjData *obj, CharData *ch) {
 	const char *delim_r = nullptr;
 
 	// разные скобки для клановых и личных
-	if (obj->get_custom_label() && (ch->player_specials->clan && obj->get_custom_label()->clan_abbrev != nullptr &&
-		is_alliance_by_abbr(ch, obj->get_custom_label()->clan_abbrev))) {
+	if (obj->get_custom_label() && (ch->player_specials->clan && !obj->get_custom_label()->clan_abbrev.empty() &&
+		is_alliance_by_abbr(ch, obj->get_custom_label()->clan_abbrev.c_str()))) {
 		delim_l = " *";
 		delim_r = "*";
 	} else {

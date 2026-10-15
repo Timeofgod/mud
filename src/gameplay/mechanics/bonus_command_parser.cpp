@@ -1,7 +1,8 @@
 #include "bonus_command_parser.h"
+#include "utils/mud_string.h"
 
 #include "engine/ui/interpreter.h"
-#include "utils/utils.h"
+#include "utils/mud_string.h"
 
 namespace Bonus {
 const char *USAGE_MESSAGE = "Синтаксис команды:\r\nбонус <двойной|тройной|отменить> [оружейный|опыт|урон|обучение] [время]";

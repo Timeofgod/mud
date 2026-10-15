@@ -1,7 +1,19 @@
 #include "do_hire.h"
+#include "utils/logger.h"
+#include "gameplay/core/remort.h"
+#include "administration/privilege.h"
+#include "gameplay/economics/currencies.h"
+#include "utils/grammar/declensions.h"
+#include "gameplay/mechanics/follow.h"
+#include "gameplay/mechanics/mount.h"
 
 #include "do_follow.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_equip_flags.h"
+#include "engine/db/obj_save.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/mechanics/equipment.h"
+#include "gameplay/mechanics/inventory.h"
+#include "engine/core/target_resolver.h"
 #include "engine/db/global_objects.h"
 #include "gameplay/core/base_stats.h"
 #include "gameplay/mechanics/weather.h"
@@ -9,7 +21,7 @@
 #include "gameplay/mechanics/dungeons.h"
 #include "gameplay/mechanics/minions.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include <cmath>
 
@@ -17,37 +29,17 @@ constexpr short kMaxHireTime = 10080 / 2; // Неделя в минутах по
 constexpr long kMaxHirePrice = LONG_MAX / (kMaxHireTime + 1);
 
 //Функции для модифицированного чарма
-float CalcDamagePerRound(CharData *victim) {
-	float dam_per_attack = GET_DR(victim) + str_bonus(victim->get_str(), STR_TO_DAM)
-		+ victim->mob_specials.damnodice * (victim->mob_specials.damsizedice + 1) / 2.0
-		+ (AFF_FLAGGED(victim, EAffect::kCloudOfArrows) ? 14 : 0);
-	int num_attacks = 1 + victim->mob_specials.extra_attack
-		+ (victim->GetSkill(ESkill::kAddshot) ? 2 : 0);
-
-	float dam_per_round = dam_per_attack * num_attacks;
-
-	//Если дыхание - то дамаг умножается
-	if (victim->IsFlagged(EMobFlag::kFireBreath) ||
-		victim->IsFlagged(EMobFlag::kGasBreath) ||
-		victim->IsFlagged(EMobFlag::kFrostBreath) ||
-		victim->IsFlagged(EMobFlag::kAcidBreath) ||
-		victim->IsFlagged(EMobFlag::kLightingBreath)) {
-		dam_per_round *= 1.3f;
-	}
-
-	return dam_per_round;
-}
 
 float CalcChaForHire(CharData *victim) {
 	int i;
 	float reformed_hp = 0.0, needed_cha = 0.0;
 	for (i = 0; i < 50; i++) {
-		reformed_hp = victim->get_max_hit() + CalcDamagePerRound(victim) * cha_app[i].dam_to_hit_rate;
-		if (cha_app[i].charms >= reformed_hp)
+		reformed_hp = victim->get_max_hit() + CalcDamagePerRound(victim) * ChaApp(i).dam_to_hit_rate;
+		if (ChaApp(i).charms >= reformed_hp)
 			break;
 	}
-	i = POSI(i);
-	needed_cha = i - 1 + (reformed_hp - cha_app[i - 1].charms) / (cha_app[i].charms - cha_app[i - 1].charms);
+	i = Posi(i);
+	needed_cha = i - 1 + (reformed_hp - ChaApp(i - 1).charms) / (ChaApp(i).charms - ChaApp(i - 1).charms);
 	return VPOSI<float>(needed_cha, 1.0, 50.0);
 }
 
@@ -59,7 +51,7 @@ long CalcHirePrice(CharData *ch, CharData *victim) {
 	int m_dex = victim->get_dex() * 20;
 	int m_con = victim->get_con() * 20;
 	int m_cha = victim->get_cha() * 10;
-	ch->send_to_TC(true, true, true, "Базовые статы найма: Str:%d Int:%d Wis:%d Dex:%d Con:%d Cha:%d\r\n",
+	SendToTC(ch, true, true, true, "Базовые статы найма: Str:%d Int:%d Wis:%d Dex:%d Con:%d Cha:%d\r\n",
 				   m_str, m_int, m_wis, m_dex, m_con, m_cha);
 	price += m_str + m_int + m_wis + m_dex + m_con + m_cha;
 
@@ -69,7 +61,7 @@ long CalcHirePrice(CharData *ch, CharData *victim) {
 	float m_hr = GET_HR(victim) * 50;
 	float m_armor = GET_ARMOUR(victim) * 25;
 	float m_absorb = GET_ABSORBE(victim) * 4;
-	ch->send_to_TC(true,
+	SendToTC(ch, true,
 				   true,
 				   true,
 				   "Статы живучести: HP:%.4lf LVL:%.4lf AC:%.4lf HR:%.4lf ARMOR:%.4lf ABSORB:%.4lf\r\n",
@@ -86,7 +78,7 @@ long CalcHirePrice(CharData *ch, CharData *victim) {
 	int m_ref = GetSave(victim, ESaving::kReflex) * (-4);
 	int m_crit = GetSave(victim, ESaving::kCritical) * (-4);
 	int m_wil = GetSave(victim, ESaving::kWill) * (-4);
-	ch->send_to_TC(true, true, true, "Сейвы: STAB:%d REF:%d CRIT:%d WILL:%d\r\n",
+	SendToTC(ch, true, true, true, "Сейвы: STAB:%d REF:%d CRIT:%d WILL:%d\r\n",
 				   m_stab, m_ref, m_crit, m_wil);
 	price += m_stab + m_ref + m_crit + m_wil;
 	// магические резисты
@@ -98,7 +90,7 @@ long CalcHirePrice(CharData *ch, CharData *victim) {
 	int m_mind = GET_RESIST(victim, EResist::kMind) * 4;
 	int m_immu = GET_RESIST(victim, EResist::kImmunity) * 4;
 	int m_dark = GET_RESIST(victim, EResist::kDark) * 4;
-	ch->send_to_TC(true, true, true,
+	SendToTC(ch, true, true, true,
 				   "Маг.резисты: Fire:%d Air:%d Water:%d Earth:%d Vita:%d Mind:%d Immu:%d Dark:%d\r\n",
 				   m_fire, m_air, m_water, m_earth, m_vita, m_mind, m_immu, m_dark);
 	price += m_fire + m_air + m_water + m_earth + m_vita + m_mind + m_immu + m_dark;
@@ -114,94 +106,67 @@ long CalcHirePrice(CharData *ch, CharData *victim) {
 		+ GET_DR(victim)) * 10;
 	float extraAttack = victim->mob_specials.extra_attack * m_dr;
 
-	ch->send_to_TC(true, true, true, "Остальные статы: Luck:%d Ini:%d AR:%d MR:%d PR:%d DR:%d ExAttack:%.4lf\r\n",
+	SendToTC(ch, true, true, true, "Остальные статы: Luck:%d Ini:%d AR:%d MR:%d PR:%d DR:%d ExAttack:%.4lf\r\n",
 				   m_luck, m_ini, m_ar, m_mr, m_pr, m_dr, extraAttack);
 
 	price += m_luck + m_ini + m_ar + m_mr + m_pr + m_dr + extraAttack;
 	// сколько персонаж может
 	float hirePoints = 0;
-	float rem_hirePoints = GetRealRemort(ch) * 1.8;
+	float rem_hirePoints = remort::GetRealRemort(ch) * 1.8;
 	float int_hirePoints = GetRealInt(ch) * 1.8;
 	float cha_hirePoints = GetRealCha(ch) * 1.8;
 	hirePoints += rem_hirePoints + int_hirePoints + cha_hirePoints;
 	hirePoints = hirePoints * 5 * GetRealLevel(ch);
 
 	int min_price = MAX((m_dr / 300 * GetRealLevel(victim)), (GetRealLevel(victim) * 5));
-	min_price = MAX(min_price, mob_proto[GET_MOB_RNUM(victim)].get_gold());
+	min_price = MAX(min_price, currencies::GetHand(mob_proto[victim->get_rnum()], currencies::kGold));
 	long finalPrice = MAX(min_price, (int) ceil(price - hirePoints));
 
-	ch->send_to_TC(true, true, true,
-				   "Параметры персонажа: RMRT: %.4lf, CHA: %.4lf, INT: %.4lf, TOTAL: %.4lf. Цена чармиса:  %.4lf. Итоговая цена: %d \r\n",
+	SendToTC(ch, true, true, true,
+				   "Параметры персонажа: RMRT: %.4lf, CHA: %.4lf, INT: %.4lf, TOTAL: %.4lf. Цена чармиса:  %.4lf. Итоговая цена: %ld \r\n",
 				   rem_hirePoints, cha_hirePoints, int_hirePoints, hirePoints, price, finalPrice);
 	return std::min(finalPrice, kMaxHirePrice);
 }
 
-int GetReformedCharmiceHp(CharData *ch, CharData *victim, ESpell spell_id) {
-	auto r_hp{0.0};
-	auto eff_cha{0.0};
-	auto stat_cap{0.0};
-
-	if (spell_id == ESpell::kResurrection || spell_id == ESpell::kAnimateDead) {
-		eff_cha = CalcEffectiveWis(ch, spell_id);
-		stat_cap = MUD::Class(ch->GetClass()).GetBaseStatCap(EBaseStat::kWis);
-	} else {
-		stat_cap = MUD::Class(ch->GetClass()).GetBaseStatCap(EBaseStat::kCha);
-		eff_cha = get_effective_cha(ch);
-	}
-
-	if (spell_id != ESpell::kCharm) {
-		eff_cha = std::min(stat_cap, eff_cha + 2); // Все кроме чарма кастится с бонусом в 2
-	}
-
-	// Интерполяция между значениями для целых значений обаяния
-	if (eff_cha < stat_cap) {
-		r_hp = victim->get_max_hit() + CalcDamagePerRound(victim) *
-			((1 - eff_cha + (int) eff_cha) * cha_app[(int) eff_cha].dam_to_hit_rate +
-				(eff_cha - (int) eff_cha) * cha_app[(int) eff_cha + 1].dam_to_hit_rate);
-	} else {
-		r_hp = victim->get_max_hit() + CalcDamagePerRound(victim) *
-			((1 - eff_cha + (int) eff_cha) * cha_app[(int) eff_cha].dam_to_hit_rate);
-	}
-
-	if (ch->IsFlagged(EPrf::kTester))
-		SendMsgToChar(ch, "&Gget_reformed_charmice_hp Расчет чарма r_hp = %f \r\n&n", r_hp);
-	return (int) r_hp;
-}
-
 void DoFindhelpee(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	if (ch->IsNpc()
-		|| (!IS_IMMORTAL(ch) && !CanUseFeat(ch, EFeat::kEmployer))) {
+		|| (!privilege::IsImmortal(ch) && !CanUseFeat(ch, EFeat::kEmployer))) {
 		SendMsgToChar("Вам недоступно это!\r\n", ch);
 		return;
 	}
 
-	argument = one_argument(argument, arg);
+	char name[kMaxInputLength];
+	argument = one_argument(argument, name);
 
-	if (!*arg) {
-		FollowerType *k;
-		for (k = ch->followers; k; k = k->next) {
-			if (AFF_FLAGGED(k->follower, EAffect::kHelper) && AFF_FLAGGED(k->follower, EAffect::kCharmed)) {
+	if (!*name) {
+		CharData *hired = nullptr;
+		for (auto *k : ch->followers) {
+			if (AFF_FLAGGED(k, EAffect::kHelper) && AFF_FLAGGED(k, EAffect::kCharmed)) {
+				hired = k;
 				break;
 			}
 		}
 
-		if (k) {
-			act("Вашим наемником является $N.", false, ch, 0, k->follower, kToChar);
+		if (hired) {
+			act("Вашим наемником является $N.", false, ch, 0, hired, kToChar);
 		} else {
 			act("У вас нет наемников!", false, ch, 0, 0, kToChar);
 		}
 		return;
 	}
 
-	const auto helpee = get_char_vis(ch, arg, EFind::kCharInRoom);
+	CharData *helpee = nullptr;
+
+	helpee = target_resolver::FindCharInRoom(ch, name);
 	if (!helpee) {
 		SendMsgToChar("Вы не видите никого похожего.\r\n", ch);
 		return;
 	}
 
-	FollowerType *k;
-	for (k = ch->followers; k; k = k->next) {
-		if (AFF_FLAGGED(k->follower, EAffect::kHelper) && AFF_FLAGGED(k->follower, EAffect::kCharmed)) {
+	CharData *hired = nullptr;
+	for (auto *k : ch->followers) {
+		if (AFF_FLAGGED(k, EAffect::kHelper) && AFF_FLAGGED(k, EAffect::kCharmed)) {
+			hired = k;
 			break;
 		}
 	}
@@ -212,36 +177,36 @@ void DoFindhelpee(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("Вы не можете нанять реального игрока!\r\n", ch);
 	else if (!NPC_FLAGGED(helpee, ENpcFlag::kHelped))
 		act("$N не нанимается!", false, ch, 0, helpee, kToChar);
-	else if (AFF_FLAGGED(helpee, EAffect::kCharmed) && (!k || (k && helpee != k->follower)))
+	else if (AFF_FLAGGED(helpee, EAffect::kCharmed) && (!hired || (hired && helpee != hired)))
 		act("$N под чьим-то контролем.", false, ch, 0, helpee, kToChar);
 	else if (AFF_FLAGGED(helpee, EAffect::kDeafness))
 		act("$N не слышит вас.", false, ch, 0, helpee, kToChar);
-	else if (IS_HORSE(helpee))
+	else if (mount::IsHorse(helpee))
 		SendMsgToChar("Это боевой скакун, а не хухры-мухры.\r\n", ch);
 	else if (helpee->GetEnemy() || helpee->GetPosition() < EPosition::kRest)
 		act("$M сейчас, похоже, не до вас.", false, ch, 0, helpee, kToChar);
-	else if (circle_follow(helpee, ch))
+	else if (follow::CircleFollow(helpee, ch))
 		SendMsgToChar("Следование по кругу запрещено.\r\n", ch);
-	else if (GetRealRemort(ch) < GetRealRemort(helpee))
+	else if (remort::GetRealRemort(ch) < remort::GetRealRemort(helpee))
 		act("$N сказал вам: \"Ты слишком слаб, чтобы нанять меня\".", false, ch, 0, helpee, kToChar);
 	else {
 		// Вы издеваетесь? Блок else на три экрана, реально?
 		// Svent TODO: Вынести проверку на корректность чармиса в отдельную функицю.
 		char isbank[kMaxStringLength];
-		two_arguments(argument, arg, isbank);
+		two_arguments(argument, name, isbank);
 
 		unsigned int times = 0;
-		times = atoi(arg);
-		if (!*arg || times == 0) {
+		times = atoi(name);
+		if (!*name || times == 0) {
 			const auto cost = CalcHirePrice(ch, helpee);
-			sprintf(buf, "$n сказал$g вам : \"Один час моих услуг стоит %ld %s\".\r\n",
-					cost, GetDeclensionInNumber(cost, EWhat::kMoneyU));
-			act(buf, false, helpee, 0, ch, kToVict | kToNotDeaf);
+			act(fmt::format("$n сказал$g вам : \"Один час моих услуг стоит {} {}\".\r\n", cost,
+							MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom)),
+				false, helpee, 0, ch, kToVict | kToNotDeaf);
 			return;
 		}
-		if (k && helpee != k->follower) {
-//		if (k && helpee) {
-			act("Вы уже наняли $N3.", false, ch, 0, k->follower, kToChar);
+		if (hired && helpee != hired) {
+//		if (hired && helpee) {
+			act("Вы уже наняли $N3.", false, ch, 0, hired, kToChar);
 			return;
 		}
 
@@ -253,18 +218,17 @@ void DoFindhelpee(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		auto hire_price = CalcHirePrice(ch, helpee);
 		long cost = times * hire_price;
 
-		if ((!isname(isbank, "банк bank") && cost > ch->get_gold()) ||
-			(isname(isbank, "банк bank") && cost > ch->get_bank())) {
-			sprintf(buf,
-					"$n сказал$g вам : \" Мои услуги за %d %s стоят %ld %s - это тебе не по карману.\"",
-					times,
-					GetDeclensionInNumber(times, EWhat::kHour), cost, GetDeclensionInNumber(cost, EWhat::kMoneyU));
-			act(buf, false, helpee, 0, ch, kToVict | kToNotDeaf);
+		if ((!isname(isbank, "банк bank") && cost > currencies::GetHand(*ch, currencies::kGold)) ||
+			(isname(isbank, "банк bank") && cost > currencies::GetBank(*ch, currencies::kGold))) {
+			act(fmt::format("$n сказал$g вам : \" Мои услуги за {} {} стоят {} {} - это тебе не по карману.\"",
+							times, grammar::GetDeclensionInNumber(times, grammar::EWhat::kHour), cost,
+							MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom)),
+				false, helpee, 0, ch, kToVict | kToNotDeaf);
 			return;
 		}
 
 		if (helpee->has_master() && helpee->get_master() != ch) {
-			if (stop_follower(helpee, kSfMasterdie)) {
+			if (follow::StopFollower(helpee, follow::kSfMasterdie)) {
 				return;
 			}
 		}
@@ -272,57 +236,56 @@ void DoFindhelpee(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			helpee->UnsetFlag(EMobFlag::kNoGroup);
 
 		Affect<EApply> af;
-		if (!(k && k->follower == helpee)) {
-			ch->add_follower(helpee);
-			af.duration = CalcDuration(helpee, times * kTimeKoeff, 0, 0, 0, 0);
+		if (!(hired && hired == helpee)) {
+			follow::AddFollower(ch, helpee);
+			af.duration = CalcDuration(helpee, helpee, ESkill::kUndefined, times * kTimeKoeff, 0, 0, 0);
 		} else {
-			auto aff = k->follower->affected.begin();
-			for (; aff != k->follower->affected.end(); ++aff) {
-				if ((*aff)->type == ESpell::kCharm) {
+			auto aff = hired->affected.begin();
+			for (; aff != hired->affected.end(); ++aff) {
+				if (IS_SET((*aff)->battleflag, kAfCharmBond)) {
 					break;
 				}
 			}
-			if (aff != k->follower->affected.end()) {
-				long oldcost = MAX(0, (int) (((*aff)->duration - 1) / 2) * (int) abs(k->follower->mob_specials.hire_price));
+			if (aff != hired->affected.end()) {
+				long oldcost = MAX(0, (int) (((*aff)->duration - 1) / 2) * (int) abs(hired->mob_specials.hire_price));
 				if (oldcost > 0) {
-					if (k->follower->mob_specials.hire_price < 0) {
-						ch->add_bank(oldcost);
+					if (hired->mob_specials.hire_price < 0) {
+						currencies::AddBank(*ch, currencies::kGold, oldcost);
 					} else {
-						ch->add_gold(oldcost);
+						currencies::AddHand(*ch, currencies::kGold, oldcost);
 					}
 					SendMsgToChar(ch, "Вам вернули нерастраченный задаток в %ld %s.\r\n",
-								  oldcost, GetDeclensionInNumber(cost, EWhat::kMoneyA));
+								  oldcost, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom).c_str());
 				}
-				af.duration = CalcDuration(helpee, times * kTimeKoeff, 0, 0, 0, 0);
+				af.duration = CalcDuration(helpee, helpee, ESkill::kUndefined, times * kTimeKoeff, 0, 0, 0);
 			}
 		}
-		RemoveAffectFromChar(helpee, ESpell::kCharm);
-		if (!IS_IMMORTAL(ch)) {
+		RemoveCharmBond(helpee);
+		if (!privilege::IsImmortal(ch)) {
 			if (isname(isbank, "банк bank")) {
-				ch->remove_bank(cost);
+				currencies::RemoveBank(*ch, currencies::kGold, cost);
 				helpee->mob_specials.hire_price = -hire_price;
 			} else {
-				ch->remove_gold(cost);
+				currencies::RemoveHand(*ch, currencies::kGold, cost);
 				helpee->mob_specials.hire_price = hire_price;
 			}
 		}
 
-		af.type = ESpell::kCharm;
 		af.modifier = 0;
 		af.location = EApply::kNone;
-		af.bitvector = to_underlying(EAffect::kCharmed);
-		af.battleflag = 0;
+		af.affect_type = EAffect::kCharmed;
+		af.battleflag = {kAfCharmBond};
 		affect_to_char(helpee, af);
+		helpee->SetFlag(EMobFlag::kCompanion);	// any NPC ally
 
-		af.type = ESpell::kCharm;
 		af.modifier = 0;
 		af.location = EApply::kNone;
-		af.bitvector = to_underlying(EAffect::kHelper);
-		af.battleflag = 0;
+		af.affect_type = EAffect::kHelper;
+		af.battleflag = {kAfCharmBond};
 		affect_to_char(helpee, af);
 
-		sprintf(buf, "$n сказал$g вам : \"Приказывай, %s!\"", IS_FEMALE(ch) ? "хозяйка" : "хозяин");
-		act(buf, false, helpee, 0, ch, kToVict | kToNotDeaf);
+		act(fmt::format("$n сказал$g вам : \"Приказывай, {}!\"", IsFemale(ch) ? "хозяйка" : "хозяин"),
+			false, helpee, 0, ch, kToVict | kToNotDeaf);
 
 		if (helpee->IsNpc()) {
 			for (auto i = 0; i < EEquipPos::kNumEquipPos; i++) {
@@ -340,8 +303,8 @@ void DoFindhelpee(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			helpee->UnsetFlag(EMobFlag::kSpec);
 			helpee->UnsetFlag(EPrf::kPunctual);
 			helpee->SetFlag(EMobFlag::kNoSkillTrain);
-			helpee->set_skill(ESkill::kPunctual, 0);
-			if (!NPC_FLAGGED(ch, ENpcFlag::kNoMercList)) {
+			SetSkill(helpee, ESkill::kPunctual, 0);
+			if (!NPC_FLAGGED(helpee, ENpcFlag::kNoMercList)) {
 				MobVnum mvn = GET_MOB_VNUM(helpee);
 
 				if (mvn / 100 >=  dungeons::kZoneStartDungeons) {
@@ -357,56 +320,56 @@ void DoFindhelpee(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 void DoFreehelpee(CharData *ch, char * /* argument*/, int/* cmd*/, int/* subcmd*/) {
 	if (ch->IsNpc()
-		|| (!IS_IMMORTAL(ch) && !CanUseFeat(ch, EFeat::kEmployer))) {
+		|| (!privilege::IsImmortal(ch) && !CanUseFeat(ch, EFeat::kEmployer))) {
 		SendMsgToChar("Вам недоступно это!\r\n", ch);
 		return;
 	}
 
-	FollowerType *k;
-	for (k = ch->followers; k; k = k->next) {
-		if (AFF_FLAGGED(k->follower, EAffect::kHelper)
-			&& AFF_FLAGGED(k->follower, EAffect::kCharmed)) {
+	CharData *hired = nullptr;
+	for (auto *k : ch->followers) {
+		if (AFF_FLAGGED(k, EAffect::kHelper)
+			&& AFF_FLAGGED(k, EAffect::kCharmed)) {
+			hired = k;
 			break;
 		}
 	}
 
-	if (!k) {
+	if (!hired) {
 		act("У вас нет наемников!", false, ch, 0, 0, kToChar);
 		return;
 	}
 
-	if (ch->in_room != k->follower->in_room) {
-		act("Вам следует встретиться с $N4 для этого.", false, ch, 0, k->follower, kToChar);
+	if (ch->in_room != hired->in_room) {
+		act("Вам следует встретиться с $N4 для этого.", false, ch, 0, hired, kToChar);
 		return;
 	}
 
-	if (k->follower->GetPosition() < EPosition::kStand) {
-		act("$N2 сейчас, похоже, не до вас.", false, ch, 0, k->follower, kToChar);
+	if (hired->GetPosition() < EPosition::kStand) {
+		act("$N2 сейчас, похоже, не до вас.", false, ch, 0, hired, kToChar);
 		return;
 	}
 
-	if (!IS_IMMORTAL(ch)) {
-		for (const auto &aff : k->follower->affected) {
-			if (aff->type == ESpell::kCharm) {
-				long cost = MAX(0, (int) ((aff->duration - 1) / 2) * (int) abs(k->follower->mob_specials.hire_price));
+	if (!privilege::IsImmortal(ch)) {
+		for (const auto &aff : hired->affected) {
+			if (IS_SET(aff->battleflag, kAfCharmBond)) {
+				long cost = MAX(0, (int) ((aff->duration - 1) / 2) * (int) abs(hired->mob_specials.hire_price));
 				if (cost > 0) {
-					if (k->follower->mob_specials.hire_price < 0) {
-						ch->add_bank(cost);
+					if (hired->mob_specials.hire_price < 0) {
+						currencies::AddBank(*ch, currencies::kGold, cost);
 					} else {
-						ch->add_gold(cost);
+						currencies::AddHand(*ch, currencies::kGold, cost);
 					}
-					SendMsgToChar(ch, "Вам вернули нерастраченный задаток в %ld %s.\r\n", cost, GetDeclensionInNumber(cost, EWhat::kMoneyA));
+					SendMsgToChar(ch, "Вам вернули нерастраченный задаток в %ld %s.\r\n", cost, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom).c_str());
 				}
 				break;
 			}
 		}
 	}
 
-	act("Вы рассчитали $N3.", false, ch, 0, k->follower, kToChar);
-	RemoveAffectFromCharAndRecalculate(k->follower, ESpell::kCharm);
-	stop_follower(k->follower, kSfCharmlost);
+	act("Вы рассчитали $N3.", false, ch, 0, hired, kToChar);
+	RemoveCharmBond(hired, true);
+	follow::StopFollower(hired, follow::kSfCharmlost);
 }
-
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :
 

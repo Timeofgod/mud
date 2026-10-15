@@ -7,6 +7,7 @@
 */
 
 #include "engine/entities/char_data.h"
+#include "administration/privilege.h"
 #include "engine/ui/modify.h"
 
 #include <map>
@@ -26,7 +27,7 @@ void add(int zone_vnum, long money) {
 }
 
 void print(CharData *ch) {
-	if (!IS_GRGOD(ch)) {
+	if (!privilege::IsGrGod(ch)) {
 		SendMsgToChar(ch, "Только для иммов 33+.\r\n");
 		return;
 	}
@@ -40,7 +41,7 @@ void print(CharData *ch) {
 	if (!tmp_list.empty()) {
 		SendMsgToChar(ch,
 					  "Money drop stats:\r\n"
-					  "Total zones: %lu\r\n"
+					  "Total zones: %zu\r\n"
 					  "  vnum - money\r\n"
 					  "================\r\n", tmp_list.size());
 	} else {

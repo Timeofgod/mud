@@ -5,11 +5,14 @@
 \brief description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
+#include "administration/privilege.h"
 #include "engine/ui/color.h"
 #include "gameplay/mechanics/sight.h"
 #include "engine/db/global_objects.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_movement.h"
 
 void hear_in_direction(CharData *ch, int dir, int info_is);
 
@@ -28,13 +31,13 @@ void DoListen(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("Вам начали слышаться голоса предков, зовущие вас к себе.\r\n", ch);
 	if (ch->GetPosition() == EPosition::kSleep)
 		SendMsgToChar("Морфей медленно задумчиво провел рукой по струнам и заиграл колыбельную.\r\n", ch);
-	else if (ch->GetSkill(ESkill::kHearing)) {
+	else if (GetSkill(ch, ESkill::kHearing)) {
 		if (check_moves(ch, kHearingMoves)) {
 			SendMsgToChar("Вы начали сосредоточенно прислушиваться.\r\n", ch);
 			for (i = 0; i < EDirection::kMaxDirNum; i++)
 				hear_in_direction(ch, i, 0);
-			if (!(IS_IMMORTAL(ch) || GET_GOD_FLAG(ch, EGf::kGodsLike)))
-				SetWaitState(ch, 1 * kBattleRound);
+			if (!(privilege::IsImmortal(ch) || GET_GOD_FLAG(ch, EGf::kGodsLike)))
+				SetBattleLag(ch, 1);
 		}
 	} else
 		SendMsgToChar("Выучите сначала как это следует делать.\r\n", ch);
@@ -54,9 +57,9 @@ void hear_in_direction(CharData *ch, int dir, int info_is) {
 		|| (EXIT(ch, dir)
 			&& EXIT(ch, dir)->to_room() != kNowhere)) {
 		rdata = EXIT(ch, dir);
-		count += sprintf(buf, "%s%s:%s ", kColorYel, dirs_rus[dir], kColorNrm);
-		count += sprintf(buf + count, "\r\n%s", kColorGrn);
-		SendMsgToChar(buf, ch);
+		// Цвет кодами, а не константами kColor*: их раскрывает proc_color на выходе,
+		// и настройка цвета игрока перестаёт игнорироваться.
+		SendMsgToChar(fmt::format("&Y{}:&w \r\n&G", dirs_rus[dir]), ch);
 		count = 0;
 		for (const auto tch : world[rdata->to_room()]->people) {
 			percent = number(1, MUD::Skill(ESkill::kHearing).difficulty);
@@ -76,7 +79,7 @@ void hear_in_direction(CharData *ch, int dir, int info_is) {
 			if ((probe >= percent
 				|| ((!AFF_FLAGGED(tch, EAffect::kSneak) || !AFF_FLAGGED(tch, EAffect::kHide))
 					&& (probe > percent * 2)))
-				&& (percent < 100 || IS_IMMORTAL(ch))
+				&& (percent < 100 || privilege::IsImmortal(ch))
 				&& !fight_count) {
 				if (tch->IsNpc()) {
 					if (GET_RACE(tch) == ENpcRace::kConstruct) {
@@ -120,9 +123,10 @@ void hear_in_direction(CharData *ch, int dir, int info_is) {
 			SendMsgToChar(tmpstr.c_str(), ch);
 		}
 
-		SendMsgToChar(kColorNrm, ch);
+		// Закрывающая половина той же пары: открывали &G, закрываем &n.
+		SendMsgToChar("&w", ch);
 	} else {
-		if (info_is & EXIT_SHOW_WALL) {
+		if (info_is & sight::EXIT_SHOW_WALL) {
 			SendMsgToChar("И что вы там хотите услышать?\r\n", ch);
 		}
 	}

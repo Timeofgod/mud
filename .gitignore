@@ -21,3 +21,47 @@ cmake-build-release-wsl/
 log/
 syslog
 cmake-build-*
+build/
+build_*/
+magic.mgc
+data/
+
+__pycache__/
+autorun.out
+autorun.pid
+sd.out
+syslog.CRASH
+syslog.CRASH.*
+syslog.bz2
+archive/
+.DS_Store
+
+# In-source build artifacts (when cmake run from project root by mistake)
+/CMakeCache.txt
+/CMakeFiles/
+/Makefile
+/cmake_install.cmake
+/circle
+/changelog
+/profiler.log
+
+# Claude Code worktrees and state (but keep shared skills)
+.claude/*
+!.claude/skills/
+
+# Backup files from patch/sed
+*.orig
+
+# production server data backup (local only)
+/1/
+
+# downloadable dependencies
+subprojects/.wraplock
+subprojects/fmt
+subprojects/gtest
+subprojects/sol2
+subprojects/luajit
+subprojects/emmyluacodestyle
+subprojects/yaml-cpp
+subprojects/zlib
+/1/

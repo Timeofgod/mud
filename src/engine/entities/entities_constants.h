@@ -9,7 +9,11 @@
 #define BYLINS_SRC_ENTITY_ROOMS_ROOM_CONSTANTS_H_
 
 #include "engine/structs/structs.h"
+#include "engine/structs/bitset_flags.h"
 #include "engine/structs/meta_enum.h"
+
+#include <string>
+#include <vector>
 
 /*
  * ========================================================================================
@@ -17,13 +21,9 @@
  * ========================================================================================
  */
 
-enum class EGender : byte {
-	kNeutral = 0,
-	kMale = 1,
-	kFemale = 2,
-	kPoly = 3,
-	kLast
-};
+// issue.utils-cleaning: EGender moved to the grammar module (gender is a language concept);
+// re-exported here so existing users keep getting it via entities_constants.h.
+#include "utils/grammar/gender.h"
 
 template<>
 EGender ITEM_BY_NAME<EGender>(const std::string &name);
@@ -58,6 +58,8 @@ EPosition operator--(const EPosition &p);
 template<>
 const std::string &NAME_BY_ITEM<EPosition>(EPosition item);
 template<>
+const std::map<EPosition, std::string> &NAMES_OF<EPosition>();
+template<>
 EPosition ITEM_BY_NAME<EPosition>(const std::string &name);
 
 /**
@@ -80,6 +82,8 @@ template<>
 const std::string &NAME_BY_ITEM<EBaseStat>(EBaseStat item);
 template<>
 EBaseStat ITEM_BY_NAME<EBaseStat>(const std::string &name);
+template<>
+const std::map<EBaseStat, std::string> &NAMES_OF<EBaseStat>();  // issue.vedun-editor: editor pick-list
 
 const int kDefaultBaseStatMin{10};
 const int kDefaultBaseStatMax{25};
@@ -88,45 +92,17 @@ const int kDefaultBaseStatCap{50};
 const int kMobBaseStatCap{100};
 const int kLeastBaseStat{1};
 
-/*
- * Character savings ids.
- */
-enum class ESaving : int {
-	kWill = 0,
-	kCritical = 1,
-	kStability = 2,
-	kReflex = 3,
-	kNone = 4,
-	kFirst = kWill,
-	kLast = kReflex, // Не забываем менять при добаввлении новых элементов.
-};
-
-ESaving& operator++(ESaving &s);
-
-template<>
-const std::string &NAME_BY_ITEM<ESaving>(ESaving item);
-template<>
-ESaving ITEM_BY_NAME<ESaving>(const std::string &name);
 
 /**
- * Magic damage resistance types.
+ * Alignment selector for the action-level <blocking align=> / <required align=> /
+ * <reflection align=> tags (issue.cast-dmg-migration). kAny means no alignment check (the
+ * attribute is absent). kGood / kEvil / kNeutral map to the IsGood / IsEvil / IsNeutral
+ * inline functions in char_data.h (the +/-300 thresholds defined in utils.h).
  */
-enum EResist {
-	kFire = 0,
-	kAir,
-	kWater,
-	kEarth,
-	kVitality,
-	kMind,
-	kImmunity,
-	kDark,
-	kFirstResist = kFire,
-	kLastResist = kDark
-};
+enum class EAlign { kAny, kGood, kEvil, kNeutral };
 
-EResist& operator++(EResist &r);
-
-const int kMaxPcResist = 75;
+#include "gameplay/mechanics/resist.h"
+#include "gameplay/mechanics/saving.h"
 
 enum class EWhereObj : int {
 	kNowhere = 0,
@@ -166,12 +142,21 @@ enum EEquipPos : int {
 	kNumEquipPos = 20    // This must be the # of eq positions!!
 };
 
-// Экстра флаги персонажа
-// \TODO Переделать на enum или удалить
-constexpr Bitvector EXTRA_FAILHIDE = 1 << 0;
-constexpr Bitvector EXTRA_FAILSNEAK = 1 << 1;
-constexpr Bitvector EXTRA_FAILCAMOUFLAGE = 1 << 2;
-constexpr Bitvector EXTRA_GRP_KILL_COUNT = 1 << 3; // для избежания повторных записей моба в списки SetsDrop
+// Экстра флаги персонажа (рантайм-флаги, в файл не сохраняются).
+// Хранятся в CharData::Temporary, тип BitsetFlags<ECharExtraFlag>.
+enum class ECharExtraFlag {
+	kFailHide = 0,
+	kFailSneak = 1,
+	kFailCamouflage = 2,
+	kGrpKillCount = 3,    // для избежания повторных записей моба в списки SetsDrop
+	// Об удаче скрытности игроку уже сказали. Сверку зовут на каждого моба, который может
+	// напасть, поэтому без этих меток в комнате с тремя мобами приходило три одинаковых строки.
+	// Снимаются при входе в комнату, при новой попытке умения и при провале сверки.
+	kToldHide = 4,
+	kToldSneak = 5,
+	kToldCamouflage = 6,
+	kCount               // число флагов (терминальный счётчик для BitsetFlags)
+};
 
 /*
  * ========================================================================================
@@ -264,7 +249,19 @@ enum EPrf : Bitvector {
 	kShadowThrow = kIntTwo | 1 << 16,        // применяет "теневой бросок"
 	kDispCooldowns = kIntTwo | 1 << 17,        // Показывать кулдауны скиллов в промпте
 	kTelegram = kIntTwo | 1 << 18,           // Активирует телеграм-канал у персонажа
-	kPerformSerratedBlade = kIntTwo | 1 << 19 // Активирована "воровская заточка".
+	kPerformSerratedBlade = kIntTwo | 1 << 19, // Активирована "воровская заточка".
+	kNoLineWrap = kIntTwo | 1 << 20          // НЕ переносить длинные строки по ширине экрана
+};
+
+template<>
+struct flag_traits<EPrf> {
+	static constexpr std::size_t count = 120;
+};
+template<>
+struct flag_index_mapping<EPrf> {
+	static constexpr std::size_t to_index(EPrf f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
 };
 
 // при добавлении не забываем про preference_bits[]
@@ -311,6 +308,17 @@ extern const religion_names_t religion_name;
 	kFree = 1 << 29,            // RESERVED - ONLY INTERBALLY (MOB_FREE)//
 };
 
+template<>
+struct flag_traits<EPlrFlag> {
+	static constexpr std::size_t count = 120;
+};
+template<>
+struct flag_index_mapping<EPlrFlag> {
+	static constexpr std::size_t to_index(EPlrFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
+};
+
 /**
  *	Gods flags.
  */
@@ -331,33 +339,9 @@ enum EGf : Bitvector {
  * ========================================================================================
  */
 
-/**
- * NPC races
- */
-enum ENpcRace : int {
-	kBasic = 100,
-	kHuman = 101,
-	kBeastman = 102,
-	kBird = 103,
-	kAnimal = 104,
-	kReptile = 105,
-	kFish = 106,
-	kInsect = 107,
-	kPlant = 108,
-	kConstruct = 109,
-	kZombie = 110,
-	kGhost = 111,
-	kBoggart = 112,
-	kSpirit = 113,
-	kMagicCreature = 114,
-	kLastNpcRace = kMagicCreature // Не забываем менять при добавлении новых
-};
-
-/**
- * Virtual NPC races
- */
-const int kNpcBoss = 200;
-const int kNpcUnique = 201;
+// issue.npc-races: ENpcRace (+ kNpcBoss / kNpcUnique) moved to gameplay/mechanics/mob_races.h.
+// This header re-includes mob_races.h at the bottom (compat shim), so every user that includes
+// entities_constants.h still sees ENpcRace.
 
 /**
  * Mobile flags: used by char_data.char_specials.act
@@ -420,7 +404,9 @@ enum EMobFlag : Bitvector {
 	kNoBattleExp = kIntOne | (1 << 23), // не дает экспу за удары
 	kNoHammer = kIntOne | (1 << 24), // нельзя оглушить богатырским молотом
 	kMentalShadow = kIntOne | (1 << 25), // Используется для ментальной тени
-	kSummoned = kIntOne | (1 << 26), // (ангел, тень, храны, трупы, умки)
+	kCompanion = kIntOne | (1 << 26), // any NPC ally (animated/charmed/summoned); needn't follow; never set on PCs
+	kUndead = kIntOne | (1 << 27),	// issue.npc-races: the undead marker (replaces IS_UNDEAD)
+	kSummoned = kIntOne | (1 << 28),	// created entirely by magic from outside the world (demon/angel/spirit); a subset of kCompanion
 
 	kFireBreath = kIntTwo | (1 << 0),
 	kGasBreath = kIntTwo | (1 << 1),
@@ -440,6 +426,17 @@ enum EMobFlag : Bitvector {
 	kNoResurrection = kIntTwo | (1 << 20),
 	kMobAwake = kIntTwo | (1 << 21),
 	kIgnoresFormation = kIntTwo | (1 << 22)
+};
+
+template<>
+struct flag_traits<EMobFlag> {
+	static constexpr std::size_t count = 120;
+};
+template<>
+struct flag_index_mapping<EMobFlag> {
+	static constexpr std::size_t to_index(EMobFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
 };
 
 /**
@@ -474,8 +471,34 @@ enum ENpcFlag : Bitvector {
 	kArmoring = kIntOne | (1 << 2),
 	kUsingLight = kIntOne | (1 << 3),
 	kNoTakeItems = kIntOne | (1 << 4),
-	kIgnoreRareKill = kIntOne | (1 << 5)
+	kIgnoreRareKill = kIntOne | (1 << 5),
+	kUsingMagicItems = kIntOne | (1 << 6)	// issue.npc-races: NPC casts from wands/staves/potions
 };
+
+template<>
+struct flag_traits<ENpcFlag> {
+	static constexpr std::size_t count = 120;
+};
+template<>
+struct flag_index_mapping<ENpcFlag> {
+	static constexpr std::size_t to_index(ENpcFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
+};
+
+template<>
+EMobFlag ITEM_BY_NAME<EMobFlag>(const std::string &name);
+template<>
+const std::string &NAME_BY_ITEM<EMobFlag>(EMobFlag item);
+template<>
+const std::map<EMobFlag, std::string> &NAMES_OF<EMobFlag>();
+
+template<>
+ENpcFlag ITEM_BY_NAME<ENpcFlag>(const std::string &name);
+template<>
+const std::string &NAME_BY_ITEM<ENpcFlag>(ENpcFlag item);
+template<>
+const std::map<ENpcFlag, std::string> &NAMES_OF<ENpcFlag>();
 
 /*
  * ========================================================================================
@@ -557,6 +580,21 @@ EDirection &operator++(EDirection &d);
 	kDominationArena = kIntTwo | (1 << 1) // комната арены доминирования
  };
 
+// issue.flags-migration P1a: store RoomData::m_room_flags in BitsetFlags<ERoomFlag> while ERoomFlag
+// stays packed-bitmask (kIntOne|bit ...). flag_index_mapping decodes the packed value to its flat
+// bit index via packed_to_index, so on-disk bytes are byte-identical to the old FlagData. count is
+// the legacy 4-plane space (120 bits) so any round-tripping high bit is preserved, not dropped.
+template<>
+struct flag_traits<ERoomFlag> {
+	static constexpr std::size_t count = 120;
+};
+template<>
+struct flag_index_mapping<ERoomFlag> {
+	static constexpr std::size_t to_index(ERoomFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
+};
+
 /**
  * Exit info: used in room_data.dir_option.exit_info
  */
@@ -569,6 +607,19 @@ EDirection &operator++(EDirection &d);
 	kBrokenLock = 1 << 5,	// замок двери сломан
 	kDungeonEntry = 1 << 6	// When character goes through this door then he will get into a copy of the zone behind the door.
  };
+
+// issue.flags-migration P1e: exit_info was a byte (single plane, serialized as a plain int via
+// get_plane(0)); packed mapping keeps flag identity. count=30 (one plane).
+template<>
+struct flag_traits<EExitFlag> {
+	static constexpr std::size_t count = 30;
+};
+template<>
+struct flag_index_mapping<EExitFlag> {
+	static constexpr std::size_t to_index(EExitFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
+};
 
 /**
  * Sector types: used in room_data.sector_type
@@ -637,8 +688,8 @@ enum EObjType {
 	kBoat = 22,				// Item is a boat    //
 	kFountain = 23,			// Item is a fountain      //
 	kBook = 24,				// Item is book //
-	kIngredient = 25,		// Item is magical ingradient //
-	kMagicIngredient = 26,	// Магический ингредиент //
+	kMagicIngredient = 25,		// Item is magical ingradient //
+	kMagicComponent = 26,	// Магический ингредиент //
 	kCraftMaterial = 27,	// Материал для крафтовых умений //
 	kBandage = 28,			// бинты для перевязки
 	kLightArmor = 29,		// легкий тип брони
@@ -694,6 +745,20 @@ EObjMaterial ITEM_BY_NAME<EObjMaterial>(const std::string &name);
 	kFeat = 4
 };
 
+// Название типа книги (единый источник для OLC-меню и подсказок в yaml).
+// TODO: перенести в конфиги. Возвращает "" для неизвестного типа.
+const char *GetBookTypeName(EBook type);
+
+// Классы магических ингредиентов (kMagicComponent val[3]) -- нормальный тип
+// взамен старых #define IM_CLASS_ROSL/JIV/TVERD. Единый источник имён для OLC и
+// yaml. TODO: перенести в конфиги.
+enum class EIngredientClass {
+	kRosl = 0,    // РОСЛЬ (растения)
+	kJiv = 1,     // ЖИВЬ (животные)
+	kTverd = 2    // ТВЕРДЬ (минералы)
+};
+const char *GetIngredientClassName(EIngredientClass type);
+
 /**
  * Take/Wear flags: used by obj_data.obj_flags.wear_flags
  */
@@ -718,10 +783,34 @@ enum class EWearFlag : Bitvector {
 	kQuiver = 1 << 16
 };
 
+// issue.flags-migration P1e: m_wear_flags was a bare int (single plane, serialized as a plain
+// int via get_plane(0)); packed mapping keeps identity. count=30 (one plane; max flag 1<<16).
+template<>
+struct flag_traits<EWearFlag> {
+	static constexpr std::size_t count = 30;
+};
+template<>
+struct flag_index_mapping<EWearFlag> {
+	static constexpr std::size_t to_index(EWearFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
+};
+
 template<>
 const std::string &NAME_BY_ITEM<EWearFlag>(EWearFlag item);
 template<>
 EWearFlag ITEM_BY_NAME<EWearFlag>(const std::string &name);
+
+// Equipment-position parsing shared across config loaders (criteria, future spells.xml caster
+// requirements, ...). An equipment-position token is an EEquipPos member name (e.g. "kFingerR");
+// it resolves to the wear-flag position used for per-position lookups (paired slots like
+// kFingerR/kFingerL collapse to one flag). Returns EWearFlag::kUndefined for unknown tokens.
+// TODO: these describe the equipment mechanic, not objects per se -- move them into
+//       gameplay/mechanics/equipment together with EEquipPos/EWearFlag when that module owns them.
+[[nodiscard]] EWearFlag WearFlagByEquipPos(const std::string &equip_pos);
+// Parse a '|'-separated list of equipment-position tokens (e.g. "kFingerR|kFingerL") into the
+// distinct wear flags they map to. Unknown tokens are logged and skipped.
+[[nodiscard]] std::vector<EWearFlag> ParseWearPositions(const std::string &val);
 
 /**
  * Extra object flags: used by obj_data.obj_flags.extra_flags
@@ -738,7 +827,7 @@ enum class EObjFlag : Bitvector {
 	kBless = 1 << 8,
 	kNosell = 1 << 9,
 	kDecay = 1 << 10,
-	kZonedacay = 1 << 11,
+	kZonedecay = 1 << 11,
 	kNodisarm = 1 << 12,
 	kNodecay = 1 << 13,
 	kPoisoned = 1 << 14,
@@ -763,8 +852,8 @@ enum class EObjFlag : Bitvector {
 	kHasOneSlot = kIntOne | (1 << 3),
 	kHasTwoSlots = kIntOne | (1 << 4),
 	kHasThreeSlots = kIntOne | (1 << 5),
-	KSetItem = kIntOne | (1 << 6),
-	KNofail = kIntOne | (1 << 7),						//< не фейлится при изучении (в случае книги)
+	kSetItem = kIntOne | (1 << 6),
+	kNofail = kIntOne | (1 << 7),						//< не фейлится при изучении (в случае книги)
 	kNamed = kIntOne | (1 << 8),
 	kBloody = kIntOne | (1 << 9),
 	kQuestItem = kIntOne | (1 << 10),						//< TODO: не используется, см ConvertObjValues()
@@ -774,7 +863,7 @@ enum class EObjFlag : Bitvector {
 	kUnique = kIntOne | (1 << 14),						// объект уникальный, т.е. только один в экипировке
 	kTransformed = kIntOne | (1 << 15),					// Наложено заклинание заколдовать оружие
 	kNoRentTimer = kIntOne | (1 << 16),					// пока свободно, можно использовать
-	KLimitedTimer = kIntOne | (1 << 17),				// Не может быть нерушимой
+	kLimitedTimer = kIntOne | (1 << 17),				// Не может быть нерушимой
 	kBindOnPurchase = kIntOne | (1 << 18),				// станет именной при покупке в магазе
 	kNotOneInClanChest = kIntOne | (1 << 19)			//1 штука из набора не лезет в хран
 };
@@ -783,6 +872,17 @@ template<>
 const std::string &NAME_BY_ITEM<EObjFlag>(EObjFlag item);
 template<>
 EObjFlag ITEM_BY_NAME<EObjFlag>(const std::string &name);
+// issue.flags-migration P1b: transitional packed storage (see ERoomFlag above).
+template<>
+struct flag_traits<EObjFlag> {
+	static constexpr std::size_t count = 120;
+};
+template<>
+struct flag_index_mapping<EObjFlag> {
+	static constexpr std::size_t to_index(EObjFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
+};
 
 /**
  * Object no flags - who can't use this object.
@@ -804,7 +904,7 @@ enum class ENoFlag : Bitvector {
 	kMagus = 1 << 13,
 	kConjurer = 1 << 14,
 	kCharmer = 1 << 15,
-	kWIzard = 1 << 16,
+	kWizard = 1 << 16,
 	kNecromancer = 1 << 17,
 	kFighter = 1 << 18,
 	kKiller = kIntOne | 1 << 0,
@@ -835,6 +935,16 @@ template<>
 const std::string &NAME_BY_ITEM<ENoFlag>(ENoFlag item);
 template<>
 ENoFlag ITEM_BY_NAME<ENoFlag>(const std::string &name);
+template<>
+struct flag_traits<ENoFlag> {
+	static constexpr std::size_t count = 120;
+};
+template<>
+struct flag_index_mapping<ENoFlag> {
+	static constexpr std::size_t to_index(ENoFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
+};
 
 /**
  * Object anti flags - who can't take or use this object.
@@ -893,6 +1003,16 @@ template<>
 const std::string &NAME_BY_ITEM<EAntiFlag>(EAntiFlag item);
 template<>
 EAntiFlag ITEM_BY_NAME<EAntiFlag>(const std::string &name);
+template<>
+struct flag_traits<EAntiFlag> {
+	static constexpr std::size_t count = 120;
+};
+template<>
+struct flag_index_mapping<EAntiFlag> {
+	static constexpr std::size_t to_index(EAntiFlag f) {
+		return bitset_flags_detail::packed_to_index(static_cast<std::uint32_t>(f));
+	}
+};
 
 /**
  * Container flags - value[1]
@@ -904,6 +1024,11 @@ enum EContainerFlag {
 	kLockedUp = 1 << 3,
 	kLockIsBroken = 1 << 4
 };
+
+// issue.npc-races: compat shim -- ENpcRace lives here now. Placed at the very bottom (after every
+// enum above) so that mob_races.h's heavy info_container/cfg_manager includes, which transitively
+// re-enter this header, always find the full set of entities constants already defined.
+#include "gameplay/mechanics/mob_races.h"
 
 #endif //BYLINS_SRC_ENTITY_ROOMS_ROOM_CONSTANTS_H_
 

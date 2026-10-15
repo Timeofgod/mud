@@ -2,6 +2,10 @@
 // Part of Bylins http://www.mud.ru
 
 #include "obj_sets.h"
+#include "utils/russian_keys.h"
+#include "utils/native_text.h"
+#include "utils/grammar/declensions.h"
+#include <fmt/format.h>
 
 #include <string>
 #include <vector>
@@ -16,7 +20,7 @@
 #include "engine/entities/obj_data.h"
 #include "engine/db/db.h"
 #include "gameplay/core/constants.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
 #include "engine/entities/char_player.h"
 #include "gameplay/skills/skills.h"
 #include "engine/ui/color.h"
@@ -27,7 +31,7 @@
 #include "gameplay/skills/skills_info.h"
 #include "engine/db/global_objects.h"
 
-void show_weapon_affects_olc(DescriptorData *d, const FlagData &flags);
+void show_equipment_affects_olc(DescriptorData *d, const BitsetFlags<EEquipmentAffect> &flags);
 void show_apply_olc(DescriptorData *d);
 int planebit(const char *str, int *plane, int *bit);
 
@@ -209,10 +213,10 @@ std::string main_menu_objlist(const SetNode &set, int menu) {
 			snprintf(buf_vnum, sizeof(buf_vnum), "%d", i.first);
 		}
 
-		snprintf(format, sizeof(format), "%s%2d%s) %s : %s%%-%zus%s   ",
+		snprintf(format, sizeof(format), "%s%2d%s) %s : %s%%-%llus%s   ",
 				 kColorGrn, menu++, kColorNrm,
 				 colored_name(i.second, left ? l_max_name : r_max_name, true),
-				 kColorCyn, (left ? l_max_vnum : r_max_vnum), kColorNrm);
+				 kColorCyn, static_cast<unsigned long long>(left ? l_max_vnum : r_max_vnum), kColorNrm);
 		snprintf(buf_, sizeof(buf_), format, buf_vnum);
 		out += buf_;
 		if (!left) {
@@ -286,7 +290,7 @@ void sedit::show_main(CharData *ch) {
 			return;
 		}
 		snprintf(buf_, sizeof(buf_),
-				 "Редактирование набора предметов #%zu\r\n", idx + 1);
+				 "Редактирование набора предметов #%llu\r\n", static_cast<unsigned long long>(idx + 1));
 		out += buf_;
 	}
 	int i = 1;
@@ -389,7 +393,7 @@ void sedit::show_activ_edit(CharData *ch) {
 	const ActivNode &activ = i->second;
 
 	char buf_aff[2048];
-	activ.affects.sprintbits(weapon_affects, buf_aff, ",");
+	activ.affects.sprintbits(equipment_affects, buf_aff, sizeof(buf_aff), ",");
 	std::string aff_str = line_split_str(buf_aff, ",", 80, 14);
 	std::string prof_str;
 	if (!activ.prof.all()) {
@@ -506,7 +510,7 @@ void sedit::save_olc(CharData *ch) {
 		std::shared_ptr<SetNode> set_ptr = std::make_shared<SetNode>(olc_set);
 		sets_list.push_back(set_ptr);
 		VerifySet(*set_ptr);
-		save();
+		obj_sets::save();
 		init_obj_index();
 		return;
 	}
@@ -515,7 +519,7 @@ void sedit::save_olc(CharData *ch) {
 	if (idx < sets_list.size()) {
 		*(sets_list.at(idx)) = olc_set;
 		VerifySet(*(sets_list.at(idx)));
-		save();
+		obj_sets::save();
 		init_obj_index();
 	} else {
 		SendMsgToChar("Ошибка сохранения: набор был удален.", ch);
@@ -524,19 +528,19 @@ void sedit::save_olc(CharData *ch) {
 
 void parse_main_exit(CharData *ch, const char *arg) {
 	skip_spaces(&arg);
-	switch (*arg) {
+	switch (native_text::first_char_code(arg)) {
 		case 'y':
 		case 'Y':
-		case 'д':
-		case 'Д': ch->desc->state = EConState::kPlaying;
+		case rus::kDe:
+		case rus::kDeUpper: ch->desc->state = EConState::kPlaying;
 			ch->desc->sedit->save_olc(ch);
 			ch->desc->sedit.reset();
 			SendMsgToChar("Изменения сохранены.\r\n", ch);
 			break;
 		case 'n':
 		case 'N':
-		case 'н':
-		case 'Н': ch->desc->sedit.reset();
+		case rus::kEn:
+		case rus::kEnUpper: ch->desc->sedit.reset();
 			ch->desc->state = EConState::kPlaying;
 			SendMsgToChar("Редактирование отменено.\r\n", ch);
 			break;
@@ -550,15 +554,15 @@ void parse_main_exit(CharData *ch, const char *arg) {
 
 void parse_set_remove(CharData *ch, const char *arg) {
 	skip_spaces(&arg);
-	switch (*arg) {
+	switch (native_text::first_char_code(arg)) {
 		case 'y':
 		case 'Y':
-		case 'д':
-		case 'Д': {
+		case rus::kDe:
+		case rus::kDeUpper: {
 			for (auto i = sets_list.begin(); i != sets_list.end(); ++i) {
 				if ((*i)->uid == ch->desc->sedit->olc_set.uid) {
 					sets_list.erase(i);
-					save();
+					obj_sets::save();
 					init_obj_index();
 					SendMsgToChar("Набор удален.\r\n", ch);
 					break;
@@ -570,8 +574,8 @@ void parse_set_remove(CharData *ch, const char *arg) {
 		}
 		case 'n':
 		case 'N':
-		case 'н':
-		case 'Н': SendMsgToChar("Удаление отменено.\r\n", ch);
+		case rus::kEn:
+		case rus::kEnUpper: SendMsgToChar("Удаление отменено.\r\n", ch);
 			ch->desc->sedit->show_main(ch);
 			break;
 		default:
@@ -584,11 +588,11 @@ void parse_set_remove(CharData *ch, const char *arg) {
 
 void sedit::parse_obj_remove(CharData *ch, const char *arg) {
 	skip_spaces(&arg);
-	switch (*arg) {
+	switch (native_text::first_char_code(arg)) {
 		case 'y':
 		case 'Y':
-		case 'д':
-		case 'Д': {
+		case rus::kDe:
+		case rus::kDeUpper: {
 			auto i = olc_set.obj_list.find(obj_edit);
 			if (i != olc_set.obj_list.end()) {
 				olc_set.obj_list.erase(i);
@@ -600,8 +604,8 @@ void sedit::parse_obj_remove(CharData *ch, const char *arg) {
 		}
 		case 'n':
 		case 'N':
-		case 'н':
-		case 'Н': SendMsgToChar("Удаление отменено.\r\n", ch);
+		case rus::kEn:
+		case rus::kEnUpper: SendMsgToChar("Удаление отменено.\r\n", ch);
 			show_obj_edit(ch);
 			break;
 		default: SendMsgToChar("Неверный выбор!\r\n", ch);
@@ -612,11 +616,11 @@ void sedit::parse_obj_remove(CharData *ch, const char *arg) {
 
 void sedit::parse_activ_remove(CharData *ch, const char *arg) {
 	skip_spaces(&arg);
-	switch (*arg) {
+	switch (native_text::first_char_code(arg)) {
 		case 'y':
 		case 'Y':
-		case 'д':
-		case 'Д': {
+		case rus::kDe:
+		case rus::kDeUpper: {
 			auto i = olc_set.activ_list.find(activ_edit);
 			if (i != olc_set.activ_list.end()) {
 				olc_set.activ_list.erase(i);
@@ -628,8 +632,8 @@ void sedit::parse_activ_remove(CharData *ch, const char *arg) {
 		}
 		case 'n':
 		case 'N':
-		case 'н':
-		case 'Н': SendMsgToChar("Удаление отменено.\r\n", ch);
+		case rus::kEn:
+		case rus::kEnUpper: SendMsgToChar("Удаление отменено.\r\n", ch);
 			show_activ_edit(ch);
 			break;
 		default: SendMsgToChar("Неверный выбор!\r\n", ch);
@@ -666,11 +670,11 @@ void sedit::parse_global_msg(CharData *ch, const char *arg) {
 		return;
 	}
 	if (!a_isdigit(*arg)) {
-		switch (*arg) {
+		switch (native_text::first_char_code(arg)) {
 			case 'Q':
 			case 'q':
-			case 'В':
-			case 'в':
+			case rus::kVeUpper:
+			case rus::kVe:
 				if (msg_edit != global_msg) {
 					SendMsgToChar("Вы хотите сохранить изменения? Y(Д)/N(Н) : ", ch);
 					state = STATE_GLOBAL_MSG_EXIT;
@@ -720,20 +724,20 @@ void sedit::parse_global_msg(CharData *ch, const char *arg) {
 
 void parse_global_msg_exit(CharData *ch, const char *arg) {
 	skip_spaces(&arg);
-	switch (*arg) {
+	switch (native_text::first_char_code(arg)) {
 		case 'y':
 		case 'Y':
-		case 'д':
-		case 'Д': ch->desc->state = EConState::kPlaying;
+		case rus::kDe:
+		case rus::kDeUpper: ch->desc->state = EConState::kPlaying;
 			global_msg = ch->desc->sedit->msg_edit;
-			save();
+			obj_sets::save();
 			ch->desc->sedit.reset();
 			SendMsgToChar("Изменения сохранены.\r\n", ch);
 			break;
 		case 'n':
 		case 'N':
-		case 'н':
-		case 'Н': ch->desc->sedit.reset();
+		case rus::kEn:
+		case rus::kEnUpper: ch->desc->sedit.reset();
 			ch->desc->state = EConState::kPlaying;
 			SendMsgToChar("Редактирование отменено.\r\n", ch);
 			break;
@@ -753,11 +757,11 @@ void sedit::parse_main(CharData *ch, const char *arg) {
 		return;
 	}
 	if (!a_isdigit(*arg)) {
-		switch (*arg) {
+		switch (native_text::first_char_code(arg)) {
 			case 'Q':
 			case 'q':
-			case 'В':
-			case 'в':
+			case rus::kVeUpper:
+			case rus::kVe:
 				if (new_entry || changed()) {
 					SendMsgToChar("Вы хотите сохранить изменения? Y(Д)/N(Н) : ", ch);
 					state = STATE_MAIN_EXIT;
@@ -894,7 +898,7 @@ void sedit::parse_setcomment(CharData *ch, const char *arg) {
 		olc_set.comment.clear();
 	} else {
 		olc_set.comment = arg;
-		olc_set.comment = olc_set.comment.substr(0, 40);
+		olc_set.comment = olc_set.comment.substr(0, native_text::char_offset(olc_set.comment, 40));
 	}
 	show_main(ch);
 }
@@ -974,10 +978,10 @@ void sedit::parse_activ_add(CharData *ch, const char *arg) {
 	auto i = olc_set.activ_list.find(num);
 	if (i != olc_set.activ_list.end()) {
 		SendMsgToChar(ch, "В наборе уже есть активатор на %d %s.\r\n",
-					  num, GetDeclensionInNumber(num, EWhat::kObject));
+					  num, grammar::GetDeclensionInNumber(num, grammar::EWhat::kObject));
 	} else {
 		SendMsgToChar(ch, "Активатор на %d %s добавлен в набор.\r\n",
-					  num, GetDeclensionInNumber(num, EWhat::kObject));
+					  num, grammar::GetDeclensionInNumber(num, grammar::EWhat::kObject));
 		ActivNode node;
 		// GCC 4.4
 		//olc_set.activ_list.emplace(num, node);
@@ -1131,11 +1135,11 @@ void sedit::parse_obj_edit(CharData *ch, const char *arg) {
 		return;
 	}
 	if (!a_isdigit(*arg)) {
-		switch (*arg) {
+		switch (native_text::first_char_code(arg)) {
 			case 'Q':
 			case 'q':
-			case 'В':
-			case 'в': show_main(ch);
+			case rus::kVeUpper:
+			case rus::kVe: show_main(ch);
 				break;
 			default: SendMsgToChar("Неверный выбор!\r\n", ch);
 				show_obj_edit(ch);
@@ -1174,7 +1178,7 @@ void sedit::parse_obj_edit(CharData *ch, const char *arg) {
 
 void sedit::show_activ_affects(CharData *ch) {
 	state = STATE_ACTIV_AFFECTS;
-	show_weapon_affects_olc(ch->desc,
+	show_equipment_affects_olc(ch->desc,
 							olc_set.activ_list.at(activ_edit).affects);
 }
 
@@ -1188,16 +1192,14 @@ void sedit::show_activ_skill(CharData *ch) {
 
 	int col = 0;
 	std::string out;
-	char buf_[128];
 
 	for (auto i = ESkill::kFirst; i <= ESkill::kLast; ++i) {
 		if (MUD::Skills().IsInvalid(i)) {
 			continue;
 		}
-		snprintf(buf_, sizeof(buf_), "%s%3d%s) %25s     %s",
-				 kColorGrn, to_underlying(i), kColorNrm,
-				 MUD::Skill(i).GetName(), !(++col % 2) ? "\r\n" : "");
-		out += buf_;
+		out += fmt::format("{}{:3d}{}) {:>25}     {}",
+						   kColorGrn, to_underlying(i), kColorNrm,
+						   MUD::Skill(i).GetName(), !(++col % 2) ? "\r\n" : "");
 	}
 	SendMsgToChar(out, ch);
 	SendMsgToChar(
@@ -1211,17 +1213,17 @@ void sedit::show_activ_prof(CharData *ch) {
 	std::bitset<kNumPlayerClasses> &bits = olc_set.activ_list.at(activ_edit).prof;
 
 	for (size_t i = 0; i < bits.size(); ++i) {
-		snprintf(buf_, sizeof(buf_), "%s%2zu%s) %s\r\n",
-				 kColorGrn, i + 1, kColorNrm,
+		snprintf(buf_, sizeof(buf_), "%s%2llu%s) %s\r\n",
+				 kColorGrn, static_cast<unsigned long long>(i + 1), kColorNrm,
 				 MUD::Classes().FindAvailableItem(static_cast<int>(i)).GetCName());
 		out += buf_;
 	}
 
 	snprintf(buf_, sizeof(buf_),
-			 "%s%2zu%s) Сбросить все\r\n"
-			 "%s%2zu%s) Установить все\r\n",
-			 kColorGrn, bits.size() + 1, kColorNrm,
-			 kColorGrn, bits.size() + 2, kColorNrm);
+			 "%s%2llu%s) Сбросить все\r\n"
+			 "%s%2llu%s) Установить все\r\n",
+			 kColorGrn, static_cast<unsigned long long>(bits.size() + 1), kColorNrm,
+			 kColorGrn, static_cast<unsigned long long>(bits.size() + 2), kColorNrm);
 	out += buf_;
 
 	snprintf(buf_, sizeof(buf_), "Текущие профессии : %s", kColorCyn);
@@ -1336,11 +1338,11 @@ void sedit::parse_activ_edit(CharData *ch, const char *arg) {
 		return;
 	}
 	if (!a_isdigit(*arg)) {
-		switch (*arg) {
+		switch (native_text::first_char_code(arg)) {
 			case 'Q':
 			case 'q':
-			case 'В':
-			case 'в': show_main(ch);
+			case rus::kVeUpper:
+			case rus::kVe: show_main(ch);
 				break;
 			default: SendMsgToChar("Неверный выбор!\r\n", ch);
 				show_activ_edit(ch);
@@ -1502,7 +1504,7 @@ void sedit::parse_activ_change(CharData *ch, const char *arg) {
 	} else if (olc_set.activ_list.find(num) != olc_set.activ_list.end()) {
 		SendMsgToChar(ch,
 					  "Набор уже содержит активатор на %d %s.\r\n",
-					  num, GetDeclensionInNumber(num, EWhat::kObject));
+					  num, grammar::GetDeclensionInNumber(num, grammar::EWhat::kObject));
 	} else {
 		ActivNode activ;
 		auto i = olc_set.activ_list.find(activ_edit);
@@ -1515,7 +1517,7 @@ void sedit::parse_activ_change(CharData *ch, const char *arg) {
 		//olc_set.activ_list.emplace(num, activ);
 		olc_set.activ_list.insert(std::make_pair(num, activ));
 		SendMsgToChar(ch, "Активатор на %d %s добавлен в набор.\r\n",
-					  num, GetDeclensionInNumber(num, EWhat::kObject));
+					  num, grammar::GetDeclensionInNumber(num, grammar::EWhat::kObject));
 	}
 	show_activ_edit(ch);
 }

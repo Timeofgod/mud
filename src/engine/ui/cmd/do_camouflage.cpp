@@ -7,7 +7,9 @@
 */
 
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/mount.h"
+#include "gameplay/abilities/timed_abilities.h"
 #include "gameplay/skills/skills.h"
 #include "engine/db/global_objects.h"
 
@@ -15,17 +17,17 @@ void do_camouflage(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*
 	struct TimedSkill timed;
 	int prob, percent;
 
-	if (ch->IsNpc() || !ch->GetSkill(ESkill::kDisguise)) {
+	if (ch->IsNpc() || !GetSkill(ch, ESkill::kDisguise)) {
 		SendMsgToChar("Но вы не знаете как.\r\n", ch);
 		return;
 	}
 
-	if (ch->IsOnHorse()) {
+	if (mount::IsOnHorse(ch)) {
 		SendMsgToChar("Вы замаскировались под статую Юрия Долгорукого.\r\n", ch);
 		return;
 	}
 
-	if (IsAffectedBySpell(ch, ESpell::kGlitterDust)) {
+	if (IsAffected(ch, EAffect::kGlitterDust)) {
 		SendMsgToChar("Вы замаскировались под золотую рыбку.\r\n", ch);
 		return;
 	}
@@ -35,35 +37,38 @@ void do_camouflage(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*
 		return;
 	}
 
-	if (IS_IMMORTAL(ch)) {
-		RemoveAffectFromChar(ch, ESpell::kCamouflage);
+	if (privilege::IsImmortal(ch)) {
+		RemoveAffectFromChar(ch, EAffect::kDisguise);
 	}
 
-	if (IsAffectedBySpell(ch, ESpell::kCamouflage)) {
+	if (IsAffectedOrAttempting(ch, EAffect::kDisguise)) {
 		SendMsgToChar("Вы уже маскируетесь.\r\n", ch);
 		return;
 	}
 
 	SendMsgToChar("Вы начали усиленно маскироваться.\r\n", ch);
-	EXTRA_FLAGS(ch).unset(EXTRA_FAILCAMOUFLAGE);
+	ch->Temporary.unset(ECharExtraFlag::kFailCamouflage);
+	ch->Temporary.unset(ECharExtraFlag::kToldCamouflage);
 	percent = number(1, MUD::Skill(ESkill::kDisguise).difficulty);
 	prob = CalcCurrentSkill(ch, ESkill::kDisguise, nullptr);
 
 	Affect<EApply> af;
-	af.type = ESpell::kCamouflage;
-	af.duration = CalcDuration(ch, 0, GetRealLevel(ch), 6, 0, 2);
+	// Нижняя граница 1 -- та же беда, что у кражи: при навыке ниже делителя срок обнулялся, и
+	// маскировка слетала через пару секунд. Подробности в do_sneak.cpp.
+	af.duration = CalcDuration(ch, ch, ESkill::kDisguise, 0, 15, 1, 2);
 	af.modifier = world[ch->in_room]->zone_rn;
 	af.location = EApply::kNone;
-	af.battleflag = 0;
+	af.battleflag.clear();
 
 	if (percent > prob) {
-		af.bitvector = 0;
+		af.affect_type = EAffect::kDisguise;
+		af.battleflag = {kAfFailed};
 	} else {
-		af.bitvector = to_underlying(EAffect::kDisguise);
+		af.affect_type = EAffect::kDisguise;
 	}
 
 	affect_to_char(ch, af);
-	if (!IS_IMMORTAL(ch)) {
+	if (!privilege::IsImmortal(ch)) {
 		timed.skill = ESkill::kDisguise;
 		timed.time = 2;
 		ImposeTimedSkill(ch, &timed);

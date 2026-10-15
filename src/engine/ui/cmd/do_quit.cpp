@@ -6,14 +6,21 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/ui/cmd/do_quit.h"
+#include "engine/db/global_objects.h"
+#include "gameplay/economics/currencies.h"
+#include "utils/grammar/declensions.h"
 
 #include "engine/entities/char_data.h"
 #include "engine/network/descriptor_data.h"
 #include "gameplay/mechanics/depot.h"
 #include "gameplay/clans/house.h"
 #include "gameplay/fight/fight.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/db/db.h"
+#include "gameplay/ai/spec_procs.h"
 
 void do_quit(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	DescriptorData *d, *next_d;
@@ -45,10 +52,20 @@ void do_quit(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			SendMsgToChar("В связи с боевыми действиями эвакуация временно прекращена.\r\n", ch);
 			return;
 		}
+		// issue.specials: quitting next to a rentkeeper logs you back in here (the поселиться effect).
+		if (ch->in_room != r_helled_start_room && ch->in_room != r_named_start_room
+			&& ch->in_room != r_unreg_start_room) {
+			for (const auto vict : world[ch->in_room]->people) {
+				if (specials::IsRentkeeper(vict)) {
+					GET_LOADROOM(ch) = GET_ROOM_VNUM(ch->in_room);
+					break;
+				}
+			}
+		}
 		if (!GET_INVIS_LEV(ch))
 			act("$n покинул$g игру.", true, ch, nullptr, nullptr, kToRoom | kToArenaListen);
-		sprintf(buf, "%s quit the game.", GET_NAME(ch));
-		mudlog(buf, NRM, std::max(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+		mudlog(fmt::format("{} quit the game.", GET_NAME(ch)),
+			   NRM, std::max(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
 		SendMsgToChar("До свидания, странник... Мы ждем тебя снова!\r\n", ch);
 
 		long depot_cost = static_cast<long>(Depot::get_total_cost_per_day(ch));
@@ -56,10 +73,10 @@ void do_quit(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			SendMsgToChar(ch,
 						  "За вещи в хранилище придется заплатить %ld %s в день.\r\n",
 						  depot_cost,
-						  GetDeclensionInNumber(depot_cost, EWhat::kMoneyU));
-			long deadline = ((ch->get_gold() + ch->get_bank()) / depot_cost);
+						  MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(depot_cost, grammar::ECase::kNom).c_str());
+			long deadline = ((currencies::GetHand(*ch, currencies::kGold) + currencies::GetBank(*ch, currencies::kGold)) / depot_cost);
 			SendMsgToChar(ch, "Твоих денег хватит на %ld %s.\r\n", deadline,
-						  GetDeclensionInNumber(deadline, EWhat::kDay));
+						  grammar::GetDeclensionInNumber(deadline, grammar::EWhat::kDay));
 		}
 		Depot::exit_char(ch);
 		Clan::clan_invoice(ch, false);
@@ -72,7 +89,7 @@ void do_quit(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			next_d = d->next;
 			if (d == ch->desc)
 				continue;
-			if (d->character && (GET_UID(d->character) == GET_UID(ch)))
+			if (d->character && (d->character->get_uid() == ch->get_uid()))
 				d->state = EConState::kDisconnect;
 		}
 		ExtractCharFromWorld(ch, false);

@@ -7,6 +7,7 @@
 */
 
 #include "addshot.h"
+#include "gameplay/mechanics/minions.h"
 
 #include "utils/utils.h"
 #include "utils/random.h"
@@ -23,7 +24,7 @@ void ProcessAddshotHits(CharData *ch, CharData *victim, ESkill type, fight::Atta
 
 void ProcessMultyShotHits(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) {
 	if (IsArmedWithBow(ch, weapon)) {
-		if (ch->GetSkill(ESkill::kAddshot)) {
+		if (GetSkill(ch, ESkill::kAddshot)) {
 			ProcessAddshotHits(ch, victim, type, weapon);
 		} else {
 			ProcessDoubleShotHits(ch, type, weapon);
@@ -41,7 +42,7 @@ bool IsArmedWithBow(CharData *ch, fight::AttackType weapon) {
 
 void ProcessDoubleShotHits(CharData *ch, ESkill type, fight::AttackType weapon) {
 	if (CanUseFeat(ch, EFeat::kDoubleShot)) {
-		if (std::min(850, 200 + ch->GetSkill(ESkill::kBows) * 4 + GetRealDex(ch) * 5) >= number(1, 1000)) {
+		if (std::min(850, 200 + GetSkill(ch, ESkill::kBows) * 4 + GetRealDex(ch) * 5) >= number(1, 1000)) {
 			hit(ch, ch->GetEnemy(), type, weapon);
 		}
 	}
@@ -50,7 +51,7 @@ void ProcessDoubleShotHits(CharData *ch, ESkill type, fight::AttackType weapon) 
 void ProcessAddshotHits(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) {
 	int prob = CalcCurrentSkill(ch, ESkill::kAddshot, ch->GetEnemy());
 	int dex_mod = std::max(GetRealDex(ch) - 25, 0) * 10;
-	int pc_mod =IS_CHARMICE(ch) ? 0 : 1;
+	int pc_mod =IsCharmice(ch) ? 0 : 1;
 	auto difficulty = MUD::Skill(ESkill::kAddshot).difficulty * 5;
 	int percent = number(1, difficulty);
 

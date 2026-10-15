@@ -6,11 +6,15 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
+#include "administration/privilege.h"
 #include "gameplay/communication/offtop.h"
 #include "gameplay/communication/spam.h"
 #include "engine/ui/color.h"
 #include "gameplay/communication/remember.h"
+#include "gameplay/core/remort.h"
 
 void do_offtop(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	if (ch->IsNpc() || GetRealLevel(ch) >= kLvlImmortal || ch->IsFlagged(EPrf::kStopOfftop)) {
@@ -24,10 +28,10 @@ void do_offtop(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	}
 	//if (ROOM_FLAGGED(ch->in_room, ERoomFlag::kSoundproof) || ROOM_FLAGGED(ch->in_room, ERoomFlag::kTribune))
 	if (ROOM_FLAGGED(ch->in_room, ERoomFlag::kSoundproof)) {
-		SendMsgToChar(SOUNDPROOF, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kSoundproof) + "\r\n", ch);
 		return;
 	}
-	if (GetRealLevel(ch) < offtop_system::kMinOfftopLvl && !GetRealRemort(ch)) {
+	if (GetRealLevel(ch) < offtop_system::kMinOfftopLvl && !remort::GetRealRemort(ch)) {
 		SendMsgToChar(ch, "Вам стоит достичь хотя бы %d уровня, чтобы вы могли оффтопить.\r\n",
 					  offtop_system::kMinOfftopLvl);
 		return;
@@ -53,23 +57,24 @@ void do_offtop(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	ch->set_last_tell(argument);
 	if (ch->IsFlagged(EPlrFlag::kSpamer)) // а вот фиг, еще проверка :)
 		return;
-	snprintf(buf, kMaxStringLength, "[оффтоп] %s : '%s'\r\n", GET_NAME(ch), argument);
-	snprintf(buf1, kMaxStringLength, "&c%s&n", buf);
+	// Одна строка на всех: в буферном виде текст канала жил в buf, а его же цветная
+	// копия -- в buf1, и любой вызов внутри цикла мог затереть и то, и другое.
+	const std::string message = fmt::format("&c[оффтоп] {} : '{}'&n\r\n", GET_NAME(ch), argument);
 	for (DescriptorData *i = descriptor_list; i; i = i->next) {
 		// переплут как любитель почитывать логи за ночь очень хотел этот канал...
 		// а мы шо, не люди? даешь оффтоп 34-ым! кому не нравится - реж оффтоп...
 		if  (i->state == EConState::kPlaying
 			&& i->character
 // оффтоп видят все, временно
-//			&& (GetRealLevel(i->character) < kLvlImmortal || IS_IMPL(i->character))
+//			&& (GetRealLevel(i->character) < kLvlImmortal || privilege::IsImpl(i->character.get()))
 			&& i->character->IsFlagged(EPrf::kOfftopMode)
 			&& !i->character->IsFlagged(EPrf::kStopOfftop)
 			&& !ignores(i->character.get(), ch, EIgnore::kOfftop)) {
-			SendMsgToChar(i->character.get(), "%s%s%s", kColorCyn, buf, kColorNrm);
-			i->character->remember_add(buf1, Remember::ALL);
+			SendWrappedToChar(message, i->character.get());
+			i->character->remember_add(message, Remember::ALL);
 		}
 	}
-	ch->remember_add(buf1, Remember::OFFTOP);
+	ch->remember_add(message, Remember::OFFTOP);
 }
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

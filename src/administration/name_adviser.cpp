@@ -3,6 +3,8 @@
 #include <random>
 
 #include "engine/entities/char_player.h"
+#include "engine/db/global_objects.h"
+#include "utils/native_text.h"
 
 NameAdviser::NameAdviser() {
 	std::srand(static_cast<unsigned int>((std::time(nullptr))));
@@ -95,8 +97,9 @@ void NameAdviser::init() {
 	m_list_of_free_names.clear();
 	m_list_of_removed_names.clear();
 
-	// reading ANAME_FILE and try to load each char
-	std::ifstream approved_names_file(ANAME_FILE);
+	// read the approved-names file and try to load each char
+	const std::string &aname = MUD::StateManager().Path(state::EStateFile::kApprovedNames);
+	std::ifstream approved_names_file(aname);
 	if (!approved_names_file.is_open() || !approved_names_file.is_open()) {
 		log("NameAdviser: could bot build free_names list");
 		return;
@@ -104,6 +107,8 @@ void NameAdviser::init() {
 
 	std::string line;
 	while (std::getline(approved_names_file, line)) {
+		// Граница чтения: файл лежит в кодировке мира (issue #3681).
+		line = native_text::from_disk_line(line.c_str());
 		std::istringstream iss(line);
 		std::string char_name;
 
@@ -125,21 +130,16 @@ void NameAdviser::init() {
 }
 
 bool NameAdviser::is_names_similar(const std::string &left, const std::string &right) {
-	if ((left.length() < kMinNameLength) || (right.length() < kMinNameLength)) {
+	// Сравниваются первые kMinNameLength символов без учёта регистра. По байтам это была бы
+	// половина русского имени, да ещё и с побайтовым UPPER, который кириллицу не берёт (#3681).
+	if ((native_text::char_count(left) < kMinNameLength) || (native_text::char_count(right) < kMinNameLength)) {
 		return false;
 	}
 
-	std::string short_left = left.substr(0, kMinNameLength);
-	for (auto &ch: short_left) {
-		ch = UPPER(ch);
-	}
+	const std::string short_left = left.substr(0, native_text::char_offset(left, kMinNameLength));
+	const std::string short_right = right.substr(0, native_text::char_offset(right, kMinNameLength));
 
-	std::string short_rigth = right.substr(0, kMinNameLength);
-	for (auto &ch: short_rigth) {
-		ch = UPPER(ch);
-	}
-
-	return short_left == short_rigth;
+	return native_text::compare_ci(short_left, short_right) == 0;
 }
 
 void NameAdviser::remove_duplicates() {

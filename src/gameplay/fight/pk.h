@@ -14,11 +14,25 @@
 #ifndef _PVP_H_
 #define _PVP_H_
 
-#include "engine/entities/char_data.h"
+#include <memory>
 
 #include <string>
 
+class CharData;
+
+// issue.chardata-cleaning: per-victim PK bookkeeping (was PK_Memory_type in char_data.h).
+struct PkMemory {
+	long unique{0};
+	long kill_num{0};
+	long kill_at{0};
+	long revenge_num{0};
+	long battle_exp{0};
+	long thief_exp{0};
+	long clan_exp{0};
+};
+
 class ObjData;    // forward declaration to avoid inclusion of obj.hpp and any dependencies of that header.
+class BufferedFileWriter;
 
 //*************************************************************************
 // Основные функци и разрешения конфликтных ситуаций между игроками
@@ -32,18 +46,6 @@ class ObjData;    // forward declaration to avoid inclusion of obj.hpp and any d
 //   3. Вызов функции pk_agro_action() при каждой агрессии
 //   4. Вызов функции pk_thiefs_action() при воровстве
 //   5. Вызов функции pk_revenge_action() в случае убийства
-
-// Структуры для сохранения ПК информаци
-struct PK_Memory_type {
-	long unique;        // unique игрока
-	long kill_num;        // количество флагов носителя структуры на unique
-	long kill_at;        // время получения последнего флага (для spamm)
-	long revenge_num;    // количетсво попыток реализации мести со стороны unique
-	long battle_exp;    // время истечения поединка
-	long thief_exp;        // время истечения флага воровства
-	long clan_exp;        // время истечения клан-флага
-	struct PK_Memory_type *next;
-};
 
 const short MAX_REVENGE = 2;    // Максимальное количество попыток реализации мести
 
@@ -97,16 +99,16 @@ int pk_player_count(CharData *ch);
 
 void AddPkAuraDescription(CharData *victim, char *s);
 const char *GetPkNameColor(CharData *victim);
-inline const char *GetPkNameColor(const CharData::shared_ptr &victim) {
+inline const char *GetPkNameColor(const std::shared_ptr<CharData> &victim) {
 	return GetPkNameColor(victim.get());
 }
-void pk_list_sprintf(CharData *ch, char *buff);
+std::string pk_list_sprintf(CharData *ch);
 void do_revenge(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/);
 void UpdatePkLogs(CharData *ch, CharData *victim);
 
 //*************************************************************************
 // Системные функции сохранения/загрузки ПК флагов
-void save_pkills(CharData *ch, FILE *saved);
+void save_pkills(CharData *ch, BufferedFileWriter &saved);
 
 //*************************************************************************
 bool has_clan_members_in_group(CharData *ch);
@@ -131,6 +133,8 @@ bool handle_transfer(CharData *ch, CharData *victim, ObjData *obj, ObjData *cont
 //Помечает стаф в трупе как кровавый
 void handle_corpse(ObjData *corpse, CharData *ch, CharData *killer);
 bool is_bloody(const ObjData *obj);
+//рекурсивно ищет кровавый предмет внутри трупа/контейнера
+bool CatchBloodyCorpse(ObjData *l);
 }
 
 //Структура для хранения информации о кровавом стафе

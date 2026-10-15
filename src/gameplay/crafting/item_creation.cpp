@@ -6,10 +6,19 @@
 *  $Date$                                          *
 *  $Revision$                                                     *
 ************************************************************************ */
+#include "utils/native_text.h"
 #include "item_creation.h"
+#include <fmt/format.h>
+#include "utils/utils_parse.h"
+#include "utils/parser_wrapper.h"
+#include "administration/privilege.h"
+#include "utils/grammar/gender.h"
 
 #include "engine/db/obj_prototypes.h"
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/mechanics/inventory.h"
 #include "engine/olc/olc.h"
 #include "engine/ui/modify.h"
 #include "gameplay/fight/fight.h"
@@ -17,8 +26,11 @@
 #include "engine/db/global_objects.h"
 #include "gameplay/core/base_stats.h"
 #include "gameplay/core/constants.h"
+#include "engine/observability/metrics.h"
+#include "gameplay/core/remort.h"
 
 #include <cmath>
+#include <set>
 
 char *format_act(const char *orig, CharData *ch, ObjData *obj, const void *vict_obj);
 
@@ -138,373 +150,165 @@ CharData *&operator<<(CharData *&ch, const string &p) {
 	return ch;
 }
 
-void init_make_items() {
-	char tmpbuf[kMaxInputLength];
-	sprintf(tmpbuf, "Loading making recepts.");
-	mudlog(tmpbuf, LGH, kLvlImmortal, SYSLOG, true);
-	make_recepts.load();
+// Целочисленный атрибут DataNode; def при отсутствии/некорректном значении.
+static int RecipeAttrInt(parser_wrapper::DataNode &node, const char *key, int def) {
+	const char *v = node.GetValue(key);
+	if (!v || !*v) {
+		return def;
+	}
+	try {
+		return parse::ReadAsInt(v);
+	} catch (const std::exception &) {
+		return def;
+	}
 }
-// Парсим ввод пользователя в меню правки рецепта
-void mredit_parse(DescriptorData *d, char *arg) {
-	string sagr = string(arg);
-	char tmpbuf[kMaxInputLength];
-	string tmpstr;
-	MakeRecept *trec = OLC_MREC(d);
-	int i;
-	switch (OLC_MODE(d)) {
-		case MREDIT_MAIN_MENU:
-			// Ввод главного меню.
-			if (sagr == "1") {
-				SendMsgToChar("Введите VNUM изготавливаемого предмета : ", d->character.get());
-				OLC_MODE(d) = MREDIT_OBJ_PROTO;
-				return;
-			}
 
-			if (sagr == "2") {
-				// Выводить список умений ... или давать вводить ручками.
-				tmpstr = "\r\nСписок доступных умений:\r\n";
-				i = 0;
-				while (make_skills[i].num != ESkill::kUndefined) {
-					sprintf(tmpbuf, "%s%d%s) %s.\r\n", grn, i + 1, nrm, make_skills[i].name);
-					tmpstr += string(tmpbuf);
-					i++;
-				}
-				tmpstr += "Введите номер умения : ";
-				SendMsgToChar(tmpstr.c_str(), d->character.get());
-				OLC_MODE(d) = MREDIT_SKILL;
-				return;
-			}
-
-			if (sagr == "3") {
-				SendMsgToChar("Блокировать рецепт? (y/n): ", d->character.get());
-				OLC_MODE(d) = MREDIT_LOCK;
-				return;
-			}
-
-			for (i = 0; i < MAX_PARTS; i++) {
-				if (atoi(sagr.c_str()) - 4 == i) {
-					OLC_NUM(d) = i;
-					mredit_disp_ingr_menu(d);
-					return;
-				}
-			}
-
-			if (sagr == "d") {
-				SendMsgToChar("Удалить рецепт? (y/n):", d->character.get());
-				OLC_MODE(d) = MREDIT_DEL;
-				return;
-			}
-
-			if (sagr == "s") {
-				// Сохраняем рецепты в файл
-				make_recepts.save();
-				SendMsgToChar("Рецепты сохранены.\r\n", d->character.get());
-				mredit_disp_menu(d);
-				OLC_VAL(d) = 0;
-				return;
-			}
-
-			if (sagr == "q") {
-				// Проверяем не производилось ли изменение
-				if (OLC_VAL(d)) {
-					SendMsgToChar("Вы желаете сохранить изменения в рецепте? (y/n) : ", d->character.get());
-					OLC_MODE(d) = MREDIT_CONFIRM_SAVE;
-					return;
-				} else {
-					// Загружаем рецепты из файла
-					// Это восстановит текущее состояние дел.
-					make_recepts.load();
-					// Очищаем структуры OLC выходим в нормальный режим работы
-					cleanup_olc(d, CLEANUP_ALL);
-					return;
-				}
-			}
-
-			SendMsgToChar("Неверный ввод.\r\n", d->character.get());
-			mredit_disp_menu(d);
-			break;
-
-		case MREDIT_OBJ_PROTO: i = atoi(sagr.c_str());
-			if (GetObjRnum(i) < 0) {
-				SendMsgToChar("Прототип выбранного вами объекта не существует.\r\n", d->character.get());
-			} else {
-				trec->obj_proto = i;
-				OLC_VAL(d) = 1;
-			}
-			mredit_disp_menu(d);
-			break;
-
-		case MREDIT_SKILL: {
-			auto skill_num = atoi(sagr.c_str());
-			i = 0;
-			while (make_skills[i].num != ESkill::kUndefined) {
-				if (skill_num == i + 1) {
-					trec->skill = make_skills[i].num;
-					OLC_VAL(d) = 1;
-					mredit_disp_menu(d);
-					return;
-				}
-				i++;
-			}
-			SendMsgToChar("Выбрано некорректное умение.\r\n", d->character.get());
-			mredit_disp_menu(d);
-			break;
+// Чтение cfg/craft/item_creation.xml через cfg_manager (boot + reload makeitems).
+void ItemCreationLoader::Load(parser_wrapper::DataNode data) {
+	make_recepts.clear();
+	for (auto &rnode : data.Children("recipe")) {
+		const char *skill_str = rnode.GetValue("skill");
+		ESkill skill;
+		try {
+			skill = parse::ReadAsConstant<ESkill>(skill_str);
+		} catch (const std::exception &) {
+			log("MakeRecept: bad skill '%s' - recipe skipped.", skill_str ? skill_str : "");
+			continue;
 		}
-		case MREDIT_DEL: {
-			if (sagr == "Y" || sagr == "y") {
-				SendMsgToChar("Рецепт удален. Рецепты сохранены.\r\n", d->character.get());
-				make_recepts.del(trec);
-				make_recepts.save();
-				make_recepts.load();
-				// Очищаем структуры OLC выходим в нормальный режим работы
-				cleanup_olc(d, CLEANUP_ALL);
-				return;
-			} else if (sagr == "N" || sagr == "n") {
-				SendMsgToChar("Рецепт не удален.\r\n", d->character.get());
-			} else {
-				SendMsgToChar("Неверный ввод.\r\n", d->character.get());
-			}
-			mredit_disp_menu(d);
-			break;
+		auto *trec = new MakeRecept();
+		trec->vnum = RecipeAttrInt(rnode, "vnum", 0);
+		trec->skill = skill;
+		const char *locked = rnode.GetValue("locked");
+		trec->locked = locked && (!strcmp(locked, "true") || !strcmp(locked, "1"));
+		trec->obj_proto = RecipeAttrInt(rnode, "result", 0);
+		if (GetObjRnum(trec->obj_proto) < 0) {
+			log("MakeRecept: unknown result proto %d - recipe locked.", trec->obj_proto);
+			trec->locked = true;
 		}
-		case MREDIT_LOCK: {
-			if (sagr == "Y" || sagr == "y") {
-				SendMsgToChar("Рецепт заблокирован от использования.\r\n", d->character.get());
+		int idx = 0;
+		for (auto &ing : rnode.Children("ingredient")) {
+			if (idx >= MAX_PARTS) {
+				break;
+			}
+			const int proto = RecipeAttrInt(ing, "vnum", 0);
+			trec->parts[idx].proto = proto;
+			trec->parts[idx].min_weight = RecipeAttrInt(ing, "min_weight", 0);
+			trec->parts[idx].min_power = RecipeAttrInt(ing, "min_power", 0);
+			if (proto != 0 && GetObjRnum(proto) < 0) {
+				log("MakeRecept: unknown ingredient proto %d for result %d - recipe locked.",
+					proto, trec->obj_proto);
 				trec->locked = true;
-				OLC_VAL(d) = 1;
-			} else if (sagr == "N" || sagr == "n") {
-				SendMsgToChar("Рецепт разблокирован и может использоваться.\r\n", d->character.get());
-				trec->locked = false;
-				OLC_VAL(d) = 1;
-			} else {
-				SendMsgToChar("Неверный ввод.\r\n", d->character.get());
 			}
-			mredit_disp_menu(d);
-			break;
+			++idx;
 		}
-		case MREDIT_INGR_MENU: {
-			// Ввод меню ингридиентов.
-			if (sagr == "1") {
-				SendMsgToChar("Введите VNUM ингредиента : ", d->character.get());
-				OLC_MODE(d) = MREDIT_INGR_PROTO;
-				return;
-			}
-
-			if (sagr == "2") {
-				SendMsgToChar("Введите мин.вес ингредиента : ", d->character.get());
-				OLC_MODE(d) = MREDIT_INGR_WEIGHT;
-				return;
-			}
-
-			if (sagr == "3") {
-				SendMsgToChar("Введите мин.силу ингредиента : ", d->character.get());
-				OLC_MODE(d) = MREDIT_INGR_POWER;
-				return;
-			}
-
-			if (sagr == "q") {
-				mredit_disp_menu(d);
-				return;
-			}
-
-			SendMsgToChar("Неверный ввод.\r\n", d->character.get());
-			mredit_disp_ingr_menu(d);
-			break;
-		}
-		case MREDIT_INGR_PROTO: {
-			i = atoi(sagr.c_str());
-			if (i == 0) {
-				if (trec->parts[OLC_NUM(d)].proto != i)
-					OLC_VAL(d) = 1;
-				trec->parts[OLC_NUM(d)].proto = 0;
-				trec->parts[OLC_NUM(d)].min_weight = 0;
-				trec->parts[OLC_NUM(d)].min_power = 0;
-			} else if (GetObjRnum(i) < 0) {
-				SendMsgToChar("Прототип выбранного вами ингредиента не существует.\r\n", d->character.get());
-			} else {
-				trec->parts[OLC_NUM(d)].proto = i;
-				OLC_VAL(d) = 1;
-			}
-			mredit_disp_ingr_menu(d);
-			break;
-		}
-		case MREDIT_INGR_WEIGHT: {
-			i = atoi(sagr.c_str());
-			trec->parts[OLC_NUM(d)].min_weight = i;
-			OLC_VAL(d) = 1;
-			mredit_disp_ingr_menu(d);
-			break;
-		}
-		case MREDIT_INGR_POWER: {
-			i = atoi(sagr.c_str());
-			trec->parts[OLC_NUM(d)].min_power = i;
-			OLC_VAL(d) = 1;
-			mredit_disp_ingr_menu(d);
-			break;
-		}
-		case MREDIT_CONFIRM_SAVE: {
-			if (sagr == "Y" || sagr == "y") {
-				SendMsgToChar("Рецепты сохранены.\r\n", d->character.get());
-				make_recepts.save();
-				make_recepts.load();
-				// Очищаем структуры OLC выходим в нормальный режим работы
-				cleanup_olc(d, CLEANUP_ALL);
-				return;
-			} else if (sagr == "N" || sagr == "n") {
-				SendMsgToChar("Рецепт не был сохранен.\r\n", d->character.get());
-				cleanup_olc(d, CLEANUP_ALL);
-				return;
-			} else {
-				SendMsgToChar("Неверный ввод.\r\n", d->character.get());
-			}
-			mredit_disp_menu(d);
-			break;
-		}
-	}
-}
-
-// Входим в режим редактирования рецептов для предметов.
-void do_edit_make(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	string tmpstr;
-	DescriptorData *d;
-	char tmpbuf[kMaxInputLength];
-	MakeRecept *trec;
-
-	// Проверяем не правит ли кто-то рецепты для исключения конфликтов
-	for (d = descriptor_list; d; d = d->next) {
-		if (d->olc && d->state == EConState::kMredit) {
-			sprintf(tmpbuf, "Рецепты в настоящий момент редактируются %s.\r\n", GET_PAD(d->character, 4));
-			SendMsgToChar(tmpbuf, ch);
-			return;
-		}
-	}
-
-	argument = one_argument(argument, tmpbuf);
-	if (!*tmpbuf) {
-		// Номер не задан создаем новый рецепт.
-		trec = new(MakeRecept);
-		// Запихиваем рецепт но помним что он заблокирован.
 		make_recepts.add(trec);
-		ch->desc->olc = new olc_data;
-		// входим в состояние правки рецепта.
-		ch->desc->state = EConState::kMredit;
-		OLC_MREC(ch->desc) = trec;
-		OLC_VAL(ch->desc) = 0;
-		mredit_disp_menu(ch->desc);
-		return;
 	}
-
-	size_t i = atoi(tmpbuf);
-	if ((i > make_recepts.size()) || (i <= 0)) {
-		SendMsgToChar("Выбранного рецепта не существует.", ch);
-		return;
-	}
-
-	i -= 1;
-	ch->desc->olc = new olc_data;
-	ch->desc->state = EConState::kMredit;
-	OLC_MREC(ch->desc) = make_recepts[i];
-	mredit_disp_menu(ch->desc);
-	return;
 }
 
-// Отображение меню параметров ингридиента.
-void mredit_disp_ingr_menu(DescriptorData *d) {
-	// Рисуем меню ...
-	MakeRecept *trec;
-	string objname, ingrname, tmpstr;
-	char tmpbuf[kMaxInputLength];
-	int index = OLC_NUM(d);
-	trec = OLC_MREC(d);
-	auto tobj = GetObjectPrototype(trec->obj_proto);
-	if (trec->obj_proto && tobj) {
-		objname = tobj->get_PName(ECase::kNom);
-	} else {
-		objname = "Нет";
-	}
-	tobj = GetObjectPrototype(trec->parts[index].proto);
-	if (trec->parts[index].proto && tobj) {
-		ingrname = tobj->get_PName(ECase::kNom);
-	} else {
-		ingrname = "Нет";
-	}
-	sprintf(tmpbuf,
-#if defined(CLEAR_SCREEN)
-		"[H[J"
-#endif
-			"\r\n\r\n"
-			"-- Рецепт - %s%s%s (%d) \r\n"
-			"%s1%s) Ингредиент : %s%s (%d)\r\n"
-			"%s2%s) Мин. вес   : %s%d\r\n"
-			"%s3%s) Мин. сила  : %s%d\r\n",
-			grn, objname.c_str(), nrm, trec->obj_proto,
-			grn, nrm, yel, ingrname.c_str(), trec->parts[index].proto,
-			grn, nrm, yel, trec->parts[index].min_weight, grn, nrm, yel, trec->parts[index].min_power);
-	tmpstr = string(tmpbuf);
-	tmpstr += string(grn) + "q" + string(nrm) + ") Выход\r\n";
-	tmpstr += "Ваш выбор : ";
-	SendMsgToChar(tmpstr.c_str(), d->character.get());
-	OLC_MODE(d) = MREDIT_INGR_MENU;
+void ItemCreationLoader::Reload(parser_wrapper::DataNode data) {
+	Load(std::move(data));
 }
 
-// Отображение главного меню.
-void mredit_disp_menu(DescriptorData *d) {
-	// Рисуем меню ...
-	MakeRecept *trec;
-	char tmpbuf[kMaxInputLength];
-	string tmpstr, objname, skillname;
-	trec = OLC_MREC(d);
-	auto tobj = GetObjectPrototype(trec->obj_proto);
-	if (trec->obj_proto && tobj) {
-		objname = tobj->get_PName(ECase::kNom);
-	} else {
-		objname = "Нет";
+// Наименьший свободный (неиспользуемый) vnum рецепта, начиная с 1.
+static int FirstFreeRecipeVnum() {
+	std::set<int> used;
+	for (size_t i = 0; i < make_recepts.size(); ++i) {
+		used.insert(make_recepts[i]->vnum);
 	}
-	int i = 0;
-	//
-	skillname = "Нет";
-	while (make_skills[i].num != ESkill::kUndefined) {
-		if (make_skills[i].num == trec->skill) {
-			skillname = string(make_skills[i].name);
-			break;
-		}
-		i++;
+	int v = 1;
+	while (used.count(v)) {
+		++v;
 	}
-	sprintf(tmpbuf,
-#if defined(CLEAR_SCREEN)
-		"[H[J"
-#endif
-			"\r\n\r\n"
-			"-- Рецепт --\r\n"
-			"%s1%s) Предмет    : %s%s (%d)\r\n"
-			"%s2%s) Умение     : %s%s (%d)\r\n"
-			"%s3%s) Блокирован : %s%s \r\n",
-			grn, nrm, yel, objname.c_str(), trec->obj_proto,
-			grn, nrm, yel, skillname.c_str(), to_underlying(trec->skill),
-			grn, nrm, yel, (trec->locked ? "Да" : "Нет"));
-	tmpstr = string(tmpbuf);
-	for (int i = 0; i < MAX_PARTS; i++) {
-		tobj = GetObjectPrototype(trec->parts[i].proto);
-		if (trec->parts[i].proto && tobj) {
-			objname = tobj->get_PName(ECase::kNom);
-		} else {
-			objname = "Нет";
+	return v;
+}
+
+std::string ItemCreationLoader::EditableWhat() const { return "makeitems"; }
+
+std::vector<cfg_manager::EditableElement> ItemCreationLoader::ListElements() const {
+	std::vector<cfg_manager::EditableElement> out;
+	for (size_t i = 0; i < make_recepts.size(); ++i) {
+		const auto *r = make_recepts[i];
+		std::string label = NAME_BY_ITEM<ESkill>(r->skill) + " -> obj " + std::to_string(r->obj_proto);
+		if (r->locked) {
+			label += " (locked)";
 		}
-		sprintf(tmpbuf, "%s%d%s) Компонент %d: %s%s (%d)\r\n",
-				grn, i + 4, nrm, i + 1, yel, objname.c_str(), trec->parts[i].proto);
-		tmpstr += string(tmpbuf);
-	};
-	tmpstr += string(grn) + "d" + string(nrm) + ") Удалить\r\n";
-	tmpstr += string(grn) + "s" + string(nrm) + ") Сохранить\r\n";
-	tmpstr += string(grn) + "q" + string(nrm) + ") Выход\r\n";
-	tmpstr += "Ваш выбор : ";
-	SendMsgToChar(tmpstr.c_str(), d->character.get());
-	OLC_MODE(d) = MREDIT_MAIN_MENU;
+		out.push_back({std::to_string(r->vnum), label});
+	}
+	return out;
+}
+
+cfg_manager::ValidationResult ItemCreationLoader::Validate(parser_wrapper::DataNode &doc) const {
+	// Проверяем валидность умений и УНИКАЛЬНОСТЬ vnum'ов рецептов.
+	std::set<std::string> seen;
+	for (auto &node : doc.Children()) {
+		if (std::string(node.GetName()) != "recipe") {
+			continue;
+		}
+		const char *vnum = node.GetValue("vnum");
+		if (!vnum || !*vnum) {
+			return {false, "a <recipe> is missing its vnum."};
+		}
+		for (const char *c = vnum; *c; ++c) {
+			if (*c < '0' || *c > '9') {
+				return {false, "recipe vnum '" + std::string(vnum) + "' is not a non-negative integer."};
+			}
+		}
+		if (!seen.insert(vnum).second) {
+			return {false, "duplicate recipe vnum '" + std::string(vnum) + "'."};
+		}
+		const char *skill = node.GetValue("skill");
+		try {
+			(void) parse::ReadAsConstant<ESkill>(skill);
+		} catch (const std::exception &) {
+			return {false, "recipe " + std::string(vnum) + ": unknown skill '"
+					+ std::string(skill ? skill : "") + "'."};
+		}
+	}
+	return {true, ""};
+}
+
+parser_wrapper::DataNode ItemCreationLoader::FindElementNode(parser_wrapper::DataNode root,
+															const std::string &id) const {
+	// Рецепт опознается по целочисленному vnum (не по `id`-атрибуту). Идем по всем детям с проверкой
+	// имени тега (а не Children("recipe")): узел, скопированный из отфильтрованного диапазона, унес бы
+	// фильтр и сломал бы свой собственный Children() ниже.
+	for (auto &child : root.Children()) {
+		if (std::string(child.GetName()) == "recipe" && id == child.GetValue("vnum")) {
+			return child;
+		}
+	}
+	return parser_wrapper::DataNode{};
+}
+
+std::string ItemCreationLoader::CanonicalElementId(const std::string &id) const {
+	if (id.empty()) {
+		return "";
+	}
+	// "new"/"auto"/"next" -- создать рецепт с первым свободным vnum.
+	if (id == "new" || id == "auto" || id == "next") {
+		return std::to_string(FirstFreeRecipeVnum());
+	}
+	// Иначе ключом может быть только неотрицательное целое (свободный vnum для нового рецепта или
+	// существующий -- последний обрабатывается через FindElementNode как редактирование).
+	for (const char c : id) {
+		if (c < '0' || c > '9') {
+			return "";
+		}
+	}
+	return id;
+}
+
+parser_wrapper::DataNode ItemCreationLoader::CreateElementNode(parser_wrapper::DataNode root,
+															  const std::string &id) const {
+	auto node = root.AddChild("recipe");
+	node.SetValue("vnum", id);
+	node.SetValue("skill", "kMakeWeapon");
+	node.SetValue("result", "0");
+	return node;
 }
 
 void do_list_make(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/) {
-	std::string tmpstr, skill_name;
-	char *obj_name;
+	std::string tmpstr, skill_name, obj_name;
 	char tmpbuf[kMaxInputLength];
 	MakeRecept *trec;
 	if (make_recepts.size() == 0) {
@@ -518,12 +322,11 @@ void do_list_make(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/
 	for (size_t i = 0; i < make_recepts.size(); i++) {
 		int j = 0;
 		skill_name = "Нет";
-		obj_name = str_dup("Нет");
+		obj_name = "Нет";
 		trec = make_recepts[i];
 		auto obj = GetObjectPrototype(trec->obj_proto);
 		if (obj) {
-			obj_name = str_dup(obj->get_PName(ECase::kNom).substr(0, 39).c_str());
-			utils::RemoveColors(obj_name);
+			obj_name = utils::RemoveColors(obj->get_PName(grammar::ECase::kNom).substr(0, native_text::char_offset(obj->get_PName(grammar::ECase::kNom), 39)));
 		}
 		while (make_skills[j].num != ESkill::kUndefined) {
 			if (make_skills[j].num == trec->skill) {
@@ -532,19 +335,18 @@ void do_list_make(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/
 			}
 			j++;
 		}
-		sprintf(tmpbuf, "%3zd  %-1s  %-6s  %-40s(%5d) :",
-				i + 1, (trec->locked ? "*" : " "), skill_name.c_str(), obj_name, trec->obj_proto);
-		tmpstr += string(tmpbuf);
+		tmpstr += fmt::format("{:3}  {:<1}  {:<6}  {:<40}({:5}) :",
+				i + 1, (trec->locked ? "*" : " "), skill_name,
+				obj_name, trec->obj_proto);
 		for (int j = 0; j < MAX_PARTS; j++) {
 			if (trec->parts[j].proto != 0) {
 				obj = GetObjectPrototype(trec->parts[j].proto);
 				if (obj) {
-					obj_name = str_dup(obj->get_PName(ECase::kNom).substr(0, 34).c_str());
-					utils::RemoveColors(obj_name);
+					obj_name = utils::RemoveColors(obj->get_PName(grammar::ECase::kNom).substr(0, native_text::char_offset(obj->get_PName(grammar::ECase::kNom), 34)));
 				} else {
-					obj_name = str_dup("Нет");
+					obj_name = "Нет";
 				}
-				sprintf(tmpbuf, " %-35s(%5d)", obj_name, trec->parts[j].proto);
+				strcpy(tmpbuf, fmt::format(" {:<35}({:5})", obj_name, trec->parts[j].proto).c_str());
 				if (j > 0) {
 					if (j % 2 == 0) {
 						// разбиваем строчки если ингров больше 2;
@@ -572,7 +374,7 @@ void do_make_item(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	// Выковать можно клинок и доспех (щит) умения разные. название одно
 	// Сварить отвар
 	// Сшить одежду
-	if ((subcmd == MAKE_WEAR) && (!ch->GetSkill(ESkill::kMakeWear))) {
+	if ((subcmd == MAKE_WEAR) && (!GetSkill(ch, ESkill::kMakeWear))) {
 		SendMsgToChar("Вас этому никто не научил.\r\n", ch);
 		return;
 	}
@@ -616,7 +418,7 @@ void do_make_item(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			auto tobj = GetObjectPrototype(canlist[i]->obj_proto);
 			if (!tobj)
 				return;
-			sprintf(tmpbuf, "%zd) %s\r\n", i + 1, tobj->get_PName(ECase::kNom).c_str());
+			sprintf(tmpbuf, "%zd) %s\r\n", i + 1, tobj->get_PName(grammar::ECase::kNom).c_str());
 			tmpstr += string(tmpbuf);
 		};
 		SendMsgToChar(tmpstr.c_str(), ch);
@@ -640,7 +442,11 @@ void do_make_item(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	return;
 }
 void go_create_weapon(CharData *ch, ObjData *obj, int obj_type, ESkill skill) {
-	char txtbuff[100];
+	// issue #3978: строка качества собирается в std::string, а не в char[100]. Под KOI8-R она
+	// умещалась в сотню байт, под UTF-8 кириллица весит вдвое -- «качества, лучшего чем то,
+	// которое знали древние титаны» это уже 99 байт сама по себе, и sprintf ронял сервер
+	// по fortify («buffer overflow detected») прямо на перековке.
+	std::string forged_msg;
 	const char *to_char = nullptr, *to_room = nullptr;
 	int prob, percent, ndice, sdice, weight;
 	float average;
@@ -669,7 +475,7 @@ void go_create_weapon(CharData *ch, ObjData *obj, int obj_type, ESkill skill) {
 		} else {
 			tobj->set_weight(MIN(weight, created_item[obj_type].max_weight));
 			tobj->set_cost(2 * obj->get_cost() / 3);
-			tobj->set_owner(GET_UID(ch));
+			tobj->set_owner(ch->get_uid());
 			tobj->set_extra_flag(EObjFlag::kTransformed);
 			// ковка объектов со слотами.
 			// для 5+ мортов имеем шанс сковать стаф с 3 слотами: базовый 2% и по 0.5% за морт
@@ -677,11 +483,11 @@ void go_create_weapon(CharData *ch, ObjData *obj, int obj_type, ESkill skill) {
 			// для 1 слота базово 20% и 4% за каждый морт
 			// Карачун. Поправлено. Расчет не через морты а через скил.
 			if (skill == ESkill::kReforging) {
-				if (ch->GetSkill(skill) >= 105 && number(1, 100) <= 2 + (ch->GetSkill(skill) - 105) / 10) {
+				if (GetSkill(ch, skill) >= 105 && number(1, 100) <= 2 + (GetSkill(ch, skill) - 105) / 10) {
 					tobj->set_extra_flag(EObjFlag::kHasThreeSlots);
-				} else if (number(1, 100) <= 5 + MAX((ch->GetSkill(skill) - 80), 0) / 5) {
+				} else if (number(1, 100) <= 5 + MAX((GetSkill(ch, skill) - 80), 0) / 5) {
 					tobj->set_extra_flag(EObjFlag::kHasTwoSlots);
-				} else if (number(1, 100) <= 20 + MAX((ch->GetSkill(skill) - 80), 0) / 5 * 4) {
+				} else if (number(1, 100) <= 20 + MAX((GetSkill(ch, skill) - 80), 0) / 5 * 4) {
 					tobj->set_extra_flag(EObjFlag::kHasOneSlot);
 				}
 			}
@@ -697,18 +503,18 @@ void go_create_weapon(CharData *ch, ObjData *obj, int obj_type, ESkill skill) {
 					// В минимуме один день реала, в максимуме таймер из прототипа
 					const int
 						timer_value =
-						tobj->get_timer() / 100 * ch->GetSkill(skill) - number(0, tobj->get_timer() / 100 * 25);
+						tobj->get_timer() / 100 * GetSkill(ch, skill) - number(0, tobj->get_timer() / 100 * 25);
 					const int timer = MAX(ObjData::ONE_DAY, timer_value);
 					tobj->set_timer(timer);
-					sprintf(buf, "Ваше изделие продержится примерно %d дней\n", tobj->get_timer() / 24 / 60);
-					act(buf, false, ch, tobj.get(), 0, kToChar);
+					act(fmt::format("Ваше изделие продержится примерно {} дней\n", tobj->get_timer() / 24 / 60),
+						false, ch, tobj.get(), 0, kToChar);
 					tobj->set_material(obj->get_material());
 					// Карачун. Так логичнее.
 					// было tobj->get_maximum_durability() = MAX(50, MIN(300, 300 * prob / percent));
 					// Формула MAX(<минимум>, <максимум>/100*<процент скила>-<рандом от 0 до 25% максимума>)
 					// при расчете числа умножены на 100, перед приравниванием делятся на 100. Для не потерять десятые.
 					tobj->set_maximum_durability(
-						MAX(20000, 35000 / 100 * ch->GetSkill(skill) - number(0, 35000 / 100 * 25)) / 100);
+						MAX(20000, 35000 / 100 * GetSkill(ch, skill) - number(0, 35000 / 100 * 25)) / 100);
 					tobj->set_current_durability(tobj->get_maximum_durability());
 					percent = number(1, MUD::Skill(skill).difficulty);
 					prob = CalcCurrentSkill(ch, skill, nullptr);
@@ -728,13 +534,13 @@ void go_create_weapon(CharData *ch, ObjData *obj, int obj_type, ESkill skill) {
 						to_room = "$n выковал$g $o3.";
 						average = (((float) sdice + 1) * (float) ndice / 2.0);
 						if (average < 3.0) {
-							sprintf(txtbuff, "Вы выковали $o3 %s.", create_weapon_quality[(int) (2.5 * 2)]);
+							forged_msg = fmt::format("Вы выковали $o3 {}.", create_weapon_quality[static_cast<int>(2.5 * 2)]);
 						} else if (average <= 27.5) {
-							sprintf(txtbuff, "Вы выковали $o3 %s.", create_weapon_quality[(int) (average * 2)]);
+							forged_msg = fmt::format("Вы выковали $o3 {}.", create_weapon_quality[static_cast<int>(average * 2)]);
 						} else {
-							sprintf(txtbuff, "Вы выковали $o3 %s!", create_weapon_quality[56]);
+							forged_msg = fmt::format("Вы выковали $o3 {}!", create_weapon_quality[56]);
 						}
-						to_char = (char *) txtbuff;
+						to_char = forged_msg.c_str();
 					} else {
 						to_room = "$n смастерил$g $o3.";
 						to_char = "Вы смастерили $o3.";
@@ -767,18 +573,18 @@ void go_create_weapon(CharData *ch, ObjData *obj, int obj_type, ESkill skill) {
 					// В минимуме один день реала, в максимуме таймер из прототипа
 					const int
 						timer_value =
-						tobj->get_timer() / 100 * ch->GetSkill(skill) - number(0, tobj->get_timer() / 100 * 25);
+						tobj->get_timer() / 100 * GetSkill(ch, skill) - number(0, tobj->get_timer() / 100 * 25);
 					const int timer = MAX(ObjData::ONE_DAY, timer_value);
 					tobj->set_timer(timer);
-					sprintf(buf, "Ваше изделие продержится примерно %d дней\n", tobj->get_timer() / 24 / 60);
-					act(buf, false, ch, tobj.get(), 0, kToChar);
+					act(fmt::format("Ваше изделие продержится примерно {} дней\n", tobj->get_timer() / 24 / 60),
+						false, ch, tobj.get(), 0, kToChar);
 					tobj->set_material(obj->get_material());
 					// Карачун. Так логичнее.
 					// было tobj->get_maximum_durability() = MAX(50, MIN(300, 300 * prob / percent));
 					// Формула MAX(<минимум>, <максимум>/100*<процент скила>-<рандом от 0 до 25% максимума>)
 					// при расчете числа умножены на 100, перед приравниванием делятся на 100. Для не потерять десятые.
 					tobj->set_maximum_durability(
-						MAX(20000, 10000 / 100 * ch->GetSkill(skill) - number(0, 15000 / 100 * 25)) / 100);
+						MAX(20000, 10000 / 100 * GetSkill(ch, skill) - number(0, 15000 / 100 * 25)) / 100);
 					tobj->set_current_durability(tobj->get_maximum_durability());
 					percent = number(1, MUD::Skill(skill).difficulty);
 					prob = CalcCurrentSkill(ch, skill, nullptr);
@@ -837,7 +643,7 @@ void do_transform_weapon(CharData *ch, char *argument, int/* cmd*/, int subcmd) 
 		default: break;
 	}
 
-	if (ch->IsNpc() || !ch->GetSkill(skill_id)) {
+	if (ch->IsNpc() || !GetSkill(ch, skill_id)) {
 		SendMsgToChar("Вас этому никто не научил.\r\n", ch);
 		return;
 	}
@@ -864,8 +670,7 @@ void do_transform_weapon(CharData *ch, char *argument, int/* cmd*/, int subcmd) 
 		}
 		for (obj_type = 0; *create_item_name[obj_type] != '\n'; obj_type++) {
 			if (created_item[obj_type].skill == skill_id) {
-				sprintf(buf, "- %s\r\n", create_item_name[obj_type]);
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("- {}\r\n", create_item_name[obj_type]), ch);
 			}
 		}
 		return;
@@ -887,15 +692,14 @@ void do_transform_weapon(CharData *ch, char *argument, int/* cmd*/, int subcmd) 
 		return;
 	}
 	if (!(obj = get_obj_in_list_vis(ch, arg2, ch->carrying))) {
-		sprintf(buf, "У Вас нет '%s'.\r\n", arg2);
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", arg2), ch);
 		return;
 	}
 	if (obj->get_contains()) {
 		act("В $o5 что-то лежит.", false, ch, obj, 0, kToChar);
 		return;
 	}
-	if (obj->get_type() == EObjType::kIngredient) {
+	if (obj->get_type() == EObjType::kMagicIngredient) {
 		for (i = 0, found = false; i < MAX_PROTO; i++) {
 			if (GET_OBJ_VAL(obj, 1) == created_item[obj_type].proto[i]) {
 				if (proto[i]) {
@@ -931,13 +735,13 @@ void do_transform_weapon(CharData *ch, char *argument, int/* cmd*/, int subcmd) 
 				act("$o сделан$G из неподходящего материала.", false, ch, obj, 0, kToChar);
 				return;
 			}
-			if (!IS_IMMORTAL(ch)) {
+			if (!privilege::IsImmortal(ch)) {
 				if (!ROOM_FLAGGED(ch->in_room, ERoomFlag::kForge)) {
 					SendMsgToChar("Вам нужно попасть в кузницу для этого.\r\n", ch);
 					return;
 				}
 				for (coal = ch->carrying; coal; coal = coal->get_next_content()) {
-					if (coal->get_type() == EObjType::kIngredient) {
+					if (coal->get_type() == EObjType::kMagicIngredient) {
 						for (i = 0; i < MAX_PROTO; i++) {
 							if (proto[i] == coal) {
 								break;
@@ -976,7 +780,7 @@ void do_transform_weapon(CharData *ch, char *argument, int/* cmd*/, int subcmd) 
 			break;
 		case ESkill::kCreateBow:
 			for (coal = ch->carrying; coal; coal = coal->get_next_content()) {
-				if (coal->get_type() == EObjType::kIngredient) {
+				if (coal->get_type() == EObjType::kMagicIngredient) {
 					for (i = 0; i < MAX_PROTO; i++) {
 						if (proto[i] == coal) {
 							break;
@@ -1023,65 +827,6 @@ MakeReceptList::MakeReceptList() {
 MakeReceptList::~MakeReceptList() {
 	// Разрушение списка.
 	clear();
-}
-int
-MakeReceptList::load() {
-	// Читаем тут файл с рецептом.
-	// НАДО ДОБАВИТЬ СОРТИРОВКУ !!!
-	char tmpbuf[kMaxInputLength];
-	string tmpstr;
-	// чистим список рецептов от старых данных.
-	clear();
-	MakeRecept *trec;
-	ifstream bifs(LIB_MISC "makeitems.lst");
-	if (!bifs) {
-		sprintf(tmpbuf, "MakeReceptList:: Unable open input file !!!");
-		mudlog(tmpbuf, LGH, kLvlImmortal, SYSLOG, true);
-		return (false);
-	}
-	while (!bifs.eof()) {
-		bifs.getline(tmpbuf, kMaxInputLength, '\n');
-		tmpstr = string(tmpbuf);
-		// пропускаем закомменированные строчки.
-		if (tmpstr.substr(0, 2) == "//")
-			continue;
-//    cout << "Get str from file :" << tmpstr << endl;
-		if (tmpstr.size() == 0)
-			continue;
-		trec = new(MakeRecept);
-		if (trec->load_from_str(tmpstr)) {
-			recepts.push_back(trec);
-		} else {
-			delete trec;
-			// ошибка вытаскивания из строки написать
-			sprintf(tmpbuf, "MakeReceptList:: Fail get recept from line.");
-			mudlog(tmpbuf, LGH, kLvlImmortal, SYSLOG, true);
-		}
-	}
-	return true;
-}
-int MakeReceptList::save() {
-	// Пишем тут файл с рецептом.
-	// Очищаем список
-	string tmpstr;
-	char tmpbuf[kMaxInputLength];
-	list<MakeRecept *>::iterator p;
-	ofstream bofs(LIB_MISC "makeitems.lst");
-	if (!bofs) {
-		// cout << "Unable input stream to create !!!" << endl;
-		sprintf(tmpbuf, "MakeReceptList:: Unable create output file !!!");
-		mudlog(tmpbuf, LGH, kLvlImmortal, SYSLOG, true);
-		return (false);
-	}
-	sort();
-	p = recepts.begin();
-	while (p != recepts.end()) {
-		if ((*p)->save_to_str(tmpstr))
-			bofs << tmpstr << endl;
-		p++;
-	}
-	bofs.close();
-	return 0;
 }
 void MakeReceptList::add(MakeRecept *recept) {
 	recepts.push_back(recept);
@@ -1187,8 +932,8 @@ ObjData *get_obj_in_list_ingr(int num,
 			return i;
 		}
 		if ((GET_OBJ_VAL(i, 1) == num)
-			&& (i->get_type() == EObjType::kIngredient
-				|| i->get_type() == EObjType::kMagicIngredient
+			&& (i->get_type() == EObjType::kMagicIngredient
+				|| i->get_type() == EObjType::kMagicComponent
 				|| i->get_type() == EObjType::kCraftMaterial)) {
 			return i;
 		}
@@ -1197,6 +942,7 @@ ObjData *get_obj_in_list_ingr(int num,
 }
 MakeRecept::MakeRecept() : skill(ESkill::kUndefined) {
 	locked = true;        // по умолчанию рецепт залочен.
+	vnum = 0;
 	obj_proto = 0;
 	for (int i = 0; i < MAX_PARTS; i++) {
 		parts[i].proto = 0;
@@ -1214,7 +960,7 @@ int MakeRecept::can_make(CharData *ch) {
 	if (locked)
 		return (false);
 	// Сделать проверку наличия скилла у игрока.
-	if (ch->IsNpc() || !ch->GetSkill(skill)) {
+	if (ch->IsNpc() || !GetSkill(ch, skill)) {
 		return (false);
 	}
 	// Делаем проверку может ли чар сделать предмет такого типа
@@ -1236,7 +982,7 @@ int MakeRecept::can_make(CharData *ch) {
 		int ingr_lev = get_ingr_lev(ingrobj);
 		// Если чар ниже уровня ингридиента то он не может делать рецепты с его
 		// участием.
-		if (!IS_IMPL(ch) && (ingr_lev > (GetRealLevel(ch) + 2 * GetRealRemort(ch)))) {
+		if (!privilege::IsImpl(ch) && (ingr_lev > (GetRealLevel(ch) + 2 * remort::GetRealRemort(ch)))) {
 			SendMsgToChar("Вы слишком малого уровня и вам что-то не подходит для шитья.\r\n", ch);
 			return (false);
 		}
@@ -1246,10 +992,10 @@ int MakeRecept::can_make(CharData *ch) {
 
 int MakeRecept::get_ingr_lev(ObjData *ingrobj) {
 	// Получаем уровень ингредиента ...
-	if (ingrobj->get_type() == EObjType::kIngredient) {
+	if (ingrobj->get_type() == EObjType::kMagicIngredient) {
 		// Получаем уровень игредиента до 128
 		return (GET_OBJ_VAL(ingrobj, 0) >> 8);
-	} else if (ingrobj->get_type() == EObjType::kMagicIngredient) {
+	} else if (ingrobj->get_type() == EObjType::kMagicComponent) {
 		// У ингров типа 26 совпадает уровень и сила.
 		return GET_OBJ_VAL(ingrobj, IM_POWER_SLOT);
 	} else if (ingrobj->get_type() == EObjType::kCraftMaterial) {
@@ -1261,10 +1007,10 @@ int MakeRecept::get_ingr_lev(ObjData *ingrobj) {
 
 int MakeRecept::get_ingr_pow(ObjData *ingrobj) {
 	// Получаем силу ингредиента ...
-	if (ingrobj->get_type() == EObjType::kIngredient
+	if (ingrobj->get_type() == EObjType::kMagicIngredient
 		|| ingrobj->get_type() == EObjType::kCraftMaterial) {
 		return GET_OBJ_VAL(ingrobj, 2);
-	} else if (ingrobj->get_type() == EObjType::kMagicIngredient) {
+	} else if (ingrobj->get_type() == EObjType::kMagicComponent) {
 		return GET_OBJ_VAL(ingrobj, IM_POWER_SLOT);
 	} else {
 		return -1;
@@ -1301,7 +1047,7 @@ void MakeRecept::make_value_wear(CharData *ch, ObjData *obj, ObjData *ingrs[MAX_
 		wearkoeff = 45;
 	}
 	obj->set_val(0,
-				 ((GetRealInt(ch) * GetRealInt(ch) / 10 + ch->GetSkill(ESkill::kMakeWear)) / 100
+				 ((GetRealInt(ch) * GetRealInt(ch) / 10 + GetSkill(ch, ESkill::kMakeWear)) / 100
 					 + (GET_OBJ_VAL(ingrs[0], 3) + 1)) * wearkoeff
 					 / 100); //АС=((инта*инта/10+умелка)/100+левл.шкуры)*коэф.части тела
 	if (CAN_WEAR(obj, EWearFlag::kBody)) //0.9
@@ -1333,7 +1079,7 @@ void MakeRecept::make_value_wear(CharData *ch, ObjData *obj, ObjData *ingrs[MAX_
 		wearkoeff = 31;
 	}
 	obj->set_val(1,
-				 (ch->GetSkill(ESkill::kMakeWear) / 25 + (GET_OBJ_VAL(ingrs[0], 3) + 1)) * wearkoeff
+				 (GetSkill(ch, ESkill::kMakeWear) / 25 + (GET_OBJ_VAL(ingrs[0], 3) + 1)) * wearkoeff
 					 / 100); //броня=(%умелки/25+левл.шкуры)*коэф.части тела
 }
 float MakeRecept::count_mort_requred(ObjData *obj) {
@@ -1401,20 +1147,20 @@ float MakeRecept::count_mort_requred(ObjData *obj) {
 			total_weight -= pow(weight, -SQRT_MOD);
 		}
 	}
-	// аффекты AFF_x через weapon_affect
-	for (const auto &m : weapon_affect) {
-		if (obj->GetEWeaponAffect(m.aff_pos)) {
-			if (static_cast<EAffect>(m.aff_bitvector) == EAffect::kAirShield) {
+	// аффекты AFF_x через equipment_affect
+	for (const auto &m : equipment_affect) {
+		if (obj->GetEEquipmentAffect(m.aff_pos)) {
+			if (m.aff_affect == EAffect::kAirShield) {
 				total_weight += pow(AFF_SHIELD_MOD, SQRT_MOD);
-			} else if (static_cast<EAffect>(m.aff_bitvector) == EAffect::kFireShield) {
+			} else if (m.aff_affect == EAffect::kFireShield) {
 				total_weight += pow(AFF_SHIELD_MOD, SQRT_MOD);
-			} else if (static_cast<EAffect>(m.aff_bitvector) == EAffect::kIceShield) {
+			} else if (m.aff_affect == EAffect::kIceShield) {
 				total_weight += pow(AFF_SHIELD_MOD, SQRT_MOD);
-			} else if (static_cast<EAffect>(m.aff_bitvector) == EAffect::kMagicGlass) {
+			} else if (m.aff_affect == EAffect::kMagicGlass) {
 				total_weight += pow(AFF_MAGICGLASS_MOD, SQRT_MOD);
-			} else if (static_cast<EAffect>(m.aff_bitvector) == EAffect::kBlink) {
+			} else if (m.aff_affect == EAffect::kBlink) {
 				total_weight += pow(AFF_BLINK_MOD, SQRT_MOD);
-			} else if (static_cast<EAffect>(m.aff_bitvector) == EAffect::kCloudly) {
+			} else if (m.aff_affect == EAffect::kCloudly) {
 				total_weight += pow(AFF_CLOUDLY_MOD, SQRT_MOD);
 			}
 		}
@@ -1479,34 +1225,35 @@ float MakeRecept::count_affect_weight(int num, int mod) {
 void MakeRecept::make_object(CharData *ch, ObjData *obj, ObjData *ingrs[MAX_PARTS], int ingr_cnt) {
 	int i, j;
 	//ставим именительные именительные падежи в алиасы
-	sprintf(buf, "%s %s %s %s",
-			obj->get_PName(ECase::kNom).c_str(),
-			ingrs[0]->get_PName(ECase::kGen).c_str(),
-			ingrs[1]->get_PName(ECase::kIns).c_str(),
-			ingrs[2]->get_PName(ECase::kIns).c_str());
-	obj->set_aliases(buf);
-	for (i = ECase::kFirstCase; i <= ECase::kLastCase; i++) // ставим падежи в имя с учетов ингров
+	obj->set_aliases(fmt::format("{} {} {} {}",
+								 obj->get_PName(grammar::ECase::kNom),
+								 ingrs[0]->get_PName(grammar::ECase::kGen),
+								 ingrs[1]->get_PName(grammar::ECase::kIns),
+								 ingrs[2]->get_PName(grammar::ECase::kIns)));
+	for (i = grammar::ECase::kFirstCase; i <= grammar::ECase::kLastCase; i++) // ставим падежи в имя с учетов ингров
 	{
-		auto name_case = static_cast<ECase>(i);
-		sprintf(buf, "%s", obj->get_PName(name_case).c_str());
-		strcat(buf, " из ");
-		strcat(buf, ingrs[0]->get_PName(ECase::kGen).c_str());
-		strcat(buf, " с ");
-		strcat(buf, ingrs[1]->get_PName(ECase::kIns).c_str());
-		strcat(buf, " и ");
-		strcat(buf, ingrs[2]->get_PName(ECase::kIns).c_str());
-		obj->set_PName(name_case, buf);
+		auto name_case = static_cast<grammar::ECase>(i);
+		const std::string name = fmt::format("{} из {} с {} и {}",
+											 obj->get_PName(name_case),
+											 ingrs[0]->get_PName(grammar::ECase::kGen),
+											 ingrs[1]->get_PName(grammar::ECase::kIns),
+											 ingrs[2]->get_PName(grammar::ECase::kIns));
+		obj->set_PName(name_case, name);
 		if (i == 0) // именительный падеж
 		{
-			obj->set_short_description(buf);
-			if (GET_OBJ_SEX(obj) == EGender::kMale) {
-				snprintf(buf2, kMaxStringLength, "Брошенный %s лежит тут.", buf);
-			} else if (GET_OBJ_SEX(obj) == EGender::kFemale) {
-				snprintf(buf2, kMaxStringLength, "Брошенная %s лежит тут.", buf);
-			} else if (GET_OBJ_SEX(obj) == EGender::kPoly) {
-				snprintf(buf2, kMaxStringLength, "Брошенные %s лежат тут.", buf);
+			obj->set_short_description(name);
+			// Средний род раньше не разбирался, и на землю уезжало описание от прошлого
+			// изделия -- то, что осталось в общем буфере.
+			std::string on_ground;
+			switch (GET_OBJ_SEX(obj)) {
+				case EGender::kFemale: on_ground = fmt::format("Брошенная {} лежит тут.", name);
+					break;
+				case EGender::kPoly: on_ground = fmt::format("Брошенные {} лежат тут.", name);
+					break;
+				default: on_ground = fmt::format("Брошенный {} лежит тут.", name);
+					break;
 			}
-			obj->set_description(buf2); // описание на земле
+			obj->set_description(on_ground); // описание на земле
 		}
 	}
 	obj->set_is_rename(true); // ставим флаг что объект переименован
@@ -1514,18 +1261,16 @@ void MakeRecept::make_object(CharData *ch, ObjData *obj, ObjData *ingrs[MAX_PART
 
 	auto temp_flags = obj->get_affect_flags();
 	add_flags(ch, &temp_flags, &ingrs[0]->get_affect_flags(), get_ingr_pow(ingrs[0]));
-	obj->SetWeaponAffectFlags(temp_flags);
+	obj->SetEquipmentAffectFlags(temp_flags);
 	// перносим эффекты ... с ингров на прототип, 0 объект шкура переносим все, с остальных 1 рандом
-	temp_flags = obj->get_extra_flags();
-	add_flags(ch, &temp_flags, &ingrs[0]->get_extra_flags(), get_ingr_pow(ingrs[0]));
-	obj->set_extra_flags(temp_flags);
+	merge_extra_flags(ch, obj, ingrs[0], get_ingr_pow(ingrs[0]));
 	auto temp_affected = obj->get_all_affected();
 	add_affects(ch, temp_affected, ingrs[0]->get_all_affected(), get_ingr_pow(ingrs[0]));
 	obj->set_all_affected(temp_affected);
 	add_rnd_skills(ch, ingrs[0], obj); //переносим случайную умелку со шкуры
 	obj->set_extra_flag(EObjFlag::kNoalter);  // нельзя сфрешить черным свитком
 	obj->set_timer((GET_OBJ_VAL(ingrs[0], 3) + 1) * 1000
-					   + ch->GetSkill(ESkill::kMakeWear) / 2 * number(160, 220)); // таймер зависит в основном от умелки
+					   + GetSkill(ch, ESkill::kMakeWear) / 2 * number(160, 220)); // таймер зависит в основном от умелки
 	obj->set_craft_timer(obj->get_timer()); // запомним таймер созданной вещи для правильного отображения при осм для ее сост.
 	for (j = 1; j < ingr_cnt; j++) {
 		int i, raffect = 0;
@@ -1562,15 +1307,36 @@ void MakeRecept::make_object(CharData *ch, ObjData *obj, ObjData *ingrs[MAX_PART
 		// переносим аффекты ... c ингров на прототип.
 		auto temp_flags = obj->get_affect_flags();
 		add_flags(ch, &temp_flags, &ingrs[j]->get_affect_flags(), get_ingr_pow(ingrs[j]));
-		obj->SetWeaponAffectFlags(temp_flags);
+		obj->SetEquipmentAffectFlags(temp_flags);
 		// перносим эффекты ... с ингров на прототип.
-		temp_flags = obj->get_extra_flags();
-		add_flags(ch, &temp_flags, &ingrs[j]->get_extra_flags(), get_ingr_pow(ingrs[j]));
-		obj->set_extra_flags(temp_flags);
+		merge_extra_flags(ch, obj, ingrs[j], get_ingr_pow(ingrs[j]));
 		// переносим 1 рандом аффект
 		add_rnd_skills(ch, ingrs[j], obj); //переноси случайную умелку с ингров
 	}
 }
+static std::string craft_recipe_name(int recipe_id) {
+	const auto proto = GetObjectPrototype(recipe_id);
+	if (proto) {
+		return proto->get_PName(grammar::ECase::kNom); // KOI8-R; auto-converted by OtelMetrics
+	}
+	return std::to_string(recipe_id);
+}
+
+static void record_craft_failure(int recipe_id, ESkill skill) {
+	observability::OtelMetrics::RecordCounter("craft.failures.total", 1, {
+		{"recipe_name",    craft_recipe_name(recipe_id)},
+		{"skill",          MUD::Skill(skill).GetName()}, // KOI8-R; auto-converted by OtelMetrics
+		{"failure_reason", "craft_failed"}
+	});
+}
+
+static void record_craft_success(int recipe_id, ESkill skill) {
+	observability::OtelMetrics::RecordCounter("craft.completed.total", 1, {
+		{"recipe_name", craft_recipe_name(recipe_id)},
+		{"skill",       MUD::Skill(skill).GetName()} // KOI8-R; auto-converted by OtelMetrics
+	});
+}
+
 // создать предмет по рецепту
 int MakeRecept::make(CharData *ch) {
 	char tmpbuf[kMaxStringLength];//, tmpbuf2[kMaxStringLength];
@@ -1579,7 +1345,7 @@ int MakeRecept::make(CharData *ch) {
 	int dam = 0;
 	bool make_fail;
 	// 1. Проверить есть ли скилл у чара
-	if (ch->IsNpc() || !ch->GetSkill(skill)) {
+	if (ch->IsNpc() || !GetSkill(ch, skill)) {
 		SendMsgToChar("Странно что вам вообще пришло в голову cделать это.\r\n", ch);
 		return (false);
 	}
@@ -1597,7 +1363,7 @@ int MakeRecept::make(CharData *ch) {
 		return 0;
 	}
 	// Проверяем возможность создания предмета
-	if (!IS_IMMORTAL(ch) && (skill == ESkill::kMakeStaff)) {
+	if (!privilege::IsImmortal(ch) && (skill == ESkill::kMakeStaff)) {
 		const ObjData obj(*tobj);
 		act("Вы не готовы к тому чтобы сделать $o3.", false, ch, &obj, 0, kToChar);
 		return (false);
@@ -1610,15 +1376,15 @@ int MakeRecept::make(CharData *ch) {
 			break;
 		ingrs[i] = get_obj_in_list_ingr(parts[i].proto, ch->carrying);
 		ingr_lev = get_ingr_lev(ingrs[i]);
-		if (!IS_IMPL(ch) && (ingr_lev > (GetRealLevel(ch) + 2 * GetRealRemort(ch)))) {
-			tmpstr = "Вы побоялись испортить " + ingrs[i]->get_PName(ECase::kAcc)
-				+ "\r\n и прекратили работу над " + tobj->get_PName(ECase::kIns) + ".\r\n";
+		if (!privilege::IsImpl(ch) && (ingr_lev > (GetRealLevel(ch) + 2 * remort::GetRealRemort(ch)))) {
+			tmpstr = "Вы побоялись испортить " + ingrs[i]->get_PName(grammar::ECase::kAcc)
+				+ "\r\n и прекратили работу над " + tobj->get_PName(grammar::ECase::kIns) + ".\r\n";
 			SendMsgToChar(tmpstr.c_str(), ch);
 			return (false);
 		};
 		ingr_pow = get_ingr_pow(ingrs[i]);
 		if (ingr_pow < parts[i].min_power) {
-			tmpstr = "$o не подходит для изготовления " + tobj->get_PName(ECase::kGen) + ".";
+			tmpstr = "$o не подходит для изготовления " + tobj->get_PName(grammar::ECase::kGen) + ".";
 			act(tmpstr.c_str(), false, ch, ingrs[i], 0, kToChar);
 			return (false);
 		}
@@ -1630,7 +1396,7 @@ int MakeRecept::make(CharData *ch) {
 		case ESkill::kMakeWeapon:
 		case ESkill::kMakeArmor:
 			// Проверяем есть ли тут наковальня или комната кузня.
-			if ((!ROOM_FLAGGED(ch->in_room, ERoomFlag::kForge)) && (!IS_IMMORTAL(ch))) {
+			if ((!ROOM_FLAGGED(ch->in_room, ERoomFlag::kForge)) && (!privilege::IsImmortal(ch))) {
 				SendMsgToChar("Вам нужно попасть в кузницу для этого.\r\n", ch);
 				return (false);
 			}
@@ -1756,8 +1522,8 @@ int MakeRecept::make(CharData *ch) {
 			created_lev += ingr_lev;
 		}
 		// Шанс испортить не ингредиент всетаки есть.
-		if ((number(0, 30) < (5 + ingr_lev - GetRealLevel(ch) - 2 * GetRealRemort(ch))) && !IS_IMPL(ch)) {
-			tmpstr = "Вы испортили " + ingrs[i]->get_PName(ECase::kAcc) + ".\r\n";
+		if ((number(0, 30) < (5 + ingr_lev - GetRealLevel(ch) - 2 * remort::GetRealRemort(ch))) && !privilege::IsImpl(ch)) {
+			tmpstr = "Вы испортили " + ingrs[i]->get_PName(grammar::ECase::kAcc) + ".\r\n";
 			SendMsgToChar(tmpstr.c_str(), ch);
 			//extract_obj(ingrs[i]); //заменим на обнуление веса
 			//чтобы не крешило дальше в обработке фейла (Купала)
@@ -1773,11 +1539,11 @@ int MakeRecept::make(CharData *ch) {
 	if (ch->get_move() < craft_move) {
 		ch->set_move(0);
 		// Вам не хватило сил доделать.
-		tmpstr = "Вам не хватило сил доделать " + tobj->get_PName(ECase::kAcc) + ".\r\n";
+		tmpstr = "Вам не хватило сил доделать " + tobj->get_PName(grammar::ECase::kAcc) + ".\r\n";
 		SendMsgToChar(tmpstr.c_str(), ch);
 		make_fail = true;
 	} else {
-		if (!IS_IMPL(ch)) {
+		if (!privilege::IsImpl(ch)) {
 			ch->set_move(ch->get_move() - craft_move);
 		}
 	}
@@ -1790,7 +1556,7 @@ int MakeRecept::make(CharData *ch) {
 			{
 				IS_CARRYING_W(ch) -= ingrs[0]->get_weight();
 				ingrs[0]->set_weight(0);  // шкуру дикеим полностью
-				tmpstr = "Вы раскроили полностью " + ingrs[0]->get_PName(ECase::kAcc) + ".\r\n";
+				tmpstr = "Вы раскроили полностью " + ingrs[0]->get_PName(grammar::ECase::kAcc) + ".\r\n";
 				SendMsgToChar(tmpstr.c_str(), ch);
 				continue;
 			}
@@ -1819,7 +1585,7 @@ int MakeRecept::make(CharData *ch) {
 				//Сперва проверяем сколько нам нужно. Если вес ингра больше, чем требуется, то вычитаем вес и останавливаем итерацию.
 				if (ingrs[i]->get_weight() > state) {
 					ingrs[i]->sub_weight(state);
-					SendMsgToChar(ch, "Вы использовали %s.\r\n", ingrs[i]->get_PName(ECase::kAcc).c_str());
+					SendMsgToChar(ch, "Вы использовали %s.\r\n", ingrs[i]->get_PName(grammar::ECase::kAcc).c_str());
 					IS_CARRYING_W(ch) -= state;
 					break;
 				}
@@ -1827,7 +1593,7 @@ int MakeRecept::make(CharData *ch) {
 				else if (ingrs[i]->get_weight() == state) {
 					IS_CARRYING_W(ch) -= ingrs[i]->get_weight();
 					ingrs[i]->set_weight(0);
-					SendMsgToChar(ch, "Вы полностью использовали %s.\r\n", ingrs[i]->get_PName(ECase::kAcc).c_str());
+					SendMsgToChar(ch, "Вы полностью использовали %s.\r\n", ingrs[i]->get_PName(grammar::ECase::kAcc).c_str());
 					//extract_obj(ingrs[i]);
 					break;
 				}
@@ -1836,8 +1602,8 @@ int MakeRecept::make(CharData *ch) {
 					state = state - ingrs[i]->get_weight();
 					SendMsgToChar(ch,
 								  "Вы полностью использовали %s и начали искать следующий ингредиент.\r\n",
-								  ingrs[i]->get_PName(ECase::kAcc).c_str());
-					std::string tmpname = std::string(ingrs[i]->get_PName(ECase::kGen).c_str());
+								  ingrs[i]->get_PName(grammar::ECase::kAcc).c_str());
+					std::string tmpname = std::string(ingrs[i]->get_PName(grammar::ECase::kGen).c_str());
 					IS_CARRYING_W(ch) -= ingrs[i]->get_weight();
 					ingrs[i]->set_weight(0);
 					ExtractObjFromWorld(ingrs[i]);
@@ -1892,6 +1658,8 @@ int MakeRecept::make(CharData *ch) {
 				ExtractObjFromWorld(ingrs[i]);
 			}
 		}
+
+		record_craft_failure(obj_proto, skill);
 		return (false);
 	}
 	// Лоадим предмет игроку
@@ -1909,13 +1677,13 @@ int MakeRecept::make(CharData *ch) {
 	switch (skill) {
 		case ESkill::kMakeBow:;
 		case ESkill::kMakeWear: obj->set_extra_flag(EObjFlag::kTransformed);
-			obj->set_extra_flag(EObjFlag::KLimitedTimer);
+			obj->set_extra_flag(EObjFlag::kLimitedTimer);
 			break;
 		default: break;
 	}
 	int sign = -1;
 	if (obj->get_type() == EObjType::kWeapon
-		|| obj->get_type() == EObjType::kIngredient) {
+		|| obj->get_type() == EObjType::kMagicIngredient) {
 		sign = 1;
 	}
 	obj->set_weight(stat_modify(ch, obj->get_weight(), 20 * sign));
@@ -1937,7 +1705,10 @@ int MakeRecept::make(CharData *ch) {
 		case EObjType::kWand:
 		case EObjType::kStaff:
 			// Считаем уровень закла
-			obj->set_val(0, GetRealLevel(ch));
+			// issue.magic-items: the maker's competence (make-staff skill + Int) becomes the casting
+			// potency (kSpellItem* keys), replacing the legacy val[0] = caster level.
+			obj->SetPotionValueKey(ObjVal::EValueKey::kMakerSkill, std::max(1, GetSkill(ch, ESkill::kMakeStaff)));
+			obj->SetPotionValueKey(ObjVal::EValueKey::kMakerStat, GetRealBaseStat(ch, EBaseStat::kInt));
 			break;
 		case EObjType::kWeapon:
 			// Считаем число xdy
@@ -1969,7 +1740,7 @@ int MakeRecept::make(CharData *ch) {
 			// Считаем объем контейнера.
 			obj->set_val(0, stat_modify(ch, GET_OBJ_VAL(obj, 0), 1));
 			break;
-		case EObjType::kIngredient:
+		case EObjType::kMagicIngredient:
 			// Для ингров ничего не трогаем ... ибо опасно. :)
 			break;
 		default: break;
@@ -1994,11 +1765,9 @@ int MakeRecept::make(CharData *ch) {
 			// переносим аффекты ... c ингров на прототип.
 			auto temp_flags = obj->get_affect_flags();
 			add_flags(ch, &temp_flags, &ingrs[j]->get_affect_flags(), ingr_pow);
-			obj->SetWeaponAffectFlags(temp_flags);
-			temp_flags = obj->get_extra_flags();
+			obj->SetEquipmentAffectFlags(temp_flags);
 			// перносим эффекты ... с ингров на прототип.
-			add_flags(ch, &temp_flags, &ingrs[j]->get_extra_flags(), ingr_pow);
-			obj->set_extra_flags(temp_flags);
+			merge_extra_flags(ch, obj.get(), ingrs[j], ingr_pow);
 			auto temp_affected = obj->get_all_affected();
 			add_affects(ch, temp_affected, ingrs[j]->get_all_affected(), ingr_pow);
 			obj->set_all_affected(temp_affected);
@@ -2017,8 +1786,8 @@ int MakeRecept::make(CharData *ch) {
 	// число шмоток в мире то шмотки по хуже будут вытеснять
 	// шмотки по лучше (в целом это не так страшно).
 	// Ставим метку если все хорошо.
-	if ((obj->get_type() != EObjType::kIngredient
-		&& obj->get_type() != EObjType::kMagicIngredient)
+	if ((obj->get_type() != EObjType::kMagicIngredient
+		&& obj->get_type() != EObjType::kMagicComponent)
 		&& (number(1, 100) - CalcCurrentSkill(ch, skill, 0) < 0)) {
 		act(tagging.c_str(), false, ch, obj.get(), 0, kToChar);
 		// Прибавляем в экстра описание строчку.
@@ -2044,7 +1813,7 @@ int MakeRecept::make(CharData *ch) {
 	}
 
 	// Пишем производителя в поле.
-	obj->set_crafter_uid(GET_UID(ch));
+	obj->set_crafter_uid(ch->get_uid());
 	// 9. Проверяем минимум 2
 	if (ch->GetCarryingQuantity() >= CAN_CARRY_N(ch)) {
 		SendMsgToChar("Вы не сможете унести столько предметов.\r\n", ch);
@@ -2055,73 +1824,11 @@ int MakeRecept::make(CharData *ch) {
 	} else {
 		PlaceObjToInventory(obj.get(), ch);
 	}
+
+	record_craft_success(obj_proto, skill);
 	return (true);
 }
 // вытащить рецепт из строки.
-int MakeRecept::load_from_str(string &rstr) {
-	// Разбираем строку.
-	char tmpbuf[kMaxInputLength];
-	// Проверяем рецепт на блокировку .
-	if (rstr.substr(0, 1) == string("*")) {
-		rstr = rstr.substr(1);
-		locked = true;
-	} else {
-		locked = false;
-	}
-	skill = static_cast<ESkill>(atoi(rstr.substr(0, rstr.find(" ")).c_str()));
-	rstr = rstr.substr(rstr.find(" ") + 1);
-	obj_proto = atoi((rstr.substr(0, rstr.find(" "))).c_str());
-	rstr = rstr.substr(rstr.find(" ") + 1);
-
-	if (GetObjRnum(obj_proto) < 0) {
-		// Обнаружен несуществующий прототип объекта.
-		sprintf(tmpbuf, "MakeRecept::Unfound object proto %d", obj_proto);
-		mudlog(tmpbuf, LGH, kLvlImmortal, SYSLOG, true);
-		// блокируем рецепты без ингров.
-		locked = true;
-	}
-
-	for (int i = 0; i < MAX_PARTS; i++) {
-		// считали номер прототипа компонента
-		parts[i].proto = atoi((rstr.substr(0, rstr.find(" "))).c_str());
-		rstr = rstr.substr(rstr.find(" ") + 1);
-		// Проверяем на конец компонентов.
-		if (parts[i].proto == 0) {
-			break;
-		}
-		if (GetObjRnum(parts[i].proto) < 0) {
-			// Обнаружен несуществующий прототип компонента.
-			sprintf(tmpbuf, "MakeRecept::Unfound item part %d for %d", obj_proto, parts[i].proto);
-			mudlog(tmpbuf, LGH, kLvlImmortal, SYSLOG, true);
-			// блокируем рецепты без ингров.
-			locked = true;
-		}
-		parts[i].min_weight = atoi(rstr.substr(0, rstr.find(" ")).c_str());
-		rstr = rstr.substr(rstr.find(" ") + 1);
-		parts[i].min_power = atoi(rstr.substr(0, rstr.find(" ")).c_str());
-		rstr = rstr.substr(rstr.find(" ") + 1);
-	}
-	return (true);
-}
-// сохранить рецепт в строку.
-int MakeRecept::save_to_str(string &rstr) {
-	char tmpstr[kMaxInputLength];
-	if (obj_proto == 0) {
-		return (false);
-	}
-	if (locked) {
-		rstr = "*";
-	} else {
-		rstr = "";
-	}
-	sprintf(tmpstr, "%d %d", to_underlying(skill), obj_proto);
-	rstr += string(tmpstr);
-	for (int i = 0; i < MAX_PARTS; i++) {
-		sprintf(tmpstr, " %d %d %d", parts[i].proto, parts[i].min_weight, parts[i].min_power);
-		rstr += string(tmpstr);
-	}
-	return (true);
-}
 // Модификатор базовых значений.
 int MakeRecept::stat_modify(CharData *ch, int value, float devider) {
 	// Для числовых х-к:  х-ка+(skill - random(100))/20;
@@ -2170,7 +1877,8 @@ void MakeRecept::add_rnd_skills(CharData * /*ch*/, ObjData *obj_from, ObjData *o
 		}
 	}
 }
-int MakeRecept::add_flags(CharData *ch, FlagData *base_flag, const FlagData *add_flag, int/* delta*/) {
+template<class F>
+int MakeRecept::add_flags(CharData *ch, F *base_flag, const F *add_flag, int/* delta*/) {
 // БЕз вариантов вообще :(
 	int tmpprob, skl = CalcCurrentSkill(ch, skill, 0);
 	for (int i = 0; i < 3; i++) {
@@ -2183,6 +1891,36 @@ int MakeRecept::add_flags(CharData *ch, FlagData *base_flag, const FlagData *add
 	}
 	return (true);
 }
+template int MakeRecept::add_flags(CharData *, BitsetFlags<EEquipmentAffect> *, const BitsetFlags<EEquipmentAffect> *, int);
+template int MakeRecept::add_flags(CharData *, BitsetFlags<EObjFlag> *, const BitsetFlags<EObjFlag> *, int);
+
+// Переносит extra-флаги ингредиента на предмет (как add_flags), но НЕ даёт ингредиенту
+// навешивать служебные/привязочные/распадные флаги (issue #3459: крафт плодил "!бросить" и т.п.).
+// Свои такие флаги предмет сохраняет -- блокируется только добавление их с ингредиента.
+void MakeRecept::merge_extra_flags(CharData *ch, ObjData *obj, ObjData *ingr, int pow) {
+	static const EObjFlag kNotTransferable[] = {
+		EObjFlag::kNodrop, EObjFlag::kNorent, EObjFlag::kNodonate, EObjFlag::kNosell,
+		EObjFlag::kBless, EObjFlag::kNamed, EObjFlag::kDecay, EObjFlag::kZonedecay,
+		EObjFlag::kRepopDecay, EObjFlag::kNodecay, EObjFlag::kQuestItem, EObjFlag::kUnique,
+		EObjFlag::kSetItem, EObjFlag::kLimitedTimer, EObjFlag::kNoRentTimer, EObjFlag::kTicktimer,
+		EObjFlag::kBindOnPurchase, EObjFlag::kNotOneInClanChest, EObjFlag::kNolocate,
+		EObjFlag::kTimedLvl, EObjFlag::kNoalter,
+	};
+	bool had[std::size(kNotTransferable)];
+	for (std::size_t i = 0; i < std::size(kNotTransferable); ++i) {
+		had[i] = obj->has_flag(kNotTransferable[i]);
+	}
+	auto temp = obj->get_extra_flags();
+	add_flags(ch, &temp, &ingr->get_extra_flags(), pow);
+	obj->set_extra_flags(temp);
+	// откатываем только те служебные флаги, которых у предмета не было (т.е. их добавил ингредиент)
+	for (std::size_t i = 0; i < std::size(kNotTransferable); ++i) {
+		if (!had[i] && obj->has_flag(kNotTransferable[i])) {
+			obj->unset_extraflag(kNotTransferable[i]);
+		}
+	}
+}
+
 int MakeRecept::add_affects(CharData *ch,
 							std::array<obj_affected_type, kMaxObjAffect> &base,
 							const std::array<obj_affected_type, kMaxObjAffect> &add,
@@ -2226,13 +1964,13 @@ int MakeRecept::add_affects(CharData *ch,
 // output act format//
 char *format_act(const char *orig, CharData *ch, ObjData *obj, const void *vict_obj) {
 	const char *i = nullptr;
-	char *buf, *lbuf;
+	char *out, *lbuf;
 	ubyte padis;
 	int stopbyte;
 //	CharacterData *dg_victim = nullptr;
 
-	buf = (char *) malloc(kMaxStringLength);
-	lbuf = buf;
+	out = (char *) malloc(kMaxStringLength);
+	lbuf = out;
 
 	for (stopbyte = 0; stopbyte < kMaxStringLength; stopbyte++) {
 		if (*orig == '$') {
@@ -2255,48 +1993,48 @@ char *format_act(const char *orig, CharData *ch, ObjData *obj, const void *vict_
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 
-				case 'm': i = HMHR(ch);
+				case 'm': i = grammar::DativePronoun((ch)->get_sex());
 					break;
 				case 'M':
 					if (vict_obj)
-						i = HMHR((const CharData *) vict_obj);
-					else CHECK_NULL(obj, OMHR(obj));
+						i = grammar::DativePronoun(((const CharData *) vict_obj)->get_sex());
+					else CHECK_NULL(obj, grammar::DativePronoun((obj)->get_sex()));
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 
-				case 's': i = HSHR(ch);
+				case 's': i = grammar::PossessivePronoun((ch)->get_sex());
 					break;
 				case 'S':
 					if (vict_obj)
-						i = HSHR((const CharData *) vict_obj);
-					else CHECK_NULL(obj, OSHR(obj));
+						i = grammar::PossessivePronoun(((const CharData *) vict_obj)->get_sex());
+					else CHECK_NULL(obj, grammar::PossessivePronoun((obj)->get_sex()));
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 
-				case 'e': i = HSSH(ch);
+				case 'e': i = grammar::PersonalPronoun((ch)->get_sex());
 					break;
 				case 'E':
 					if (vict_obj)
-						i = HSSH((const CharData *) vict_obj);
-					else CHECK_NULL(obj, OSSH(obj));
+						i = grammar::PersonalPronoun(((const CharData *) vict_obj)->get_sex());
+					else CHECK_NULL(obj, grammar::PersonalPronoun((obj)->get_sex()));
 					break;
 
 				case 'o':
 					if (*(orig + 1) < '0' || *(orig + 1) > '5') {
-						CHECK_NULL(obj, obj->get_PName(ECase::kNom).c_str());
+						CHECK_NULL(obj, obj->get_PName(grammar::ECase::kNom).c_str());
 					} else {
 						padis = *(++orig) - '0';
-						CHECK_NULL(obj, obj->get_PName(padis > ECase::kLastCase ?
-						ECase::kFirstCase : static_cast<ECase>(padis)).c_str());
+						CHECK_NULL(obj, obj->get_PName(padis > grammar::ECase::kLastCase ?
+						grammar::ECase::kFirstCase : static_cast<grammar::ECase>(padis)).c_str());
 					}
 					break;
 				case 'O':
 					if (*(orig + 1) < '0' || *(orig + 1) > '5') {
-						CHECK_NULL(vict_obj, ((const ObjData *) vict_obj)->get_PName(ECase::kNom).c_str());
+						CHECK_NULL(vict_obj, ((const ObjData *) vict_obj)->get_PName(grammar::ECase::kNom).c_str());
 					} else {
 						padis = *(++orig) - '0';
-						CHECK_NULL(vict_obj, ((const ObjData *) vict_obj)->get_PName(padis > ECase::kLastCase ?
-						ECase::kFirstCase : static_cast<ECase>(padis)).c_str());
+						CHECK_NULL(vict_obj, ((const ObjData *) vict_obj)->get_PName(padis > grammar::ECase::kLastCase ?
+						grammar::ECase::kFirstCase : static_cast<grammar::ECase>(padis)).c_str());
 					}
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
@@ -2313,93 +2051,93 @@ char *format_act(const char *orig, CharData *ch, ObjData *obj, const void *vict_
 				case '$': i = "$";
 					break;
 
-				case 'a': i = GET_CH_SUF_6(ch);
+				case 'a': i = grammar::SexEnding((ch)->get_sex(), 6);
 					break;
 				case 'A':
 					if (vict_obj)
-						i = GET_CH_SUF_6((const CharData *) vict_obj);
-					else CHECK_NULL(obj, GET_OBJ_SUF_6(obj));
+						i = grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 6);
+					else CHECK_NULL(obj, grammar::ObjSexEnding((obj)->get_sex(), 6));
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 
-				case 'g': i = GET_CH_SUF_1(ch);
+				case 'g': i = grammar::SexEnding((ch)->get_sex(), 1);
 					break;
 				case 'G':
 					if (vict_obj)
-						i = GET_CH_SUF_1((const CharData *) vict_obj);
-					else CHECK_NULL(obj, GET_OBJ_SUF_1(obj));
+						i = grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 1);
+					else CHECK_NULL(obj, grammar::ObjSexEnding((obj)->get_sex(), 1));
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 
-				case 'y': i = GET_CH_SUF_5(ch);
+				case 'y': i = grammar::SexEnding((ch)->get_sex(), 5);
 					break;
 				case 'Y':
 					if (vict_obj)
-						i = GET_CH_SUF_5((const CharData *) vict_obj);
-					else CHECK_NULL(obj, GET_OBJ_SUF_5(obj));
+						i = grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 5);
+					else CHECK_NULL(obj, grammar::ObjSexEnding((obj)->get_sex(), 5));
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 
-				case 'u': i = GET_CH_SUF_2(ch);
+				case 'u': i = grammar::SexEnding((ch)->get_sex(), 2);
 					break;
 				case 'U':
 					if (vict_obj)
-						i = GET_CH_SUF_2((const CharData *) vict_obj);
-					else CHECK_NULL(obj, GET_OBJ_SUF_2(obj));
+						i = grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 2);
+					else CHECK_NULL(obj, grammar::ObjSexEnding((obj)->get_sex(), 2));
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 
-				case 'w': i = GET_CH_SUF_3(ch);
+				case 'w': i = grammar::SexEnding((ch)->get_sex(), 3);
 					break;
 				case 'W':
 					if (vict_obj)
-						i = GET_CH_SUF_3((const CharData *) vict_obj);
-					else CHECK_NULL(obj, GET_OBJ_SUF_3(obj));
+						i = grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 3);
+					else CHECK_NULL(obj, grammar::ObjSexEnding((obj)->get_sex(), 3));
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 
-				case 'q': i = GET_CH_SUF_4(ch);
+				case 'q': i = grammar::SexEnding((ch)->get_sex(), 4);
 					break;
 				case 'Q':
 					if (vict_obj)
-						i = GET_CH_SUF_4((const CharData *) vict_obj);
-					else CHECK_NULL(obj, GET_OBJ_SUF_4(obj));
+						i = grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 4);
+					else CHECK_NULL(obj, grammar::ObjSexEnding((obj)->get_sex(), 4));
 					//dg_victim = (CharacterData *) vict_obj;
 					break;
 				case 'z':
 					if (obj)
-						i = OYOU(obj);
-					else CHECK_NULL(obj, OYOU(obj));
+						i = grammar::PossessiveYourObj((obj)->get_sex());
+					else CHECK_NULL(obj, grammar::PossessiveYourObj((obj)->get_sex()));
 					break;
 				case 'Z':
 					if (vict_obj)
-						i = HYOU((const CharData *) vict_obj);
-					else CHECK_NULL(vict_obj, HYOU((const CharData *) vict_obj));
+						i = grammar::PossessiveYour(((const CharData *) vict_obj)->get_sex());
+					else CHECK_NULL(vict_obj, grammar::PossessiveYour(((const CharData *) vict_obj)->get_sex()));
 					break;
 				default: log("SYSERR: Illegal $-code to act(): %c", *orig);
 					log("SYSERR: %s", orig);
 					i = "";
 					break;
 			}
-			while ((*buf = *(i++)))
-				buf++;
+			while ((*out = *(i++)))
+				out++;
 			orig++;
 		} else if (*orig == '\\') {
 			if (*(orig + 1) == 'r') {
-				*(buf++) = '\r';
+				*(out++) = '\r';
 				orig += 2;
 			} else if (*(orig + 1) == 'n') {
-				*(buf++) = '\n';
+				*(out++) = '\n';
 				orig += 2;
 			} else
-				*(buf++) = *(orig++);
-		} else if (!(*(buf++) = *(orig++)))
+				*(out++) = *(orig++);
+		} else if (!(*(out++) = *(orig++)))
 			break;
 	}
 
-	*(--buf) = '\r';
-	*(++buf) = '\n';
-	*(++buf) = '\0';
+	*(--out) = '\r';
+	*(++out) = '\n';
+	*(++out) = '\0';
 	return (lbuf);
 }
 

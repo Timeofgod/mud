@@ -1,6 +1,7 @@
 #include "fight_penalties.h"
 
 #include "engine/entities/char_data.h"
+#include "gameplay/core/remort.h"
 
 int GroupPenaltyCalculator::get() const {
 	const bool leader_is_npc = m_leader->IsNpc();
@@ -15,10 +16,10 @@ int GroupPenaltyCalculator::get() const {
 		}
 	}
 
-	for (auto f = m_leader->followers; f; f = f->next) {
-		const bool follower_is_npc = f->follower->IsNpc();
-		const bool follower_is_in_room = AFF_FLAGGED(f->follower, EAffect::kGroup)
-			&& f->follower->in_room == m_killer->in_room;
+	for (auto *f : m_leader->followers) {
+		const bool follower_is_npc = f->IsNpc();
+		const bool follower_is_in_room = AFF_FLAGGED(f, EAffect::kGroup)
+			&& f->in_room == m_killer->in_room;
 
 		if (follower_is_npc
 			|| !follower_is_in_room) {
@@ -26,7 +27,7 @@ int GroupPenaltyCalculator::get() const {
 		}
 
 		int penalty = 0;
-		if (penalty_by_leader(f->follower, penalty)) {
+		if (penalty_by_leader(f, penalty)) {
 			if (0 < penalty) {
 				return penalty;
 			}
@@ -37,7 +38,7 @@ int GroupPenaltyCalculator::get() const {
 }
 
 bool GroupPenaltyCalculator::penalty_by_leader(const CharData *player, int &penalty) const {
-	const int player_remorts = static_cast<int>(GetRealRemort(player));
+	const int player_remorts = static_cast<int>(remort::GetRealRemort(player));
 	const int player_level = GetRealLevel(player);
 
 	if (player->IsNpc()) {

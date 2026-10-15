@@ -9,7 +9,21 @@
 
 // * AutoEQ by Burkhard Knopf <burkhard.knopf@informatik.tu-clausthal.de>
 
+#include "engine/core/char_handler.h"
+#include "gameplay/affects/obj_affects.h"
+#include "utils/native_text.h"
+#include "gameplay/mechanics/equipment.h"
 #include "obj_save.h"
+#include "gameplay/mechanics/groups.h"
+#include "administration/privilege.h"
+#include "engine/db/global_objects.h"
+#include "gameplay/economics/currencies.h"
+#include "utils/grammar/gender.h"
+#include "utils/grammar/declensions.h"
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/ai/special_messages.h"
+
+#include <fmt/format.h>
 
 #include "world_objects.h"
 #include "world_characters.h"
@@ -24,9 +38,20 @@
 #include "gameplay/mechanics/stable_objs.h"
 #include "gameplay/mechanics/weather.h"
 #include "utils/utils_time.h"
+#include "player_index.h"
 
 #include <sys/stat.h>
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
+#include "engine/observability/helpers.h"
+#include "engine/observability/metrics.h"
+#include "utils/tracing/trace_manager.h"
+
+#include <unordered_map>
+
+// #3440: кэш хешей содержимого файла объектов по uid игрока. Для периодического
+// crash-сейва (RENT_CRASH) позволяет пропустить дисковую запись, если набор
+// предметов не изменился. Заполняется только при реальной записи файла.
+static std::unordered_map<long, std::size_t> g_obj_crash_save_hash;
 
 const int LOC_INVENTORY = 0;
 //const int MAX_BAG_ROWS = 5;
@@ -41,6 +66,9 @@ extern int free_crashrent_period;
 extern int free_rent;
 extern RoomRnum r_helled_start_room;
 extern RoomRnum r_named_start_room;
+#include "gameplay/ai/subcmd_resolver.h"
+#include "gameplay/ai/spec_procs.h"
+#include "gameplay/mechanics/sight.h"
 extern RoomRnum r_unreg_start_room;
 
 #define RENTCODE(number) (player_table[(number)].timer->rent.rentcode)
@@ -59,8 +87,7 @@ void Crash_extract_norent_eq(CharData *ch);
 int auto_equip(CharData *ch, ObjData *obj, int location);
 int Crash_report_unrentables(CharData *ch, CharData *recep, ObjData *obj);
 void Crash_report_rent(CharData *ch, CharData *recep, ObjData *obj,
-					   int *cost, long *nitems, int rentshow, int factor, int equip, int recursive);
-int gen_receptionist(CharData *ch, CharData *recep, int cmd, char *arg, int mode);
+					   int *cost, long *n_items, int rentshow, int factor, int equip, int recursive);
 void Crash_save(std::stringstream &write_buffer, int iplayer, ObjData *obj, int location, int savetype);
 void Crash_rent_deadline(CharData *ch, CharData *recep, long cost);
 void Crash_restore_weight(ObjData *obj);
@@ -88,8 +115,13 @@ enum {
 	RENT_TIMEDOUT, // заренчен после idle_rent_time
 };
 
+// issue #3568: все вызывающие передают буфер размера kMaxStringLength, поэтому
+// пишем не дальше него -- иначе строка из файла длиннее буфера затирала память
+// за границей (порча кучи/стека). При переполнении обрезаем и пишем в лог.
 int get_buf_line(char **source, char *target) {
 	char *otarget = target;
+	char *const limit = target + kMaxStringLength - 1;    // резерв под '\0'
+	bool truncated = false;
 	int empty = true;
 
 	*target = '\0';
@@ -105,6 +137,17 @@ int get_buf_line(char **source, char *target) {
 			(*source)++;
 			return (true);
 		}
+		if (target >= limit) {    // граница буфера: дочитываем строку, но не пишем
+			if (!truncated) {
+				truncated = true;
+				char msg[256];
+				snprintf(msg, sizeof(msg),
+						"SYSERR: get_buf_line: строка обрезана до %d байт (предотвращено переполнение буфера)",
+						kMaxStringLength);
+				mudlog(msg, NRM, kLvlGod, SYSLOG, true);   // #3568: в mudlog -- боги видят сразу
+			}
+			continue;
+		}
 		*target = **source;
 		if (!isspace(static_cast<unsigned char>(*target++)))
 			empty = false;
@@ -114,8 +157,10 @@ int get_buf_line(char **source, char *target) {
 }
 
 int get_buf_lines(char **source, char *target) {
-	*target = '\0';
+	char *const limit = target + kMaxStringLength - 1;    // резерв под '\0'
+	bool truncated = false;
 
+	*target = '\0';
 	for (; **source && **source != DIV_CHAR && **source != END_CHAR; (*source)++) {
 		if (**source == END_LINES) {
 			(*source)++;
@@ -124,6 +169,17 @@ int get_buf_lines(char **source, char *target) {
 			if (**source == END_LINE)
 				(*source)++;
 			return (true);
+		}
+		if (target >= limit) {    // граница буфера: дочитываем блок, но не пишем
+			if (!truncated) {
+				truncated = true;
+				char msg[256];
+				snprintf(msg, sizeof(msg),
+						"SYSERR: get_buf_lines: блок обрезан до %d байт (предотвращено переполнение буфера)",
+						kMaxStringLength);
+				mudlog(msg, NRM, kLvlGod, SYSLOG, true);   // #3568: в mudlog -- боги видят сразу
+			}
+			continue;
 		}
 		*(target++) = **source;
 		*target = '\0';
@@ -136,8 +192,10 @@ int get_buf_lines(char **source, char *target) {
 ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 	char buffer[kMaxStringLength];
 	char read_line[kMaxStringLength];
+	char flags_buf[kMaxStringLength];    // приёмник sscanf для строк флагов аффекта
 	int t[2];
 	int vnum;
+	ObjRnum rnum = -1;    // vnum->rnum считаем один раз: для создания и для проверки прототипа
 	ObjData::shared_ptr object;
 
 	// Станем на начало предмета
@@ -164,7 +222,13 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 	if (vnum < 0) {
 		object = world_objects.create_blank();
 	} else {
-		object = world_objects.create_from_prototype_by_vnum(vnum);
+		rnum = GetObjRnum(vnum);
+		if (rnum < 0) {
+			log("Object (V) %d does not exist in database.", vnum);
+			*error = 5;
+			return nullptr;
+		}
+		object = world_objects.create_from_prototype_by_rnum(rnum);
 		if (!object) {
 			*error = 5;
 			return nullptr;
@@ -184,23 +248,23 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 			// 13.05.2024 можно удалить через месяц
 			} else if (!strcmp(read_line, "Pad0")) {
 				*error = 7;
-				object->set_PName(ECase::kNom, buffer);
+				object->set_PName(grammar::ECase::kNom, buffer);
 				object->set_short_description(buffer);
 			} else if (!strcmp(read_line, "Pad1")) {
 				*error = 8;
-				object->set_PName(ECase::kGen, buffer);
+				object->set_PName(grammar::ECase::kGen, buffer);
 			} else if (!strcmp(read_line, "Pad2")) {
 				*error = 9;
-				object->set_PName(ECase::kDat, buffer);
+				object->set_PName(grammar::ECase::kDat, buffer);
 			} else if (!strcmp(read_line, "Pad3")) {
 				*error = 10;
-				object->set_PName(ECase::kAcc, buffer);
+				object->set_PName(grammar::ECase::kAcc, buffer);
 			} else if (!strcmp(read_line, "Pad4")) {
 				*error = 11;
-				object->set_PName(ECase::kIns, buffer);
+				object->set_PName(grammar::ECase::kIns, buffer);
 			} else if (!strcmp(read_line, "Pad5")) {
 				*error = 12;
-				object->set_PName(ECase::kPre, buffer);
+				object->set_PName(grammar::ECase::kPre, buffer);
 			} else if (!strcmp(read_line, "Desc")) {
 				*error = 13;
 				object->set_description(buffer);
@@ -235,28 +299,39 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 				object->set_sex(static_cast<EGender>(atoi(buffer)));
 			} else if (!strcmp(read_line, "Tmer")) {
 				*error = 20;
-				object->set_timer(atoi(buffer));
+				const int saved_timer = atoi(buffer);
+				// Защита от мусорных таймеров (UNLIMITED_TIMER, INT_MAX и
+				// прочие следы старых багов decay_manager в otransform/
+				// oedit/обмена шмотками - см. #3213). При парсинге мира
+				// таймеры > 99999 уже клампятся, тут делаем то же для
+				// сохранений игроков. Если в пфайле плохое значение,
+				// оставляем то, что пришло из прототипа в
+				// create_from_prototype_by_vnum выше. Отрицательные значения
+				// валидны (например, -1 означает "таймер не уменьшается").
+				if (saved_timer <= 99999) {
+					object->set_timer(saved_timer);
+				}
 			} else if (!strcmp(read_line, "Spll")) {
 				*error = 21;
-				object->set_spell(atoi(buffer));
+				// issue #3581: obj->spell -- мёртвое поле; тег игнорируем (совместимость со старыми рентами).
 			} else if (!strcmp(read_line, "Levl")) {
 				*error = 22;
-				object->set_level(atoi(buffer));
+				// issue #3581: obj->spell/level -- мёртвая пара; тег игнорируем (совместимость со старыми рентами).
 			} else if (!strcmp(read_line, "Affs")) {
 				*error = 23;
-				object->SetWeaponAffectFlags(clear_flags);
+				object->SetEquipmentAffectFlags(BitsetFlags<EEquipmentAffect>{});
 				object->load_affect_flags(buffer);
 			} else if (!strcmp(read_line, "Anti")) {
 				*error = 24;
-				object->set_anti_flags(clear_flags);
+				object->set_anti_flags(BitsetFlags<EAntiFlag>{});
 				object->load_anti_flags(buffer);
 			} else if (!strcmp(read_line, "Nofl")) {
 				*error = 25;
-				object->set_no_flags(clear_flags);
+				object->set_no_flags(BitsetFlags<ENoFlag>{});
 				object->load_no_flags(buffer);
 			} else if (!strcmp(read_line, "Extr")) {
 				*error = 26;
-				object->set_extra_flags(clear_flags);
+				object->set_extra_flags(BitsetFlags<EObjFlag>{});
 				object->load_extra_flags(buffer);
 			} else if (!strcmp(read_line, "Wear")) {
 				*error = 27;
@@ -333,22 +408,39 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 				object->set_affected(7, static_cast<EApply>(t[0]), t[1]);
 			} else if (!strcmp(read_line, "Edes")) {
 				*error = 46;
-				ExtraDescription::shared_ptr new_descr(new ExtraDescription());
-				new_descr->keyword = str_dup(buffer);
-				if (!strcmp(new_descr->keyword, "None")) {
-					object->set_ex_description(nullptr);
-				} else {
+				ExtraDescription new_descr;
+				new_descr.keyword = buffer;
+				// Маркер "None" в старых рентах означал "описаний нет"; больше не
+				// пишется -- просто пропускаем (описания прототипа не трогаем).
+				if (new_descr.keyword != "None") {
 					if (!get_buf_lines(data, buffer)) {
 						*error = 47;
 						return (object);
 					}
-					new_descr->description = str_dup(buffer);
-					object->set_ex_description(new_descr);
+					new_descr.description = buffer;
+					// Мерж по ключу: объект -- копия прототипа, в ренте лежат только
+					// отличия. Есть описание с таким ключом -- меняем его текст,
+					// нет -- добавляем новое.
+					auto &descs = object->ex_descriptions();
+					ExtraDescription *same_key = nullptr;
+					for (auto &d : descs) {
+						if (!str_cmp(d.keyword.c_str(), new_descr.keyword.c_str())) {
+							same_key = &d;
+							break;
+						}
+					}
+					if (same_key) {
+						same_key->description = std::move(new_descr.description);
+					} else {
+						descs.push_back(std::move(new_descr));
+					}
 				}
 			} else if (!strcmp(read_line, "Ouid")) {
 				*error = 48;
 				object->set_unique_id(atoi(buffer));
 			} else if (!strcmp(read_line, "TSpl")) {
+				// issue.obj-affects: legacy on-disk format stored an obj affect as its ESpell. Map each to
+				// its EObjAffect identity (the 4 poisons -> kPoisoned, the ESpell kept as subtype modifier).
 				*error = 49;
 				std::stringstream text(buffer);
 				std::string tmp_buf;
@@ -362,7 +454,45 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 						*error = 50;
 						return object;
 					}
-					object->add_timed_spell(static_cast<ESpell>(t[0]), t[1]);
+					const auto sp = static_cast<ESpell>(t[0]);
+					const auto oa = obj_affects::BySpell(sp);
+					if (oa != obj_affects::EObjAffect::kUndefined) {
+						const int mod = obj_affects::IsPoisonSpell(sp) ? t[0] : 0;
+						obj_affects::Impose(object.get(), oa, t[1], mod);
+					}
+				}
+			} else if (!strcmp(read_line, "OAff")) {
+				// issue.obj-affects: current format -- "<EObjAffect token> <timer> <modifier>" per line.
+				*error = 49;
+				std::stringstream text(buffer);
+				std::string tmp_buf;
+
+				while (std::getline(text, tmp_buf)) {
+					utils::Trim(tmp_buf);
+					if (tmp_buf.empty() || tmp_buf[0] == '~') {
+						break;
+					}
+					char token[64] = {0};
+					int dur = 0;
+					int mod = 0;
+					float pot = 0.0f;   // issue.affect-suppression-dispell: optional 4th field (kSuppressed potency)
+					if (sscanf(tmp_buf.c_str(), "%63s %d %d %f", token, &dur, &mod, &pot) < 2) {
+						*error = 50;
+						return object;
+					}
+					obj_affects::EObjAffect a;
+					try {
+						a = ITEM_BY_NAME<obj_affects::EObjAffect>(token);
+					} catch (const std::out_of_range &) {
+						continue;   // unknown token (e.g. a retired affect): skip
+					}
+					if (a == obj_affects::EObjAffect::kSuppressed) {
+						// issue.obj-suppressor-affect: an item can suppress several EAffects at once (one
+						// kSuppressed instance each) -- append by modifier, not the one-per-type Impose.
+						obj_affects::SuppressEquipAffect(object.get(), static_cast<EAffect>(mod), dur, pot);
+					} else {
+						obj_affects::Impose(object.get(), a, dur, mod);
+					}
 				}
 			} else if (!strcmp(read_line, "Mort")) {
 				*error = 51;
@@ -405,25 +535,25 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 							break;
 						}
 						case 'F':
-							if (sscanf(tmp_buf.c_str(), "F %s", buf2) != 1) {
+							if (sscanf(tmp_buf.c_str(), "F %s", flags_buf) != 1) {
 								*error = 54;
 								return object;
 							}
-							tmp_aff.affects_flags_.from_string(buf2);
+							tmp_aff.affects_flags_.from_string(flags_buf);
 							break;
 						case 'E':
-							if (sscanf(tmp_buf.c_str(), "E %s", buf2) != 1) {
+							if (sscanf(tmp_buf.c_str(), "E %s", flags_buf) != 1) {
 								*error = 55;
 								return object;
 							}
-							tmp_aff.extra_flags_.from_string(buf2);
+							tmp_aff.extra_flags_.from_string(flags_buf);
 							break;
 						case 'N':
-							if (sscanf(tmp_buf.c_str(), "N %s", buf2) != 1) {
+							if (sscanf(tmp_buf.c_str(), "N %s", flags_buf) != 1) {
 								*error = 56;
 								return object;
 							}
-							tmp_aff.no_flags_.from_string(buf2);
+							tmp_aff.no_flags_.from_string(flags_buf);
 							break;
 						case 'W':
 							if (sscanf(tmp_buf.c_str(), "W %d", &tmp_aff.weight_) != 1) {
@@ -453,7 +583,7 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 				if (!object->get_custom_label()) {
 					object->set_custom_label(new custom_label());
 				}
-				object->get_custom_label()->text_label = str_dup(buffer);
+				object->get_custom_label()->text_label = buffer;
 			} else if (!strcmp(read_line, "ClID")) // id чара
 			{
 				*error = 61;
@@ -465,7 +595,7 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 				if (object->get_custom_label()->author > 0) {
 					for (std::size_t i = 0; i < player_table.size(); i++) {
 						if (player_table[i].uid() == object->get_custom_label()->author) {
-							object->get_custom_label()->author_mail = str_dup(player_table[i].mail);
+							object->get_custom_label()->author_mail = player_table[i].mail;
 							break;
 						}
 					}
@@ -476,7 +606,7 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 				if (!object->get_custom_label()) {
 					object->set_custom_label(new custom_label());
 				}
-				object->get_custom_label()->clan_abbrev = str_dup(buffer);
+				object->get_custom_label()->clan_abbrev = buffer;
 			} else if (!strcmp(read_line, "Vals")) {
 				*error = 63;
 				if (!object->init_values_from_file(buffer)) {
@@ -493,9 +623,9 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 				*error = 66;
 				object->set_vnum_zone_from(atoi(buffer));
 			} else {
-				snprintf(buf, kMaxStringLength, "WARNING: \"%s\" is not valid key for character items! [value=\"%s\"]",
-						 read_line, buffer);
-				mudlog(buf, NRM, kLvlGreatGod, ERRLOG, true);
+				mudlog(fmt::format("WARNING: \"{}\" is not valid key for character items! [value=\"{}\"]",
+								   read_line, buffer),
+					   NRM, kLvlGreatGod, ERRLOG, true);
 			}
 		}
 	}
@@ -516,7 +646,7 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 		}
 	}
 	// Проверка на ингры
-	if (object->get_type() == EObjType::kMagicIngredient) {
+	if (object->get_type() == EObjType::kMagicComponent) {
 		int err = im_assign_power(object.get());
 		if (err) {
 			*error = 100 + err;
@@ -527,15 +657,38 @@ ObjData::shared_ptr read_one_object_new(char **data, int *error) {
 		object->cleanup_script();
 	}
 	ConvertDrinkconSkillField(object.get(), false);
+	ConvertDrinkPoisonField(object.get(), false);   // issue.potion-hotfix: migrate player-held drink val[3]
+	ConvertPotionToEValueKey(object.get(), false);
+	ConvertSpellItemToEValueKey(object.get(), false);   // issue.magic-items: migrate held scroll/wand/staff
+	ConvertDrinkconLiquidCore(object.get(), false);   // issue.magic-items-hotfix: reconcile held drink liquid core
 	object->remove_incorrect_values_keys(object->get_type());
-
+	object->set_extra_flag(EObjFlag::kTicktimer);
+	// ВРЕМЕННЫЙ КОСТЫЛЬ (2026-06-19, issue #3459/#3490): краш-баг крафта (#3486) вешал
+	// kNodrop ("!бросить") на предметы, у прототипа которых его нет. Снимаем флаг при
+	// загрузке, если в прототипе-оригинале kNodrop нет, чтобы почистить уже испорченный
+	// у игроков стаф. (Заклинание "проклясть" на таких предметах тоже снимется -- это
+	// осознанный компромисс ради очистки массовой порчи.)
+	// УДАЛИТЬ после 2026-07-19: к тому времени база игроков прочитается и очистится,
+	// отдельно конвертировать пфайлы не нужно.
+	if (rnum >= 0 && object->has_flag(EObjFlag::kNodrop)
+		&& !obj_proto[rnum]->has_flag(EObjFlag::kNodrop)) {
+		// rnum -- прототип-оригинал по vnum (в obj-файле всегда оригиналы), посчитан выше
+		object->unset_extraflag(EObjFlag::kNodrop);
+	}
+	world_objects.decay_manager().insert(object.get());
 	return (object);
 }
 
-inline bool proto_has_descr(const ExtraDescription::shared_ptr &odesc, const ExtraDescription::shared_ptr &pdesc) {
-	for (auto desc = pdesc; desc; desc = desc->next) {
-		if (!str_cmp(odesc->keyword, desc->keyword)
-			&& !str_cmp(odesc->description, desc->description)) {
+// Есть ли в прототипе точно такое же экстра-описание. Если да -- в ренте его не
+// пишем: при загрузке оно приходит из копии прототипа. Ключ сравниваем
+// регистронезависимо (как матчинг ключей в игре), а текст -- точно, побайтно
+// (== короче str_cmp: сначала сверяет длину, при равной делает memcmp, и не
+// даункейсит по 2-3 сотни символов). Иначе описание, отличающееся хотя бы
+// регистром, ошибочно считалось бы совпавшим и терялось при сохранении.
+inline bool proto_has_descr(const ExtraDescription &odesc, const std::vector<ExtraDescription> &pdesc) {
+	for (const auto &desc : pdesc) {
+		if (!str_cmp(odesc.keyword.c_str(), desc.keyword.c_str())
+			&& odesc.description == desc.description) {
 			return true;
 		}
 	}
@@ -543,281 +696,222 @@ inline bool proto_has_descr(const ExtraDescription::shared_ptr &odesc, const Ext
 	return false;
 }
 
+void WriteMagicComponentItem(std::stringstream &out, ObjData *object, int location) {
+	out << "#" << object->get_vnum() << "\n";
+	// Положение в экипировке/контейнере: без него ингредиент из сумки
+	// при загрузке оказывается в инвентаре (issue #3221).
+	if (location) {
+		out << "Lctn: " << location << "~\n";
+	}
+	out << "Ouid: " << object->get_unique_id() << "~\n";
+	out << "Tmer: " << object->CObjectPrototype::get_timer() << "~\n";
+	out << "Val1: " << GET_OBJ_VAL(object, 1) << "~\n";
+	out << "Val2: " << GET_OBJ_VAL(object, 2) << "~\n";
+	out << "Val3: " << GET_OBJ_VAL(object, 3) << "~\n";
+	// Имя магкомпонента заполнено моба-источником (im_assign_power ставит is_rename), а короткий
+	// формат его раньше не сохранял -- после ребута флаг терялся, и правка прототипа в olc
+	// затирала имя шаблоном "@p1". Пишем флаг, чтобы olc_update_object восстановил имя.
+	if (object->get_is_rename()) {
+		out << "Rnme: 1~\n";
+	}
+	if (object->get_custom_label()) {
+		out << "Clbl: " << object->get_custom_label()->text_label << "~\n";
+		out << "ClID: " << object->get_custom_label()->author << "~\n";
+		if (!object->get_custom_label()->clan_abbrev.empty()) {
+			out << "ClCl: " << object->get_custom_label()->clan_abbrev << "~\n";
+		}
+	}
+}
+
 // Данная процедура помещает предмет в буфер
 // [ ИСПОЛЬЗУЕТСЯ В НОВОМ ФОРМАТЕ ВЕЩЕЙ ПЕРСОНАЖА ОТ 10.12.04 ]
 void write_one_object(std::stringstream &out, ObjData *object, int location) {
-	char buf[kMaxStringLength];
-	char buf2[kMaxStringLength];
-	int i, j;
+	if (object->get_type() == EObjType::kMagicComponent) {
+		WriteMagicComponentItem(out, object, location);
+		return;
+	}
 	ObjRnum orn = object->get_rnum();
+	CObjectPrototype::shared_ptr proto_sp;
 
-	// vnum
-	if (obj_proto[orn]->get_parent_rnum() > -1) {
-		out << "#" << obj_proto[orn]->get_parent_vnum();
+	if (object->get_parent_rnum() > -1) {
+		proto_sp = obj_proto[object->get_parent_rnum()];
+		out << "#" << object->get_parent_vnum();
 	} else {
+		proto_sp = obj_proto[orn];
 		out << "#" << GET_OBJ_VNUM(object);
 	}
-
+	// Кешируем сырой указатель: shared_ptr::operator-> в горячем цикле
+	// добавляет заметный overhead (atomic-ссылки, обёртки).
+	const CObjectPrototype* const p = proto_sp.get();
 	out << "\n";
 	// Положение в экипировке (сохраняем только если > 0)
 	if (location) {
 		out << "Lctn: " << location << "~\n";
 	}
-
-	// Если у шмотки есть прототип то будем сохранять по обрезанной схеме, иначе
-	// придется сохранять все статсы шмотки.
-	auto proto = GetObjectPrototype(GET_OBJ_VNUM(object));
-
-/*	auto obj_ptr = world_objects.get_by_raw_ptr(object);
-	if (!obj_ptr)
-	{
-		log("Object was purged.");
-		//return;
-	}
-*/
-//	log("Write one object: %s", object->get_PName(ECase::kNom).c_str());
-
-	if (GET_OBJ_VNUM(object) >= 0 && proto) {
-		// Сохраняем UID
+	if (GET_OBJ_VNUM(object) >= 0) {
 		out << "Ouid: " << object->get_unique_id() << "~\n";
-		// Алиасы
-		if (object->get_aliases() != proto->get_aliases()) {
+		if (object->get_aliases() != p->get_aliases()) {
 			out << "Alia: " << object->get_aliases() << "~\n";
 		}
 		// Падежи
-		for (i = ECase::kFirstCase; i <= ECase::kLastCase; i++) {
-			auto name_case = static_cast<ECase>(i);
-			if (object->get_PName(name_case) != proto->get_PName(name_case)) {
-				out << "Pad" << i << ": " << object->get_PName(name_case) << "~\n";
+		for (int i = grammar::ECase::kFirstCase; i <= grammar::ECase::kLastCase; ++i) {
+			const auto name_case = static_cast<grammar::ECase>(i);
+			const auto& obj_pname = object->get_PName(name_case);
+			const auto& proto_pname = p->get_PName(name_case);
+			if (obj_pname != proto_pname) {
+				out << "Pad" << i << ": " << obj_pname << "~\n";
 			}
 		}
-		// Описание когда на земле
-		if (!proto->get_description().empty()
-			&& object->get_description() != proto->get_description()) {
+		if (!p->get_description().empty()
+			&& object->get_description() != p->get_description()) {
 			out << "Desc: " << object->get_description() << "~\n";
 		}
-
-		// Описание при действии
-		if (!object->get_action_description().empty()) {
-//			&& !proto->get_action_description().empty()) {
-			if (object->get_action_description() != proto->get_action_description()) {
-				out << "ADsc: " << object->get_action_description() << "~\n";
-			}
+		if (!object->get_action_description().empty()
+			&& object->get_action_description() != p->get_action_description()) {
+			out << "ADsc: " << object->get_action_description() << "~\n";
 		}
-
 		if (object->has_skills()) {
-			CObjectPrototype::skills_t tmp_skills_object_;
-			CObjectPrototype::skills_t tmp_skills_proto_;
-			object->get_skills(tmp_skills_object_);
-			proto->get_skills(tmp_skills_proto_);
-			// Тренируемый скилл
-			if (tmp_skills_object_ != tmp_skills_proto_) {
-				for (const auto &it : tmp_skills_object_) {
-					out << "Skil: " << to_underlying(it.first) << " " << it.second << "~\n";
+			// get_skills() без аргументов возвращает const ref на m_skills;
+			// избегаем копии всей std::map<ESkill,int>.
+			const auto& obj_skills = object->get_skills();
+			const auto& proto_skills = p->get_skills();
+			if (obj_skills != proto_skills) {
+				for (const auto &sk : obj_skills) {
+					out << "Skil: " << to_underlying(sk.first) << " " << sk.second << "~\n";
 				}
-
 			}
 		}
-		// Макс. прочность
-		if (object->get_maximum_durability() != proto->get_maximum_durability()) {
+		if (object->get_maximum_durability() != p->get_maximum_durability()) {
 			out << "Maxx: " << object->get_maximum_durability() << "~\n";
 		}
-		// Текущая прочность
-		if (object->get_current_durability() != proto->get_current_durability()) {
+		if (object->get_current_durability() != p->get_current_durability()) {
 			out << "Curr: " << object->get_current_durability() << "~\n";
 		}
-		// Материал
-		if (object->get_material() != proto->get_material()) {
+		if (object->get_material() != p->get_material()) {
 			out << "Mter: " << object->get_material() << "~\n";
 		}
-		// Пол
-		if (GET_OBJ_SEX(object) != GET_OBJ_SEX(proto)) {
+		if (GET_OBJ_SEX(object) != GET_OBJ_SEX(p)) {
 			out << "Sexx: " << static_cast<int>(GET_OBJ_SEX(object)) << "~\n";
 		}
-		// Таймер
-		if (object->get_timer() != proto->get_timer()) {
-			out << "Tmer: " << object->get_timer() << "~\n";
-			if (!stable_objs::IsObjFromSystemZone(GET_OBJ_VNUM(object))) //если шмот в служебной зоне, то таймер не трогаем
-			{
-				// на тот случай, если есть объекты с таймером, больше таймера прототипа
-				int temp_timer = obj_proto[object->get_rnum()]->get_timer();
-				if (object->get_timer() > temp_timer)
-					object->set_timer(temp_timer);
-			}
+		// Таймер. Сохраняем актуальный остаток: ObjData::get_timer()
+		// учитывает deadline в decay_manager, поэтому для свежезагруженного
+		// объекта с m_timer == proto_timer уже после пары игровых часов мы
+		// увидим правильное оставшееся время. Без этого Tmer не писался в
+		// файл игрока (m_timer сам по себе не тикает), и прогресс распада
+		// терялся на save/reload (issue #3189).
+		// Сохранение идёт из главного цикла (heartbeat, shutdown), обращение
+		// к decay_manager здесь безопасно.
+		const int obj_timer = object->get_timer();
+		const int proto_timer = p->get_timer();
+		if (obj_timer != proto_timer) {
+			out << "Tmer: " << obj_timer << "~\n";
 		}
-		// Сложность замкА
-		if (object->get_spell() != proto->get_spell()) {
-			out << "Spll: " << object->get_spell() << "~\n";
-		}
-		// Уровень заклинания
-		if (object->get_level() != proto->get_level()) {
-			out << "Levl: " << object->get_level() << "~\n";
-		}
-		// была ли шмотка ренейм
-		if (object->get_is_rename() != false) {
+		// issue #3581: obj->spell/level -- мёртвая пара, в рент больше не пишем.
+		if (object->get_is_rename()) {
 			out << "Rnme: 1~\n";
 		}
-		// скрафчено с таймером
-		if ((object->get_craft_timer() > 0)) {
+		if (object->get_craft_timer() > 0) {
 			out << "Ctmr: " << object->get_craft_timer() << "~\n";
 		}
-		// в какой зоне было загружено в мир
 		if (object->get_vnum_zone_from()) {
 			out << "Ozne: " << object->get_vnum_zone_from() << "~\n";
 		}
-		// Наводимые аффекты
-		*buf = '\0';
-		*buf2 = '\0';
-		object->get_affect_flags().tascii(FlagData::kPlanesNumber, buf);
-		proto->get_affect_flags().tascii(FlagData::kPlanesNumber, buf2);
-		if (strcmp(buf, buf2)) {
-			out << "Affs: " << buf << "~\n";
+		const auto& obj_aff = object->get_affect_flags();
+		const auto& proto_aff = p->get_affect_flags();
+		if (obj_aff != proto_aff) {
+			out << "Affs: " << obj_aff.to_numeric_string() << "~\n";
 		}
-		// Анти флаги
-		*buf = '\0';
-		*buf2 = '\0';
-		object->get_anti_flags().tascii(FlagData::kPlanesNumber, buf);
-		proto->get_anti_flags().tascii(FlagData::kPlanesNumber, buf2);
-		if (strcmp(buf, buf2)) {
-			out << "Anti: " << buf << "~\n";
+		const auto& obj_anti = object->get_anti_flags();
+		const auto& proto_anti = p->get_anti_flags();
+		if (obj_anti != proto_anti) {
+			out << "Anti: " << obj_anti.to_numeric_string() << "~\n";
 		}
-		// Запрещающие флаги
-		*buf = '\0';
-		*buf2 = '\0';
-		object->get_no_flags().tascii(FlagData::kPlanesNumber, buf);
-		proto->get_no_flags().tascii(FlagData::kPlanesNumber, buf2);
-		if (strcmp(buf, buf2)) {
-			out << "Nofl: " << buf << "~\n";
+		const auto& obj_nofl = object->get_no_flags();
+		const auto& proto_nofl = p->get_no_flags();
+		if (obj_nofl != proto_nofl) {
+			out << "Nofl: " << obj_nofl.to_numeric_string() << "~\n";
 		}
-		// Экстра флаги
-		*buf = '\0';
-		*buf2 = '\0';
-		//Временно убираем флаг !окровавлен! с вещи, чтобы он не сохранялся
-		bool blooded = object->has_flag(EObjFlag::kBloody);
-		if (blooded) {
-			object->unset_extraflag(EObjFlag::kBloody);
+		// Экстра флаги. Временные флаги (kBloody, рантайм-выставленный kNosell)
+		// в файл не пишем. Снимаем их на копии FlagData без мутации самого
+		// объекта -- иначе save-путь был бы не thread-safe и менял видимое
+		// состояние предмета для игроков на момент сериализации.
+		auto extra_to_save = object->get_extra_flags();
+		extra_to_save.unset(EObjFlag::kBloody);
+		if (object->has_flag(EObjFlag::kNosell)
+			&& !p->has_flag(EObjFlag::kNosell)) {
+			extra_to_save.unset(EObjFlag::kNosell);
 		}
-		bool nosell = object->has_flag(EObjFlag::kNosell) && !obj_proto[orn]->has_flag(EObjFlag::kNosell);
-		if (nosell) {
-			object->unset_extraflag(EObjFlag::kNosell);
+		if (extra_to_save != p->get_extra_flags()) {
+			out << "Extr: " << extra_to_save.to_numeric_string() << "~\n";
 		}
-		
-		object->get_extra_flags().tascii(FlagData::kPlanesNumber, buf);
-		proto->get_extra_flags().tascii(FlagData::kPlanesNumber, buf2);
-		if (blooded) //Возвращаем флаг назад
-		{
-			object->set_extra_flag(EObjFlag::kBloody);
+		if (object->get_wear_flags() != p->get_wear_flags()) {
+			out << "Wear: " << object->get_wear_flags() << "~\n";
 		}
-		if (nosell) //Возвращаем флаг назад
-		{
-			object->set_extra_flag(EObjFlag::kNosell);
-		}
-		if (strcmp(buf, buf2)) {
-			out << "Extr: " << buf << "~\n";
-		}
-		// Флаги слотов экипировки
-		*buf = '\0';
-		*buf2 = '\0';
-
-		auto wear = object->get_wear_flags();
-		tascii(&wear, 1, buf);
-
-		wear = proto->get_wear_flags();
-		tascii(&wear, 1, buf2);
-
-		if (strcmp(buf, buf2)) {
-			out << "Wear: " << buf << "~\n";
-		}
-		// Тип предмета
-		if (object->get_type() != proto->get_type()) {
+		if (object->get_type() != p->get_type()) {
 			out << "Type: " << object->get_type() << "~\n";
 		}
-		// Значение 0, Значение 1, Значение 2, Значение 3.
-		for (i = 0; i < 4; i++) {
-			if (GET_OBJ_VAL(object, i) != GET_OBJ_VAL(proto, i)) {
+		for (int i = 0; i < 4; ++i) {
+			if (GET_OBJ_VAL(object, i) != GET_OBJ_VAL(p, i)) {
 				out << "Val" << i << ": " << GET_OBJ_VAL(object, i) << "~\n";
 			}
 		}
-		// Вес
-		if (object->get_weight() != proto->get_weight()) {
+		if (object->get_weight() != p->get_weight()) {
 			out << "Weig: " << object->get_weight() << "~\n";
 		}
-		// Цена
-		if (object->get_cost() != proto->get_cost()) {
+		if (object->get_cost() != p->get_cost()) {
 			out << "Cost: " << object->get_cost() << "~\n";
 		}
-		// Рента (снято)
-		if (object->get_rent_off() != proto->get_rent_off()) {
+		if (object->get_rent_off() != p->get_rent_off()) {
 			out << "Rent: " << object->get_rent_off() << "~\n";
 		}
-		// Рента (одето)
-		if (object->get_rent_on() != proto->get_rent_on()) {
+		if (object->get_rent_on() != p->get_rent_on()) {
 			out << "RntQ: " << object->get_rent_on() << "~\n";
 		}
-		// Владелец
 		if (object->get_owner() != ObjData::DEFAULT_OWNER) {
 			out << "Ownr: " << object->get_owner() << "~\n";
 		}
-		// Создатель
 		if (object->get_crafter_uid() != ObjData::DEFAULT_MAKER) {
 			out << "Mker: " << object->get_crafter_uid() << "~\n";
 		}
-
-		// Аффекты
-		for (j = 0; j < kMaxObjAffect; j++) {
+		for (int j = 0; j < kMaxObjAffect; ++j) {
 			const auto &oaff = object->get_affected(j);
-			const auto &paff = proto->get_affected(j);
+			const auto &paff = p->get_affected(j);
 			if (oaff.location != paff.location
 				|| oaff.modifier != paff.modifier) {
 				out << "Afc" << j << ": " << oaff.location << " " << oaff.modifier << "~\n";
 			}
 		}
-
-		for (auto descr = object->get_ex_description(); descr; descr = descr->next) {
-			if (proto_has_descr(descr, proto->get_ex_description())) {
+		// Диф экстра-описаний против прототипа: описания, совпадающие с
+		// прототипом (ключ + текст), в ренте не пишем -- при загрузке они
+		// приходят из копии прототипа. Пишем только новые/изменённые; при
+		// загрузке мерж идёт по ключу (см. read_one_object_new).
+		for (const auto &descr : object->get_ex_description()) {
+			if (proto_has_descr(descr, p->get_ex_description())) {
 				continue;
 			}
-			out << "Edes: " << (descr->keyword ? descr->keyword : "") << "~\n"
-				<< (descr->description ? descr->description : "") << "~\n";
+			out << "Edes: " << descr.keyword << "~\n"
+				<< descr.description << "~\n";
 		}
-
-		// Если у прототипа есть описание, а у сохраняемой вещи - нет, сохраняем None
-		if (!object->get_ex_description()
-			&& proto->get_ex_description()) {
-			out << "Edes: None~\n";
-		}
-
-		// требования по мортам
-		if (object->get_auto_mort_req() > 0)
-//			&& object->get_manual_mort_req() != proto->get_manual_mort_req())
-		{
+		if (object->get_auto_mort_req() > 0) {
 			out << "Mort: " << object->get_auto_mort_req() << "~\n";
 		}
-		if (!object->get_dgscript_field().empty())
-		{
+		if (!object->get_dgscript_field().empty()) {
 			out << "DGsc: " << object->get_dgscript_field() << "~\n";
 		}
-
-		// ObjectValue предмета, если есть что сохранять
-		if (object->get_all_values() != proto->get_all_values()) {
+		if (object->get_all_values() != p->get_all_values()) {
 			out << object->serialize_values();
 		}
 	}
-	// обкаст (если он есть) сохраняется в любом случае независимо от прототипа
-	if (object->has_timed_spell()) {
-		out << object->timed_spell().print();
+	if (object->has_obj_affects()) {
+		out << obj_affects::Serialize(object);
 	}
-
-	// накладываемые энчанты
 	if (!object->get_enchants().empty()) {
 		out << object->serialize_enchants();
 	}
-
-	// кастомная метка
 	if (object->get_custom_label()) {
 		out << "Clbl: " << object->get_custom_label()->text_label << "~\n";
 		out << "ClID: " << object->get_custom_label()->author << "~\n";
-		if (object->get_custom_label()->clan_abbrev) {
+		if (!object->get_custom_label()->clan_abbrev.empty()) {
 			out << "ClCl: " << object->get_custom_label()->clan_abbrev << "~\n";
 		}
 	}
@@ -963,7 +1057,7 @@ int auto_equip(CharData *ch, ObjData *obj, int location) {
 }
 
 int Crash_delete_files(const std::size_t index) {
-	char filename[kMaxStringLength + 1], name[kMaxNameLength + 1];
+	char filename[kMaxStringLength + 1];
 	FILE *fl;
 	int retcode = false;
 
@@ -971,11 +1065,11 @@ int Crash_delete_files(const std::size_t index) {
 		return retcode;
 	}
 
-	strcpy(name, player_table[index].name());
+	auto name = player_table[index].name();
 
 	//удаляем файл описания объектов
-	if (!get_filename(name, filename, kTextCrashFile)) {
-		log("SYSERR: Error deleting objects file for %s - unable to resolve file name.", name);
+	if (!get_filename(name.c_str(), filename, kTextCrashFile)) {
+		log("SYSERR: Error deleting objects file for %s - unable to resolve file name.", name.c_str());
 		retcode = false;
 	} else {
 		if (!(fl = fopen(filename, "rb"))) {
@@ -989,13 +1083,13 @@ int Crash_delete_files(const std::size_t index) {
 				log("SYSERR: Error deleting objects file %s (2): %s", filename, strerror(errno));
 				retcode = false;
 			}
-			FileCRC::check_crc(filename, FileCRC::UPDATE_TEXTOBJS, player_table[index].uid());
+			FileCRC::reset(player_table[index].uid(), FileCRC::kTextObjs);
 		}
 	}
 
 	//удаляем файл таймеров
-	if (!get_filename(name, filename, kTimeCrashFile)) {
-		log("SYSERR: Error deleting timer file for %s - unable to resolve file name.", name);
+	if (!get_filename(name.c_str(), filename, kTimeCrashFile)) {
+		log("SYSERR: Error deleting timer file for %s - unable to resolve file name.", name.c_str());
 		retcode = false;
 	} else {
 		if (!(fl = fopen(filename, "rb"))) {
@@ -1009,7 +1103,7 @@ int Crash_delete_files(const std::size_t index) {
 				log("SYSERR: deleting timer file %s (2): %s", filename, strerror(errno));
 				retcode = false;
 			}
-			FileCRC::check_crc(filename, FileCRC::UPDATE_TIMEOBJS, player_table[index].uid());
+			FileCRC::reset(player_table[index].uid(), FileCRC::kTimeObjs);
 		}
 	}
 
@@ -1033,7 +1127,7 @@ void ClearCrashSavedObjects(std::size_t index) {
 	int i = 0, rnum;
 	Crash_delete_files(index);
 	if (SAVEINFO(index)) {
-		for (; i < SAVEINFO(index)->rent.nitems; i++) {
+		for (; i < SAVEINFO(index)->rent.n_items; i++) {
 			if (SAVEINFO(index)->time[i].timer >= 0 &&
 				(rnum = GetObjRnum(SAVEINFO(index)->time[i].vnum)) >= 0) {
 				obj_proto.dec_stored(rnum);
@@ -1050,14 +1144,13 @@ void Crash_create_timer(const std::size_t index, int/* num*/) {
 int ReadCrashTimerFile(std::size_t index, int temp) {
 	FILE *fl;
 	char fname[kMaxInputLength];
-	char name[kMaxNameLength + 1];
 	int size = 0, count = 0, rnum, num = 0;
 	struct SaveRentInfo rent;
 	struct SaveTimeInfo info;
 
-	strcpy(name, player_table[index].name());
-	if (!get_filename(name, fname, kTimeCrashFile)) {
-		log("[ReadTimer] Error reading %s timer file - unable to resolve file name.", name);
+	auto name = player_table[index].name();
+	if (!get_filename(name.c_str(), fname, kTimeCrashFile)) {
+		log("[ReadTimer] Error reading %s timer file - unable to resolve file name.", name.c_str());
 		return false;
 	}
 	if (!(fl = fopen(fname, "rb"))) {
@@ -1069,65 +1162,70 @@ int ReadCrashTimerFile(std::size_t index, int temp) {
 	}
 
 	fseek(fl, 0L, SEEK_END);
-	size = ftell(fl);
+	const long fsize = ftell(fl);
 	rewind(fl);
-	if ((size = size - sizeof(struct SaveRentInfo)) < 0 || size % sizeof(struct SaveTimeInfo)) {
+	if ((size = static_cast<int>(fsize) - sizeof(struct SaveRentInfo)) < 0
+		|| size % sizeof(struct SaveTimeInfo)) {
 		log("WARNING:  Timer file %s is corrupt!", fname);
+		fclose(fl);
 		return false;
 	}
 
-	sprintf(buf, "[ReadTimer] Reading timer file %s for %s :", fname, name);
-	size_t dummy = fread(&rent, sizeof(struct SaveRentInfo), 1, fl);
+	// Читаем файл целиком в буфер: из него же считаем CRC (без второго
+	// чтения только что прочитанного файла) и парсим записи.
+	std::string content(static_cast<std::size_t>(fsize), '\0');
+	if (fsize > 0 && fread(&content[0], static_cast<std::size_t>(fsize), 1, fl) != 1) {
+		log("SYSERR: I/O Error reading %s timer file.", name.c_str());
+		fclose(fl);
+		return false;
+	}
+	fclose(fl);
+
+	// Сверка CRC из буфера вместо повторного чтения файла.
+	FileCRC::verify_from_content(player_table[index].uid(), FileCRC::kTimeObjs,
+		content.data(), content.size());
+
+	std::memcpy(&rent, content.data(), sizeof(struct SaveRentInfo));
+	const char *rentcode_name = nullptr;
 	switch (rent.rentcode) {
-		case RENT_RENTED: strcat(buf, " Rent ");
+		case RENT_RENTED: rentcode_name = " Rent ";
 			break;
 		case RENT_CRASH:
 			//           if (rent.time<1001651000L) //креш-сейв до Sep 28 00:26:20 2001
 			rent.net_cost_per_diem = 0;    //бесплатно!
-			strcat(buf, " Crash ");
+			rentcode_name = " Crash ";
 			break;
-		case RENT_CRYO: strcat(buf, " Cryo ");
+		case RENT_CRYO: rentcode_name = " Cryo ";
 			break;
-		case RENT_TIMEDOUT: strcat(buf, " TimedOut ");
+		case RENT_TIMEDOUT: rentcode_name = " TimedOut ";
 			break;
-		case RENT_FORCED: strcat(buf, " Forced ");
+		case RENT_FORCED: rentcode_name = " Forced ";
 			break;
-		default: log("[ReadTimer] Error reading %s timer file - undefined rent code.", name);
+		default: log("[ReadTimer] Error reading %s timer file - undefined rent code.", name.c_str());
 			return false;
-			//strcat(buf, " Undef ");
-			//rent.rentcode = RENT_CRASH;
 			break;
 	}
-	strcat(buf, "rent code.");
-	log("%s", buf);
-	Crash_create_timer(index, rent.nitems);
+	log(fmt::format("[ReadTimer] Reading timer file {} for {} :{}rent code.", fname, name, rentcode_name));
+	Crash_create_timer(index, rent.n_items);
 	player_table[index].timer->rent = rent;
-	for (; count < rent.nitems && !feof(fl); count++) {
-		dummy = fread(&info, sizeof(struct SaveTimeInfo), 1, fl);
-		if (ferror(fl)) {
-			log("SYSERR: I/O Error reading %s timer file.", name);
-			fclose(fl);
-			FileCRC::check_crc(fname, FileCRC::TIMEOBJS, player_table[index].uid());
-			ClearSaveinfo(index);
-			return false;
-		}
+
+	const char *recptr = content.data() + sizeof(struct SaveRentInfo);
+	const std::size_t records = size / sizeof(struct SaveTimeInfo);
+	for (; static_cast<std::size_t>(count) < records && count < rent.n_items; count++) {
+		std::memcpy(&info, recptr + count * sizeof(struct SaveTimeInfo), sizeof(struct SaveTimeInfo));
 		if (info.vnum && info.timer >= -1) {
 			player_table[index].timer->time.push_back(info);
 			++num;
 		} else {
 			log("[ReadTimer] Warning: incorrect vnum (%d) or timer (%d) while reading %s timer file.",
-				info.vnum, info.timer, name);
+				info.vnum, info.timer, name.c_str());
 		}
 		if (info.timer >= 0 && (rnum = GetObjRnum(info.vnum)) >= 0 && !temp) {
 			obj_proto.inc_stored(rnum);
 		}
 	}
-	UNUSED_ARG(dummy);
 
-	fclose(fl);
-	FileCRC::check_crc(fname, FileCRC::TIMEOBJS, player_table[index].uid());
-
-	if (rent.nitems != num) {
+	if (rent.n_items != num) {
 		log("[ReadTimer] Error reading %s timer file - file is corrupt.", fname);
 		ClearSaveinfo(index);
 		return false;
@@ -1138,7 +1236,7 @@ int ReadCrashTimerFile(std::size_t index, int temp) {
 void Crash_reload_timer(int index) {
 	int i = 0, rnum;
 	if (SAVEINFO(index)) {
-		for (; i < SAVEINFO(index)->rent.nitems; i++) {
+		for (; i < SAVEINFO(index)->rent.n_items; i++) {
 			if (SAVEINFO(index)->time[i].timer >= 0 &&
 				(rnum = GetObjRnum(SAVEINFO(index)->time[i].vnum)) >= 0) {
 				obj_proto.dec_stored(rnum);
@@ -1148,52 +1246,58 @@ void Crash_reload_timer(int index) {
 	}
 
 	if (!ReadCrashTimerFile(index, false)) {
-		sprintf(buf, "SYSERR: Unable to read timer file for %s.", player_table[index].name());
-		mudlog(buf, BRF, MAX(kLvlImmortal, kLvlGod), SYSLOG, true);
+		mudlog(fmt::format("SYSERR: Unable to read timer file for {}.", player_table[index].name()),
+			   BRF, MAX(kLvlImmortal, kLvlGod), SYSLOG, true);
 	}
 }
 
 int Crash_write_timer(const std::size_t index) {
-	FILE *fl;
 	char fname[kMaxStringLength];
-	char name[kMaxNameLength + 1];
 
-	strcpy(name, player_table[index].name());
+	auto name = player_table[index].name();
 	if (!SAVEINFO(index)) {
-		log("SYSERR: Error writing %s timer file - no data.", name);
+		log("SYSERR: Error writing %s timer file - no data.", name.c_str());
 		return false;
 	}
-	if (!get_filename(name, fname, kTimeCrashFile)) {
-		log("SYSERR: Error writing %s timer file - unable to resolve file name.", name);
+	if (!get_filename(name.c_str(), fname, kTimeCrashFile)) {
+		log("SYSERR: Error writing %s timer file - unable to resolve file name.", name.c_str());
 		return false;
 	}
-	if (!(fl = fopen(fname, "wb"))) {
-		log("[WriteTimer] Error writing %s timer file - unable to open file %s.", name, fname);
+
+	// Сериализуем таймеры в буфер, чтобы посчитать CRC из него же,
+	// не перечитывая с диска только что записанный файл. Порядок и состав
+	// байт идентичны прежней пораздельной записи (rent + n_items записей).
+	const SaveInfo *si = SAVEINFO(index);
+	std::string content;
+	// reserve на пустой строке -- одна аллокация полного размера без копирований,
+	// дальше append пишет на месте (буфер мелкий, но реаллокации тут не нужны).
+	content.reserve(sizeof(SaveRentInfo)
+		+ static_cast<std::size_t>(si->rent.n_items) * sizeof(SaveTimeInfo));
+	content.append(reinterpret_cast<const char *>(&si->rent), sizeof(SaveRentInfo));
+	for (int i = 0; i < si->rent.n_items; ++i) {
+		content.append(reinterpret_cast<const char *>(&si->time[i]), sizeof(SaveTimeInfo));
+	}
+
+	FILE *fl = fopen(fname, "wb");
+	if (!fl) {
+		log("[WriteTimer] Error writing %s timer file - unable to open file %s.", name.c_str(), fname);
 		return false;
 	}
-	fwrite(&(SAVEINFO(index)->rent), sizeof(SaveRentInfo), 1, fl);
-	for (int i = 0; i < SAVEINFO(index)->rent.nitems; ++i) {
-		fwrite(&(SAVEINFO(index)->time[i]), sizeof(SaveTimeInfo), 1, fl);
-	}
+	fwrite(content.data(), 1, content.size(), fl);
 	fclose(fl);
-	if (chmod(fname, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) < 0) {
-		std::stringstream ss;
-		ss << "Error chmod file: " << fname << " (" << __FILE__ << " "<< __func__ << "  "<< __LINE__ << ")";
-		mudlog(ss.str(), BRF, kLvlGod, SYSLOG, true);
-	}
-	FileCRC::check_crc(fname, FileCRC::UPDATE_TIMEOBJS, player_table[index].uid());
+	// CRC из буфера вместо повторного чтения файла (см. FileCRC::update_from_content).
+	FileCRC::update_from_content(player_table[index].uid(), FileCRC::kTimeObjs,
+		content.data(), content.size());
 	return true;
 }
 
 void Crash_timer_obj(const std::size_t index, long time) {
-	char name[kMaxNameLength + 1];
-	int nitems = 0, idelete = 0, ideleted = 0, rnum, timer, i;
+	int n_items = 0, idelete = 0, ideleted = 0, rnum, timer, i;
 	int rentcode, timer_dec;
 
-	strcpy(name, player_table[index].name());
-
+	auto name = player_table[index].name();
 	if (!player_table[index].timer) {
-		log("[TO] %s has no save data.", name);
+		log("[TO] %s has no save data.", name.c_str());
 		return;
 	}
 	rentcode = SAVEINFO(index)->rent.rentcode;
@@ -1202,19 +1306,18 @@ void Crash_timer_obj(const std::size_t index, long time) {
 	//удаляем просроченные файлы ренты
 	if (rentcode == RENT_RENTED && timer_dec > rent_file_timeout * kSecsPerRealDay) {
 		ClearCrashSavedObjects(index);
-		log("[TO] Deleting %s's rent info - time outed.", name);
+		log("[TO] Deleting %s's rent info - time outed.", name.c_str());
 		return;
 	} else if (rentcode != RENT_CRYO && timer_dec > crash_file_timeout * kSecsPerRealDay) {
 		ClearCrashSavedObjects(index);
-		strcpy(buf, "");
 		switch (rentcode) {
-			case RENT_CRASH: log("[TO] Deleting crash rent info for %s  - time outed.", name);
+			case RENT_CRASH: log("[TO] Deleting crash rent info for %s  - time outed.", name.c_str());
 				break;
-			case RENT_FORCED: log("[TO] Deleting forced rent info for %s  - time outed.", name);
+			case RENT_FORCED: log("[TO] Deleting forced rent info for %s  - time outed.", name.c_str());
 				break;
-			case RENT_TIMEDOUT: log("[TO] Deleting autorent info for %s  - time outed.", name);
+			case RENT_TIMEDOUT: log("[TO] Deleting autorent info for %s  - time outed.", name.c_str());
 				break;
-			default: log("[TO] Deleting UNKNOWN rent info for %s  - time outed.", name);
+			default: log("[TO] Deleting UNKNOWN rent info for %s  - time outed.", name.c_str());
 				break;
 		}
 		return;
@@ -1223,12 +1326,12 @@ void Crash_timer_obj(const std::size_t index, long time) {
 	timer_dec = (timer_dec / kSecsPerMudHour) + (timer_dec % kSecsPerMudHour ? 1 : 0);
 
 	//уменьшаем таймеры
-	nitems = player_table[index].timer->rent.nitems;
+	n_items = player_table[index].timer->rent.n_items;
 //  log("[TO] Checking items for %s (%d items, rented time %dmin):",
-//      name, nitems, timer_dec);
-//	sprintf (buf,"[TO] Checking items for %s (%d items) :", name, nitems);
+//      name, n_items, timer_dec);
+//	sprintf (buf,"[TO] Checking items for %s (%d items) :", name, n_items);
 //	mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
-	for (i = 0; i < nitems; i++) {
+	for (i = 0; i < n_items; i++) {
 		if (player_table[index].timer->time[i].vnum < 0) //для шмоток без прототипа идем мимо
 			continue;
 		if (player_table[index].timer->time[i].timer >= 0) {
@@ -1240,7 +1343,8 @@ void Crash_timer_obj(const std::size_t index, long time) {
 					idelete++;
 					if (rnum >= 0) {
 						obj_proto.dec_stored(rnum);
-						log("[TO] Player %s : item %s deleted - time outted", name, obj_proto[rnum]->get_PName(ECase::kNom).c_str());
+						log("[TO] Player %s : item %s deleted - time outted", name.c_str(),
+							obj_proto[rnum]->get_PName(grammar::ECase::kNom).c_str());
 					}
 				}
 			}
@@ -1249,13 +1353,12 @@ void Crash_timer_obj(const std::size_t index, long time) {
 		}
 	}
 
-//  log("Objects (%d), Deleted (%d)+(%d).", nitems, ideleted, idelete);
+//  log("Objects (%d), Deleted (%d)+(%d).", n_items, ideleted, idelete);
 
 	//если появились новые просроченные объекты, обновляем файл таймеров
 	if (idelete) {
 		if (!Crash_write_timer(index)) {
-			sprintf(buf, "SYSERR: [TO] Error writing timer file for %s.", name);
-			mudlog(buf, CMP, MAX(kLvlImmortal, kLvlGod), SYSLOG, true);
+			mudlog(fmt::format("SYSERR: [TO] Error writing timer file for {}.", name.c_str()), CMP, MAX(kLvlImmortal, kLvlGod), SYSLOG, true);
 		}
 	}
 }
@@ -1273,23 +1376,21 @@ void Crash_list_objects(CharData *ch, int index) {
 	num_of_days = (float) timer_dec / kSecsPerRealDay;
 	timer_dec = (timer_dec / kSecsPerMudHour) + (timer_dec % kSecsPerMudHour ? 1 : 0);
 
-	strcpy(buf, "Код ренты - ");
+	// Строка с кодом ренты собиралась в общий буфер и терялась: следующий же sprintf
+	// затирал её, игрок этой строки никогда не видел. Теперь она доходит до адресата.
+	const char *rentcode_name = "UNDEF!";
 	switch (SAVEINFO(index)->rent.rentcode) {
-		case RENT_RENTED: strcat(buf, "Rented.\r\n");
-			break;
-		case RENT_CRASH: strcat(buf, "Crash.\r\n");
-			break;
-		case RENT_CRYO: strcat(buf, "Cryo.\r\n");
-			break;
-		case RENT_TIMEDOUT: strcat(buf, "TimedOut.\r\n");
-			break;
-		case RENT_FORCED: strcat(buf, "Forced.\r\n");
-			break;
-		default: strcat(buf, "UNDEF!\r\n");
-			break;
+		case RENT_RENTED: rentcode_name = "Rented."; break;
+		case RENT_CRASH: rentcode_name = "Crash."; break;
+		case RENT_CRYO: rentcode_name = "Cryo."; break;
+		case RENT_TIMEDOUT: rentcode_name = "TimedOut."; break;
+		case RENT_FORCED: rentcode_name = "Forced."; break;
+		default: break;
 	}
+	SendMsgToChar(fmt::format("Код ренты - {}\r\n", rentcode_name), ch);
+
 	std::stringstream ss;
-	for (int i = 0; i < SAVEINFO(index)->rent.nitems; i++) {
+	for (int i = 0; i < SAVEINFO(index)->rent.n_items; i++) {
 		data = SAVEINFO(index)->time[i];
 		rnum = GetObjRnum(data.vnum);
 		if (data.vnum > 799 || data.vnum < 700) {
@@ -1303,13 +1404,14 @@ void Crash_list_objects(CharData *ch, int index) {
 		}
 	}
 	SendMsgToChar(ss.str().c_str(), ch);
-	sprintf(buf, "Время в ренте: %ld тиков.\r\n", timer_dec);
-	SendMsgToChar(buf, ch);
-	sprintf(buf, "Предметов: %d. Стоимость: (%d в день) * (%1.2f дней) = %d. ИНГРИДИЕНТЫ НЕ ВЫВОДЯТСЯ.\r\n",
-			SAVEINFO(index)->rent.nitems,
-			SAVEINFO(index)->rent.net_cost_per_diem, num_of_days,
-			(int) (num_of_days * SAVEINFO(index)->rent.net_cost_per_diem));
-	SendMsgToChar(buf, ch);
+	SendMsgToChar(fmt::format("Время в ренте: {} тиков.\r\n", timer_dec), ch);
+	SendMsgToChar(fmt::format("Предметов: {}. Стоимость: ({} в день) * ({:1.2f} дней) = {}."
+							  " ИНГРИДИЕНТЫ НЕ ВЫВОДЯТСЯ.\r\n",
+							  SAVEINFO(index)->rent.n_items,
+							  SAVEINFO(index)->rent.net_cost_per_diem,
+							  num_of_days,
+							  (int) (num_of_days * SAVEINFO(index)->rent.net_cost_per_diem)),
+				  ch);
 }
 
 void Crash_listrent(CharData *ch, char *name) {
@@ -1321,20 +1423,16 @@ void Crash_listrent(CharData *ch, char *name) {
 
 	if (!SAVEINFO(index)) {
 		if (!ReadCrashTimerFile(index, true)) {
-			sprintf(buf, "Ubable to read %s timer file.\r\n", name);
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("Ubable to read {} timer file.\r\n", name), ch);
 		} else if (!SAVEINFO(index)) {
-			sprintf(buf, "%s не имеет файла ренты.\r\n", utils::CAP(name));
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("{} не имеет файла ренты.\r\n", utils::CAP(name)), ch);
 		} else {
-			sprintf(buf, "%s находится в игре. Содержимое файла ренты:\r\n", utils::CAP(name));
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("{} находится в игре. Содержимое файла ренты:\r\n", utils::CAP(name)), ch);
 			Crash_list_objects(ch, index);
 			ClearSaveinfo(index);
 		}
 	} else {
-		sprintf(buf, "%s находится в ренте. Содержимое файла ренты:\r\n", utils::CAP(name));
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("{} находится в ренте. Содержимое файла ренты:\r\n", utils::CAP(name)), ch);
 		Crash_list_objects(ch, index);
 	}
 }
@@ -1362,24 +1460,26 @@ int Crash_load(CharData *ch) {
 	Crash_reload_timer(index);
 
 	if (!SAVEINFO(index)) {
-		sprintf(buf, "%s entering game with no equipment.", GET_NAME(ch));
-		mudlog(buf, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+		mudlog(fmt::format("{} entering game with no equipment.", GET_NAME(ch)), NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
 		return (1);
 	}
 
+	const char *what_happened = nullptr;
 	switch (RENTCODE(index)) {
-		case RENT_RENTED: sprintf(buf, "%s un-renting and entering game.", GET_NAME(ch));
+		case RENT_RENTED: what_happened = "un-renting and entering game.";
 			break;
-		case RENT_CRASH: sprintf(buf, "%s retrieving crash-saved items and entering game.", GET_NAME(ch));
+		case RENT_CRASH: what_happened = "retrieving crash-saved items and entering game.";
 			break;
-		case RENT_CRYO: sprintf(buf, "%s un-cryo'ing and entering game.", GET_NAME(ch));
+		case RENT_CRYO: what_happened = "un-cryo'ing and entering game.";
 			break;
-		case RENT_FORCED: sprintf(buf, "%s retrieving force-saved items and entering game.", GET_NAME(ch));
+		case RENT_FORCED: what_happened = "retrieving force-saved items and entering game.";
 			break;
-		case RENT_TIMEDOUT: sprintf(buf, "%s retrieving auto-saved items and entering game.", GET_NAME(ch));
+		case RENT_TIMEDOUT: what_happened = "retrieving auto-saved items and entering game.";
 			break;
-		default: sprintf(buf, "SYSERR: %s entering game with undefined rent code %d.", GET_NAME(ch), RENTCODE(index));
-			mudlog(buf, BRF, MAX(kLvlImmortal, GET_INVIS_LEV(ch)), SYSLOG, true);
+		default:
+			mudlog(fmt::format("SYSERR: {} entering game with undefined rent code {}.",
+							   GET_NAME(ch), RENTCODE(index)),
+				   BRF, MAX(kLvlImmortal, GET_INVIS_LEV(ch)), SYSLOG, true);
 			SendMsgToChar("\r\n** Неизвестный код ренты **\r\n"
 						  "Проблемы с восстановлением ваших вещей из файла.\r\n"
 						  "Обращайтесь за помощью к Богам.\r\n", ch);
@@ -1387,21 +1487,20 @@ int Crash_load(CharData *ch) {
 			return (1);
 			break;
 	}
-	mudlog(buf, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+	mudlog(fmt::format("{} {}", GET_NAME(ch), what_happened), NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
 
 	//Деньги за постой
 	num_of_days = (float) (time(0) - SAVEINFO(index)->rent.time) / kSecsPerRealDay;
-	sprintf(buf, "%s was %1.2f days in rent.", GET_NAME(ch), num_of_days);
-	mudlog(buf, LGH, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+	mudlog(fmt::format("{} was {:1.2f} days in rent.", GET_NAME(ch), num_of_days), LGH, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
 	cost = (int) (SAVEINFO(index)->rent.net_cost_per_diem * num_of_days);
 	cost = MAX(0, cost);
 	// added by WorM (Видолюб) 2010.06.04 сумма потраченная на найм(возвращается при креше)
 	if (RENTCODE(index) == RENT_CRASH) {
-		if (!IS_IMMORTAL(ch) && CanUseFeat(ch, EFeat::kEmployer) && ch->player_specials->saved.HiredCost != 0) {
+		if (!privilege::IsImmortal(ch) && CanUseFeat(ch, EFeat::kEmployer) && ch->player_specials->saved.HiredCost != 0) {
 			if (ch->player_specials->saved.HiredCost < 0)
-				ch->add_bank(abs(ch->player_specials->saved.HiredCost), false);
+				currencies::AddBank(*ch, currencies::kGold, abs(ch->player_specials->saved.HiredCost), false, false);
 			else
-				ch->add_gold(ch->player_specials->saved.HiredCost, false);
+				currencies::AddHand(*ch, currencies::kGold, ch->player_specials->saved.HiredCost, false, false);
 		}
 		ch->player_specials->saved.HiredCost = 0;
 	}
@@ -1409,48 +1508,53 @@ int Crash_load(CharData *ch) {
 	// Бесплатная рента, если выйти в течение 2 часов после ребута или креша
 	if (((RENTCODE(index) == RENT_CRASH || RENTCODE(index) == RENT_FORCED)
 		&& SAVEINFO(index)->rent.time + free_crashrent_period * kSecsPerRealHour > time(0)) || free_rent) {
-		sprintf(buf, "%s** На сей раз постой был бесплатным **%s\r\n", kColorWht, kColorNrm);
-		SendMsgToChar(buf, ch);
-		sprintf(buf, "%s entering game, free crashrent.", GET_NAME(ch));
-		mudlog(buf, NRM, MAX(kLvlImmortal, GET_INVIS_LEV(ch)), SYSLOG, true);
-	} else if (cost > ch->get_gold() + ch->get_bank()) {
-		sprintf(buf, "%sВы находились на постое %1.2f дней.\n\r"
-					 "%s"
-					 "Вам предъявили счет на %d %s за постой (%d %s в день).\r\n"
-					 "Но все, что у вас было - %ld %s... Увы. Все ваши вещи переданы мобам.%s\n\r",
-				kColorWht,
-				num_of_days,
-				RENTCODE(index) ==
-					RENT_TIMEDOUT ?
-				"Вас пришлось тащить до кровати, за это постой был дороже.\r\n"
-								  : "", cost, GetDeclensionInNumber(cost, EWhat::kMoneyU),
-				SAVEINFO(index)->rent.net_cost_per_diem,
-				GetDeclensionInNumber(SAVEINFO(index)->rent.net_cost_per_diem,
-									  EWhat::kMoneyA), ch->get_gold() + ch->get_bank(),
-				GetDeclensionInNumber(ch->get_gold() + ch->get_bank(), EWhat::kMoneyA), kColorNrm);
-		SendMsgToChar(buf, ch);
-		sprintf(buf, "%s: rented equipment lost (no $).", GET_NAME(ch));
-		mudlog(buf, LGH, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
-		ch->set_bank(0);
-		ch->set_gold(0);
+		SendMsgToChar(fmt::format("{}** На сей раз постой был бесплатным **{}\r\n", kColorWht, kColorNrm), ch);
+		mudlog(fmt::format("{} entering game, free crashrent.", GET_NAME(ch)),
+			   NRM, MAX(kLvlImmortal, GET_INVIS_LEV(ch)), SYSLOG, true);
+	} else if (cost > currencies::GetHand(*ch, currencies::kGold) + currencies::GetBank(*ch, currencies::kGold)) {
+		const auto &gold = MUD::Currency(currencies::kGoldVnum);
+		const long on_hand = currencies::GetHand(*ch, currencies::kGold)
+			+ currencies::GetBank(*ch, currencies::kGold);
+		SendMsgToChar(fmt::format("{}Вы находились на постое {:1.2f} дней.\n\r"
+								  "{}Вам предъявили счет на {} {} за постой ({} {} в день).\r\n"
+								  "Но все, что у вас было - {} {}... Увы. Все ваши вещи переданы мобам.{}\n\r",
+								  kColorWht,
+								  num_of_days,
+								  RENTCODE(index) == RENT_TIMEDOUT
+									  ? "Вас пришлось тащить до кровати, за это постой был дороже.\r\n" : "",
+								  cost,
+								  gold.GetNameWithAmount(cost, grammar::ECase::kNom),
+								  SAVEINFO(index)->rent.net_cost_per_diem,
+								  gold.GetNameWithAmount(SAVEINFO(index)->rent.net_cost_per_diem,
+														 grammar::ECase::kNom),
+								  on_hand,
+								  gold.GetNameWithAmount(on_hand, grammar::ECase::kNom),
+								  kColorNrm),
+					  ch);
+		mudlog(fmt::format("{}: rented equipment lost (no $).", GET_NAME(ch)),
+			   LGH, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+		currencies::SetBank(*ch, currencies::kGold, 0);
+		currencies::SetHand(*ch, currencies::kGold, 0);
 		ClearCrashSavedObjects(index);
 		return (2);
 	} else {
 		if (cost) {
-			sprintf(buf, "%sВы находились на постое %1.2f дней.\n\r"
-						 "%s"
-						 "С вас содрали %d %s за постой (%d %s в день).%s\r\n",
-					kColorWht,
-					num_of_days,
-					RENTCODE(index) ==
-						RENT_TIMEDOUT ?
-					"Вас пришлось тащить до кровати, за это постой был дороже.\r\n"
-									  : "", cost, GetDeclensionInNumber(cost, EWhat::kMoneyU),
-					SAVEINFO(index)->rent.net_cost_per_diem,
-					GetDeclensionInNumber(SAVEINFO(index)->rent.net_cost_per_diem, EWhat::kMoneyA), kColorNrm);
-			SendMsgToChar(buf, ch);
+			const auto &gold = MUD::Currency(currencies::kGoldVnum);
+			SendMsgToChar(fmt::format("{}Вы находились на постое {:1.2f} дней.\n\r"
+									  "{}С вас содрали {} {} за постой ({} {} в день).{}\r\n",
+									  kColorWht,
+									  num_of_days,
+									  RENTCODE(index) == RENT_TIMEDOUT
+										  ? "Вас пришлось тащить до кровати, за это постой был дороже.\r\n" : "",
+									  cost,
+									  gold.GetNameWithAmount(cost, grammar::ECase::kNom),
+									  SAVEINFO(index)->rent.net_cost_per_diem,
+									  gold.GetNameWithAmount(SAVEINFO(index)->rent.net_cost_per_diem,
+															 grammar::ECase::kNom),
+									  kColorNrm),
+						  ch);
 		}
-		ch->remove_both_gold(cost);
+		currencies::RemoveTotal(*ch, currencies::kGold, cost);
 	}
 
 	//Чтение описаний объектов в буфер
@@ -1476,7 +1580,8 @@ int Crash_load(CharData *ch) {
 	fseek(fl, 0L, SEEK_SET);
 	if (!fread(readdata, fsize, 1, fl) || ferror(fl) || !readdata) {
 		fclose(fl);
-		FileCRC::check_crc(fname, FileCRC::TEXTOBJS, GET_UID(ch));
+		// Чтение не удалось -- валидного буфера для сверки CRC нет, сверку
+		// (которая раньше перечитывала файл) тут опускаем и просто выходим.
 		SendMsgToChar("\r\n** Ошибка чтения файла описания вещей **\r\n"
 					  "Проблемы с восстановлением ваших вещей из файла.\r\n"
 					  "Обращайтесь за помощью к Богам.\r\n", ch);
@@ -1486,16 +1591,28 @@ int Crash_load(CharData *ch) {
 		return (1);
 	};
 	fclose(fl);
-	FileCRC::check_crc(fname, FileCRC::TEXTOBJS, GET_UID(ch));
+	// Сверка CRC из уже прочитанного буфера, без повторного чтения файла.
+	// Считается по дисковым байтам -- до перевода в нативную кодировку, иначе сумма не сойдётся.
+	FileCRC::verify_from_content(ch->get_uid(), FileCRC::kTextObjs, readdata, fsize);
+
+	// Граница чтения: файл на диске в UTF-8, но написанный до миграции ещё может оказаться
+	// кои-восьмым. from_disk_text распознаёт то и другое; без него имена, алиасы и метки
+	// вещей уезжали в транслит при первом же сохранении (issue #3681).
+	{
+		const std::string native = native_text::from_disk_text(std::string(readdata, static_cast<std::size_t>(fsize)));
+		free(readdata);
+		CREATE(readdata, native.size() + 1);
+		std::memcpy(readdata, native.data(), native.size());
+		readdata[native.size()] = '\0';
+	}
 
 	data = readdata;
-	*(data + fsize) = '\0';
 
 	//Создание объектов
 	long timer_dec = time(0) - SAVEINFO(index)->rent.time;
 	timer_dec = (timer_dec / kSecsPerMudHour) + (timer_dec % kSecsPerMudHour ? 1 : 0);
 
-	for (fsize = 0, reccount = SAVEINFO(index)->rent.nitems;
+	for (fsize = 0, reccount = SAVEINFO(index)->rent.n_items;
 		 reccount > 0 && *data && *data != END_CHAR; reccount--, fsize++) {
 		i++;
 		ObjData::shared_ptr obj;
@@ -1504,19 +1621,13 @@ int Crash_load(CharData *ch) {
 		if (!obj) {
 			//SendMsgToChar("Ошибка при чтении - чтение предметов прервано.\r\n", ch);
 			SendMsgToChar("Ошибка при чтении файла объектов.\r\n", ch);
-			sprintf(buf, "SYSERR: Objects reading fail for %s error %d, stop reading.", GET_NAME(ch), error);
-			mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+			mudlog(fmt::format("SYSERR: Objects reading fail for {} error {}, stop reading.", GET_NAME(ch), error), BRF, kLvlImmortal, SYSLOG, true);
 			continue;    //Ann
 		}
 		if (error) {
-			snprintf(buf,
-					 kMaxStringLength,
-					 "WARNING: Error #%d reading item vnum #%d num #%d from %s.",
-					 error,
-					 obj->get_vnum(),
-					 i,
-					 fname);
-			mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+			mudlog(fmt::format("WARNING: Error #{} reading item vnum #{} num #{} from {}.",
+							   error, obj->get_vnum(), i, fname),
+				   BRF, kLvlImmortal, SYSLOG, true);
 		}
 /*
 		if (SAVEINFO(index)->time[fsize].vnum >= dungeons::kZoneStartDungeons * 100) {
@@ -1526,8 +1637,7 @@ int Crash_load(CharData *ch) {
 */
 		if (obj->get_vnum() != SAVEINFO(index)->time[fsize].vnum) {
 			SendMsgToChar("Нет соответствия заголовков - чтение предметов прервано.\r\n", ch);
-			sprintf(buf, "SYSERR: Objects reading fail for %s (2), stop reading.", GET_NAME(ch));
-			mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+			mudlog(fmt::format("SYSERR: Objects reading fail for {} (2), stop reading.", GET_NAME(ch)), BRF, kLvlImmortal, SYSLOG, true);
 			ExtractObjFromWorld(obj.get());
 			break;
 		}
@@ -1540,36 +1650,42 @@ int Crash_load(CharData *ch) {
 		// вычтем таймер оффлайна
 		if (!(stable_objs::IsTimerUnlimited(obj.get()) || obj->has_flag(EObjFlag::kNoRentTimer))) {
 			const SaveInfo *si = SAVEINFO(index);
-			obj->set_timer(si->time[fsize].timer);
-			obj->dec_timer(timer_dec);
+			const int saved_timer = si->time[fsize].timer;
+			// Защита от мусорных значений в бинарном таймер-файле
+			// (UNLIMITED_TIMER и близкие следы старых багов decay_manager
+			// в otransform/oedit - см. #3213, #3225). Текстовый Tmer уже
+			// клампится в read_one_object_new по тому же порогу 99999.
+			// Если значение бракованное, не переписываем m_timer, иначе
+			// dec_timer ниже разгонит UNLIMITED-N*timer_dec в дрейфующий
+			// таймер, который медленно сходит к нулю.
+			if (saved_timer <= 99999) {
+				obj->set_timer(saved_timer);
+				obj->dec_timer(timer_dec);
+			}
 		}
 
-		std::string cap = obj->get_PName(ECase::kNom);
-		cap[0] = UPPER(cap[0]);
+		std::string cap = obj->get_PName(grammar::ECase::kNom);
+		native_text::capitalize_first(cap);
 
 		// Предмет разваливается от старости
 		if (obj->get_timer() <= 0) {
-			snprintf(buf, kMaxStringLength, "%s%s%s рассыпал%s от длительного использования.\r\n",
-					 kColorWht,
-					 cap.c_str(),
-					 char_get_custom_label(obj.get(), ch).c_str(),
-					 GET_OBJ_SUF_2(obj));
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("{}{}{} рассыпал{} от длительного использования.\r\n",
+									  kColorWht, cap, char_get_custom_label(obj.get(), ch),
+									  grammar::ObjSexEnding(obj->get_sex(), 2)),
+						  ch);
 			ExtractObjFromWorld(obj.get());
 
 			continue;
 		}
 
 		//очищаем ZoneDecay объедки
-		if (obj->has_flag(EObjFlag::kZonedacay)) {
-			sprintf(buf, "%s рассыпал%s в прах.\r\n", cap.c_str(), GET_OBJ_SUF_2(obj));
-			SendMsgToChar(buf, ch);
+		if (obj->has_flag(EObjFlag::kZonedecay)) {
+			SendMsgToChar(fmt::format("{} рассыпал{} в прах.\r\n", cap.c_str(), grammar::ObjSexEnding((obj)->get_sex(), 2)), ch);
 			ExtractObjFromWorld(obj.get());
 			continue;
 		}
 		if (obj->has_flag(EObjFlag::kRepopDecay)) {
-			sprintf(buf, "%s рассыпал%s в прах.\r\n", cap.c_str(), GET_OBJ_SUF_2(obj));
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("{} рассыпал{} в прах.\r\n", cap.c_str(), grammar::ObjSexEnding((obj)->get_sex(), 2)), ch);
 			ExtractObjFromWorld(obj.get());
 			continue;
 		}
@@ -1578,9 +1694,10 @@ int Crash_load(CharData *ch) {
 		if (invalid_anti_class(ch, obj.get())
 			|| invalid_unique(ch, obj.get())
 			|| NamedStuff::check_named(ch, obj.get(), 0)) {
-			sprintf(buf, "%s рассыпал%s, как запрещенн%s для вас.\r\n",
-					cap.c_str(), GET_OBJ_SUF_2(obj), GET_OBJ_SUF_3(obj));
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("{} рассыпал{}, как запрещенн{} для вас.\r\n",
+									  cap, grammar::ObjSexEnding(obj->get_sex(), 2),
+									  grammar::ObjSexEnding(obj->get_sex(), 3)),
+						  ch);
 			ExtractObjFromWorld(obj.get());
 			continue;
 		}
@@ -1622,7 +1739,7 @@ int Crash_load(CharData *ch) {
 			obj->set_worn_on(0);
 
 			auto_equip(ch, obj, location);
-			log("%s load_char_obj %d %ld %u", GET_NAME(ch), GET_OBJ_VNUM(obj), obj->get_unique_id(), obj->get_timer());
+//			log("%s load_char_obj %d %ld %u", GET_NAME(ch), GET_OBJ_VNUM(obj), obj->get_unique_id(), obj->get_timer());
 		} else {
 			if (obj2
 				&& obj2->get_worn_on() < obj->get_worn_on()
@@ -1652,7 +1769,7 @@ int Crash_load(CharData *ch) {
 			} else {
 				PlaceObjToInventory(obj, ch);
 			}
-			log("%s load_char_obj %d %ld %u", GET_NAME(ch), GET_OBJ_VNUM(obj), obj->get_unique_id(), obj->get_timer());
+//			log("%s load_char_obj %d %ld %u", GET_NAME(ch), GET_OBJ_VNUM(obj), obj->get_unique_id(), obj->get_timer());
 		}
 	}
 
@@ -1697,18 +1814,9 @@ int Crash_is_unrentable(CharData *ch, ObjData *obj) {
 	if (!obj) {
 		return false;
 	}
-
-	if (obj->has_flag(EObjFlag::kNorent)
-		|| obj->get_rent_off() < 0
-		|| obj->has_flag(EObjFlag::kRepopDecay)
-		|| obj->has_flag(EObjFlag::kZonedacay)
-		|| (obj->get_rnum() <= kNothing
-			&& obj->get_type() != EObjType::kMoney)
-		|| obj->get_type() == EObjType::kKey
-		|| SetSystem::is_norent_set(ch, obj)) {
+	if (obj->is_unrentable() || SetSystem::is_norent_set(ch, obj)) {
 		return true;
 	}
-
 	return false;
 }
 
@@ -1738,24 +1846,24 @@ void Crash_extract_norent_eq(CharData *ch) {
 }
 
 void Crash_extract_norent_charmee(CharData *ch) {
-	if (ch->followers) {
-		for (struct FollowerType *k = ch->followers; k; k = k->next) {
-			if (!IS_CHARMICE(k->follower)
-				|| !k->follower->has_master()) {
+	if (!ch->followers.empty()) {
+		for (auto *k : ch->followers) {
+			if (!IsCharmice(k)
+				|| !k->has_master()) {
 				continue;
 			}
 			for (int j = 0; j < EEquipPos::kNumEquipPos; ++j) {
-				if (!GET_EQ(k->follower, j)) {
+				if (!GET_EQ(k, j)) {
 					continue;
 				}
 
-				if (Crash_is_unrentable(k->follower, GET_EQ(k->follower, j))) {
-					PlaceObjToInventory(UnequipChar(k->follower, j, CharEquipFlags()), k->follower);
+				if (Crash_is_unrentable(k, GET_EQ(k, j))) {
+					PlaceObjToInventory(UnequipChar(k, j, CharEquipFlags()), k);
 				} else {
-					Crash_extract_norents(k->follower, GET_EQ(k->follower, j));
+					Crash_extract_norents(k, GET_EQ(k, j));
 				}
 			}
-			Crash_extract_norents(k->follower, k->follower->carrying);
+			Crash_extract_norents(k, k->carrying);
 		}
 	}
 }
@@ -1780,16 +1888,16 @@ int Crash_calculate_rent_eq(ObjData *obj) {
 
 int Crash_calculate_charmee_rent(CharData *ch) {
 	int cost = 0;
-	if (ch->followers) {
-		for (struct FollowerType *k = ch->followers; k; k = k->next) {
-			if (!IS_CHARMICE(k->follower)
-				|| !k->follower->has_master()) {
+	if (!ch->followers.empty()) {
+		for (auto *k : ch->followers) {
+			if (!IsCharmice(k)
+				|| !k->has_master()) {
 				continue;
 			}
 
-			cost = Crash_calculate_rent(k->follower->carrying);
+			cost = Crash_calculate_rent(k->carrying);
 			for (int j = 0; j < EEquipPos::kNumEquipPos; ++j) {
-				cost += Crash_calculate_rent_eq(GET_EQ(k->follower, j));
+				cost += Crash_calculate_rent_eq(GET_EQ(k, j));
 			}
 		}
 	}
@@ -1806,14 +1914,14 @@ int Crash_calcitems(ObjData *obj) {
 
 int Crash_calc_charmee_items(CharData *ch) {
 	int num = 0;
-	if (ch->followers) {
-		for (struct FollowerType *k = ch->followers; k; k = k->next) {
-			if (!IS_CHARMICE(k->follower)
-				|| !k->follower->has_master())
+	if (!ch->followers.empty()) {
+		for (auto *k : ch->followers) {
+			if (!IsCharmice(k)
+				|| !k->has_master())
 				continue;
 			for (int j = 0; j < EEquipPos::kNumEquipPos; j++)
-				num += Crash_calcitems(GET_EQ(k->follower, j));
-			num += Crash_calcitems(k->follower->carrying);
+				num += Crash_calcitems(GET_EQ(k, j));
+			num += Crash_calcitems(k->carrying);
 		}
 	}
 	return num;
@@ -1837,8 +1945,8 @@ void Crash_save(std::stringstream &write_buffer, int iplayer, ObjData *obj, int 
 			SAVEINFO(iplayer)->time.push_back(tmp_node);
 
 			if (savetype != RENT_CRASH) {
-				log("%s save_char_obj %d %ld %u", player_table[iplayer].name(),
-					GET_OBJ_VNUM(obj), obj->get_unique_id(), obj->get_timer());
+//				log("%s save_char_obj %d %ld %u", player_table[iplayer].name().c_str(),
+//					GET_OBJ_VNUM(obj), obj->get_unique_id(), obj->get_timer());
 			}
 		}
 	}
@@ -1863,10 +1971,13 @@ int save_char_objects(CharData *ch, int savetype, int rentcost) {
 		return false;
 
 	if ((iplayer = GET_INDEX(ch)) < 0) {
-		sprintf(buf, "[SYSERR] Store file '%s' - INVALID Id %d", GET_NAME(ch), iplayer);
-		mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+		mudlog(fmt::format("[SYSERR] Store file '{}' - INVALID Id {}", GET_NAME(ch), iplayer), BRF, kLvlImmortal, SYSLOG, true);
 		return false;
 	}
+
+	// Таймер всей функции -- чтобы поймать спайки ниже порога total_io (#3440):
+	// если время не в трёх замеренных фазах, оно всплывёт в "other".
+	utils::CExecutionTimer fn_timer;
 
 	// удаление !рент предметов
 	if (savetype != RENT_CRASH) {
@@ -1894,6 +2005,7 @@ int save_char_objects(CharData *ch, int savetype, int rentcost) {
 	ObjSaveSync::check(ch->get_uid(), ObjSaveSync::CHAR_SAVE);
 
 	if (!num) {
+		g_obj_crash_save_hash.erase(ch->get_uid());
 		Crash_delete_files(iplayer);
 		return false;
 	}
@@ -1921,7 +2033,7 @@ int save_char_objects(CharData *ch, int savetype, int rentcost) {
 	//CRYO-rent надо дорабатывать либо выкидывать нафиг
 	if (savetype == RENT_CRYO) {
 		rent.net_cost_per_diem = 0;
-		ch->remove_gold(cost);
+		currencies::RemoveHand(*ch, currencies::kGold, cost);
 	}
 
 	if (savetype == RENT_RENTED) {
@@ -1932,13 +2044,16 @@ int save_char_objects(CharData *ch, int savetype, int rentcost) {
 
 	rent.rentcode = savetype;
 	rent.time = time(0);
-	rent.nitems = num;
-	rent.gold = ch->get_gold();
-	rent.account = ch->get_bank();
+	rent.n_items = num;
+	rent.gold = currencies::GetHand(*ch, currencies::kGold);
+	rent.account = currencies::GetBank(*ch, currencies::kGold);
 
 	Crash_create_timer(iplayer, num);
 	SAVEINFO(iplayer)->rent = rent;
 
+	// Тайминг сериализации предметов в буфер -- отдельно от дисковой записи,
+	// чтобы в логе было видно, что именно долгое (issue #3396).
+	utils::CExecutionTimer serialize_timer;
 	std::stringstream write_buffer;
 	write_buffer << "@ Items file\n";
 
@@ -1950,24 +2065,26 @@ int save_char_objects(CharData *ch, int savetype, int rentcost) {
 
 	crash_save_and_restore_weight(write_buffer, iplayer, ch->carrying, 0, savetype);
 
-	if (ch->followers
+	if (!ch->followers.empty()
 		&& (savetype == RENT_CRASH
 			|| savetype == RENT_FORCED)) {
-		for (struct FollowerType *k = ch->followers; k; k = k->next) {
-			if (!IS_CHARMICE(k->follower)
-				|| !k->follower->has_master()) {
+		for (auto *k : ch->followers) {
+			if (!IsCharmice(k)
+				|| !k->has_master()) {
 				continue;
 			}
 
 			for (j = 0; j < EEquipPos::kNumEquipPos; j++) {
-				if (GET_EQ(k->follower, j)) {
-					crash_save_and_restore_weight(write_buffer, iplayer, GET_EQ(k->follower, j), 0, savetype);
+				if (GET_EQ(k, j)) {
+					crash_save_and_restore_weight(write_buffer, iplayer, GET_EQ(k, j), 0, savetype);
 				}
 			}
 
-			crash_save_and_restore_weight(write_buffer, iplayer, k->follower->carrying, 0, savetype);
+			crash_save_and_restore_weight(write_buffer, iplayer, k->carrying, 0, savetype);
 		}
 	}
+
+	const double serialize_sec = serialize_timer.delta().count();
 
 	// в принципе экстрактить здесь чармисовый шмот в случае ребута - смысла ноль
 	if (savetype != RENT_CRASH) {
@@ -1979,31 +2096,82 @@ int save_char_objects(CharData *ch, int savetype, int rentcost) {
 		Crash_extract_objs(ch->carrying);
 	}
 
+	double crc_sec = 0.0;
+	utils::CExecutionTimer obj_io_timer;
 	if (get_filename(GET_NAME(ch), fname, kTextCrashFile)) {
-		std::ofstream file(fname);
-		if (!file.is_open()) {
-			snprintf(buf, kMaxStringLength, "[SYSERR] Store objects file '%s'- MAY BE LOCKED.", fname);
-			mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
-			Crash_delete_files(iplayer);
-			return false;
-		}
 		write_buffer << "\n$\n$\n";
-		file << write_buffer.rdbuf();
-		file.close();
-		if (chmod(fname, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) < 0) {
-			std::stringstream ss;
-			ss << "Error chmod file: " << fname << " (" << __FILE__ << " "<< __func__ << "  "<< __LINE__ << ")";
-			mudlog(ss.str(), BRF, kLvlGod, SYSLOG, true);
+		// Пишем в бинарном режиме и из этого же буфера считаем CRC -- без
+		// перечитывания только что записанного файла. Бинарный режим
+		// гарантирует, что байты файла == байты буфера на всех платформах
+		// (в текстовом режиме Windows транслировал бы \n -> \r\n и CRC из
+		// буфера разошёлся бы с CRC файла).
+		const std::string obj_content = write_buffer.str();
+		// #3440: для периодического crash-сейва (RENT_CRASH) пропускаем запись
+		// файла объектов, если набор предметов не изменился с прошлого сейва.
+		// Файл объектов -- чистый payload предметов (рент-таймеры пишутся
+		// отдельно в .time), поэтому одинаковый payload => идентичный файл =>
+		// дисковая запись и пересчёт CRC не нужны. Это основной источник спайков
+		// "Crash frac save" (синхронный write неизменившихся инвентарей).
+		const std::size_t content_hash = std::hash<std::string>{}(obj_content);
+		const auto cached = g_obj_crash_save_hash.find(ch->get_uid());
+		const bool unchanged = (cached != g_obj_crash_save_hash.end() && cached->second == content_hash);
+		if (savetype == RENT_CRASH && unchanged) {
+			// предметы не менялись -- файл уже актуален, диск не трогаем
+		} else {
+			std::ofstream file(fname, std::ios::binary);
+			if (!file.is_open()) {
+				mudlog(fmt::format("[SYSERR] Store objects file '{}'- MAY BE LOCKED.", fname), BRF, kLvlImmortal, SYSLOG, true);
+				Crash_delete_files(iplayer);
+				return false;
+			}
+			// Граница записи: рента лежит в нативной кодировке, пишем как есть. Чтение
+			// (from_disk_text) принимает и старый KOI8-R (issue #3787).
+			const std::string on_disk = obj_content;
+			file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
+			file.close();
+/* оставил как пример
+#ifndef _WIN32
+			if (chmod(fname, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) < 0) {
+				std::stringstream ss;
+				ss << "Error chmod file: " << fname << " (" << __FILE__ << " "<< __func__ << "  "<< __LINE__ << ")";
+				mudlog(ss.str(), BRF, kLvlGod, SYSLOG, true);
+			}
+#endif
+*/
+			utils::CExecutionTimer crc_timer;
+			FileCRC::update_from_content(ch->get_uid(), FileCRC::kTextObjs,
+				on_disk.data(), on_disk.size());
+			crc_sec = crc_timer.delta().count();
+			g_obj_crash_save_hash[ch->get_uid()] = content_hash;
 		}
-		FileCRC::check_crc(fname, FileCRC::UPDATE_TEXTOBJS, GET_UID(ch));
 	} else {
 		Crash_delete_files(iplayer);
 		return false;
 	}
+	const double obj_io_sec = obj_io_timer.delta().count();
+	// Чистая запись на диск (open+write+close+chmod) = весь io-блок минус CRC.
+	const double write_sec = obj_io_sec - crc_sec;
 
+	utils::CExecutionTimer timer_io_timer;
 	if (!Crash_write_timer(iplayer)) {
 		Crash_delete_files(iplayer);
 		return false;
+	}
+	const double timer_io_sec = timer_io_timer.delta().count();
+
+	// Профилирование синхронной записи (см. #3368, #3396). Разбито по фазам:
+	// serialize -- сборка буфера предметов, write -- запись файла на диск
+	// (open+write+close+chmod), crc -- подсчёт CRC, time_io -- запись .time.
+	// Дисковый write почти не зависит от числа предметов и обычно доминирует,
+	// поэтому "меньше предметов, но дольше" -- это про занятость диска, не про items.
+	const double total_io_sec = serialize_sec + obj_io_sec + timer_io_sec;
+	const double fn_sec = fn_timer.delta().count();
+	// "other" -- время вне трёх замеренных фаз (calcitems, расчёт ренты,
+	// экстракты, Crash_create_timer и пр.). Если спайк тут -- видно сразу.
+	const double other_sec = fn_sec - total_io_sec;
+	if (fn_sec > 0.02) {
+		log("save_char_objects: %s items=%d serialize=%.4f write=%.4f crc=%.4f time_io=%.4f other=%.4f total=%.4f",
+			GET_NAME(ch), num, serialize_sec, write_sec, crc_sec, timer_io_sec, other_sec, fn_sec);
 	}
 
 	if (savetype == RENT_CRASH) {
@@ -2043,41 +2211,38 @@ void Crash_rent_deadline(CharData *ch, CharData *recep, long cost) {
 	long rent_deadline;
 
 	if (!cost) {
-		SendMsgToChar("Ты сможешь жить у меня до второго пришествия.\r\n", ch);
+		SendMsgToChar(specials::RentMsg(specials::ERentMsg::kCanLiveForever) + "\r\n", ch);
 		return;
 	}
 
-	act("$n сказал$g вам :\r\n", false, recep, 0, ch, kToVict);
+	act(specials::RentMsg(specials::ERentMsg::kDeadlineIntro) + "\r\n", false, recep, 0, ch, kToVict);
 
 	long depot_cost = static_cast<long>(Depot::get_total_cost_per_day(ch));
 	if (depot_cost) {
-		SendMsgToChar(ch, "\"За вещи в хранилище придется доплатить %ld %s.\"\r\n",
-					  depot_cost, GetDeclensionInNumber(depot_cost, EWhat::kMoneyU));
+		SendMsgToChar(fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kDepotCost)), fmt::arg("amount", depot_cost), fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(depot_cost, grammar::ECase::kNom).c_str())) + "\r\n", ch);
 		cost += depot_cost;
 	}
 
-	SendMsgToChar(ch, "\"Постой обойдется тебе в %ld %s.\"\r\n", cost, GetDeclensionInNumber(cost, EWhat::kMoneyU));
-	rent_deadline = ((ch->get_gold() + ch->get_bank()) / cost);
-	SendMsgToChar(ch, "\"Твоих денег хватит на %ld %s.\"\r\n", rent_deadline,
-				  GetDeclensionInNumber(rent_deadline, EWhat::kDay));
+	SendMsgToChar(fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kRentCost)), fmt::arg("amount", cost), fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom).c_str())) + "\r\n", ch);
+	rent_deadline = ((currencies::GetHand(*ch, currencies::kGold) + currencies::GetBank(*ch, currencies::kGold)) / cost);
+	SendMsgToChar(fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kMoneyLasts)), fmt::arg("amount", rent_deadline), fmt::arg("day", grammar::GetDeclensionInNumber(rent_deadline, grammar::EWhat::kDay))) + "\r\n", ch);
 }
 
 int Crash_report_unrentables(CharData *ch, CharData *recep, ObjData *obj) {
-	char buf[128];
 	int has_norents = 0;
 
 	if (obj) {
 		if (Crash_is_unrentable(ch, obj)) {
 			has_norents = 1;
-			if (SetSystem::is_norent_set(ch, obj)) {
-				snprintf(buf, sizeof(buf),
-						 "$n сказал$g вам : \"Я не приму на постой %s - требуется две и более вещи из набора.\"",
-						 OBJN(obj, ch, ECase::kAcc));
-			} else {
-				snprintf(buf, sizeof(buf),
-						 "$n сказал$g вам : \"Я не приму на постой %s.\"", OBJN(obj, ch, ECase::kAcc));
-			}
-			act(buf, false, recep, 0, ch, kToVict);
+			// Фраза собирается в строку, а не в буфер на 128 байт: под UTF-8 в него не влезало
+			// длинное имя предмета, и snprintf резал по байтам -- игрок получал оборванную
+			// фразу с половиной буквы в конце ("...лесной деревн?").
+			const auto message = SetSystem::is_norent_set(ch, obj)
+								 ? specials::ERentMsg::kUnrentSet
+								 : specials::ERentMsg::kUnrent;
+			act(fmt::format(fmt::runtime(specials::RentMsg(message)),
+							fmt::arg("item", OBJN(obj, ch, grammar::ECase::kAcc))),
+				false, recep, 0, ch, kToVict);
 		}
 		has_norents += Crash_report_unrentables(ch, recep, obj->get_contains());
 		has_norents += Crash_report_unrentables(ch, recep, obj->get_next_content());
@@ -2094,48 +2259,42 @@ void Crash_report_rent_item(CharData *ch,
 							int factor,
 							int equip,
 							int recursive) {
-	static char buf[256];
-	char bf[80], bf2[14];
-
-	if (obj) {
-		if (CAN_WEAR_ANY(obj)) {
-			if (equip) {
-				sprintf(bf, " (%d если снять)", obj->get_rent_off() * factor * count);
-			} else {
-				sprintf(bf, " (%d если надеть)", obj->get_rent_on() * factor * count);
-			}
-		} else {
-			*bf = '\0';
-		}
-
-		if (count > 1) {
-			sprintf(bf2, " [%d]", count);
-		}
-
-		sprintf(buf, "%s - %d %s%s за %s%s %s",
-				recursive ? "" : kColorWht,
-				(equip ? obj->get_rent_on() * count : obj->get_rent_off()) *
-					factor * count,
-				GetDeclensionInNumber((equip ? obj->get_rent_on() * count : obj->get_rent_off()) * factor * count,
-									  EWhat::kMoneyA),
-				bf, OBJN(obj, ch, ECase::kAcc), count > 1 ? bf2 : "", recursive ? "" : kColorNrm);
-		act(buf, false, recep, 0, ch, kToVict);
+	if (!obj) {
+		return;
 	}
+	// Строка собирается через fmt, а не в буфер на 256 байт: в неё входит название предмета в
+	// винительном падеже, а в UTF-8 русский текст занимает вдвое больше места -- длинного имени
+	// вместе с ценой и валютой хватало, чтобы вылезти за край (тот же класс, что #3751 и #3752).
+	std::string bf;
+	if (CAN_WEAR_ANY(obj)) {
+		bf = equip
+			 ? fmt::format(" ({} если снять)", obj->get_rent_off() * factor * count)
+			 : fmt::format(" ({} если надеть)", obj->get_rent_on() * factor * count);
+	}
+	const std::string bf2 = count > 1 ? fmt::format(" [{}]", count) : std::string();
+	const int cost = (equip ? obj->get_rent_on() * count : obj->get_rent_off()) * factor * count;
+
+	const std::string line = fmt::format("{} - {} {}{} за {}{} {}",
+			recursive ? "" : kColorWht,
+			cost,
+			MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom),
+			bf, OBJN(obj, ch, grammar::ECase::kAcc), bf2, recursive ? "" : kColorNrm);
+	act(line.c_str(), false, recep, 0, ch, kToVict);
 }
 // end by WorM
 
 void Crash_report_rent(CharData *ch, CharData *recep, ObjData *obj, int *cost,
-					   long *nitems, int rentshow, int factor, int equip, int recursive) {
+					   long *n_items, int rentshow, int factor, int equip, int recursive) {
 	ObjData *i, *push = nullptr;
 	int push_count = 0;
 
 	if (obj) {
 		if (!Crash_is_unrentable(ch, obj)) {
-			/*(*nitems)++;
+			/*(*n_items)++;
 			*cost += MAX(0, ((equip ? obj->get_rent_on() : obj->get_rent_off()) * factor));
 			if (rentshow)
 			{
-				if (*nitems == 1)
+				if (*n_items == 1)
 				{
 					if (!recursive)
 						act("$n сказал$g Вам : \"Одет$W спать будешь? Хм.. Ну смотри, тогда дешевле возьму\"", false, recep, 0, ch, TO_VICT);
@@ -2165,19 +2324,14 @@ void Crash_report_rent(CharData *ch, CharData *recep, ObjData *obj, int *cost,
 			//группирует вывод при ренте на подобии:
 			// - 2700 кун (900 если надеть) за красный пузырек [9]
 			for (i = obj; i; i = i->get_next_content()) {
-				(*nitems)++;
+				(*n_items)++;
 				*cost += MAX(0, ((equip ? i->get_rent_on() : i->get_rent_off()) * factor));
 				if (rentshow) {
-					if (*nitems == 1) {
+					if (*n_items == 1) {
 						if (!recursive) {
-							act("$n сказал$g вам : \"Одет$W спать будешь? Хм.. Ну смотри, тогда дешевле возьму\"",
-								false,
-								recep,
-								0,
-								ch,
-								kToVict);
+							act(specials::RentMsg(specials::ERentMsg::kRentIntroEquip), false, recep, 0, ch, kToVict);
 						} else {
-							act("$n сказал$g вам : \"Это я в чулане запру:\"", false, recep, 0, ch, kToVict);
+							act(specials::RentMsg(specials::ERentMsg::kRentIntroStore), false, recep, 0, ch, kToVict);
 						}
 					}
 
@@ -2191,7 +2345,7 @@ void Crash_report_rent(CharData *ch, CharData *recep, ObjData *obj, int *cost,
 											  recep,
 											  push->get_contains(),
 											  cost,
-											  nitems,
+											  n_items,
 											  rentshow,
 											  factor,
 											  false,
@@ -2207,7 +2361,7 @@ void Crash_report_rent(CharData *ch, CharData *recep, ObjData *obj, int *cost,
 			if (push) {
 				Crash_report_rent_item(ch, recep, push, push_count, factor, equip, recursive);
 				if (recursive) {
-					Crash_report_rent(ch, recep, push->get_contains(), cost, nitems, rentshow, factor, false, true);
+					Crash_report_rent(ch, recep, push->get_contains(), cost, n_items, rentshow, factor, false, true);
 				}
 			}
 			// end by WorM
@@ -2216,7 +2370,6 @@ void Crash_report_rent(CharData *ch, CharData *recep, ObjData *obj, int *cost,
 }
 
 int Crash_offer_rent(CharData *ch, CharData *receptionist, int rentshow, int factor, int *totalcost) {
-	char buf[kMaxExtendLength];
 	int i;
 	long numitems = 0, norent;
 // added by Dikiy (Лель)
@@ -2258,20 +2411,12 @@ int Crash_offer_rent(CharData *ch, CharData *receptionist, int rentshow, int fac
 	numitems += numitems_weared;
 
 	if (!numitems) {
-		act("$n сказал$g вам : \"Но у тебя ведь ничего нет! Просто набери \"конец\"!\"",
-			false,
-			receptionist,
-			0,
-			ch,
-			kToVict);
+		act(specials::RentMsg(specials::ERentMsg::kNothingToRent), false, receptionist, 0, ch, kToVict);
 		return (false);
 	}
 
 	if (numitems > kMaxSavedItems) {
-		sprintf(buf,
-				"$n сказал$g вам : \"Извините, но я не могу хранить больше %d предметов.\"\r\n"
-				"$n сказал$g вам : \"В данный момент их у вас %ld.\"", kMaxSavedItems, numitems);
-		act(buf, false, receptionist, 0, ch, kToVict);
+		act((fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kTooManyItems1)), fmt::arg("max", kMaxSavedItems)) + "\r\n" + fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kTooManyItems2)), fmt::arg("count", numitems))), false, receptionist, 0, ch, kToVict);
 		return (false);
 	}
 
@@ -2282,26 +2427,19 @@ int Crash_offer_rent(CharData *ch, CharData *receptionist, int rentshow, int fac
 
 	if (rentshow) {
 		if (min_rent_cost(ch) > 0) {
-			sprintf(buf,
-					"$n сказал$g вам : \"И еще %d %s мне на сбитень с медовухой :)\"",
-					min_rent_cost(ch) * factor, GetDeclensionInNumber(min_rent_cost(ch) * factor, EWhat::kMoneyU));
-			act(buf, false, receptionist, 0, ch, kToVict);
+			act(fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kTipForBeer)), fmt::arg("amount", min_rent_cost(ch) * factor), fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(min_rent_cost(ch) * factor, grammar::ECase::kNom).c_str())), false, receptionist, 0, ch, kToVict);
 		}
 
-		sprintf(buf, "$n сказал$g вам : \"В сумме это составит %d %s %s.\"",
-				*totalcost, GetDeclensionInNumber(*totalcost, EWhat::kMoneyU),
-				(factor == RENT_FACTOR ? "в день " : ""));
-		act(buf, false, receptionist, 0, ch, kToVict);
+		act(fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kTotalCost)), fmt::arg("amount", *totalcost), fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(*totalcost, grammar::ECase::kNom).c_str()), fmt::arg("perday", (factor == RENT_FACTOR ? "в день " : ""))), false, receptionist, 0, ch, kToVict);
 
-		if (MAX(0, *totalcost / divide) > ch->get_gold() + ch->get_bank()) {
-			act("\"...которых у тебя отродясь не было.\"", false, receptionist, 0, ch, kToVict);
+		if (MAX(0, *totalcost / divide) > currencies::GetHand(*ch, currencies::kGold) + currencies::GetBank(*ch, currencies::kGold)) {
+			act(specials::RentMsg(specials::ERentMsg::kNoMoneyEver), false, receptionist, 0, ch, kToVict);
 			return (false);
 		}
 
 		*totalcost = MAX(0, *totalcost / divide);
 		if (divide == 2) {
-			act("$n сказал$g вам : \"Так уж и быть, я скощу тебе половину.\"",
-				false, receptionist, 0, ch, kToVict);
+			act(specials::RentMsg(specials::ERentMsg::kHalfPrice), false, receptionist, 0, ch, kToVict);
 		}
 
 		if (factor == RENT_FACTOR) {
@@ -2313,74 +2451,56 @@ int Crash_offer_rent(CharData *ch, CharData *receptionist, int rentshow, int fac
 	return (true);
 }
 
-int gen_receptionist(CharData *ch, CharData *recep, int cmd, char * /*arg*/, int mode) {
+enum class ERentAction { kRent, kOffer, kSettle };
+
+int gen_receptionist(CharData *ch, CharData *recep, ERentAction action, int mode) {
 	RoomRnum save_room;
+	std::string rent_log;
 	int cost, rentshow = true;
-
-	if (!ch->desc || ch->IsNpc())
-		return (false);
-
-	if (!cmd && !number(0, 5))
-		return (false);
-
-	if (!CMD_IS("offer") && !CMD_IS("предложение")
-		&& !CMD_IS("rent") && !CMD_IS("постой")
-		&& !CMD_IS("quit") && !CMD_IS("конец")
-		&& !CMD_IS("settle") && !CMD_IS("поселиться"))
-		return (false);
 
 	save_room = ch->in_room;
 
-	if (CMD_IS("конец") || CMD_IS("quit")) {
-		if (save_room != r_helled_start_room &&
-			save_room != r_named_start_room && save_room != r_unreg_start_room)
-			GET_LOADROOM(ch) = GET_ROOM_VNUM(save_room);
-		return (false);
-	}
-
 	if (!AWAKE(recep)) {
-		sprintf(buf, "%s не в состоянии говорить с вами...\r\n", HSSH(recep));
-		SendMsgToChar(buf, ch);
+		SendMsgToChar((fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kRecepAsleep)), fmt::arg("recep", grammar::PersonalPronoun((recep)->get_sex()))) + "\r\n"), ch);
 		return (true);
 	}
-	if (!CAN_SEE(recep, ch)) {
-		act("$n сказал$g : \"Не люблю говорить с теми, кого я не вижу!\"", false, recep, 0, 0, kToRoom);
+	if (!sight::CanSee(recep, ch)) {
+		act(specials::RentMsg(specials::ERentMsg::kCantSee), false, recep, 0, 0, kToRoom);
 		return (true);
 	}
 	if (Clan::InEnemyZone(ch)) {
-		act("$n сказал$g : \"Чужакам здесь не место!\"", false, recep, 0, 0, kToRoom);
+		act(specials::RentMsg(specials::ERentMsg::kEnemyZone), false, recep, 0, 0, kToRoom);
 		return (true);
 	}
 	if (NORENTABLE(ch)) {
-		SendMsgToChar("В связи с боевыми действиями эвакуация временно прекращена.\r\n", ch);
+		SendMsgToChar(specials::RentMsg(specials::ERentMsg::kNoRentableWar) + "\r\n", ch);
 		return (true);
 	}
 	if (ch->GetEnemy()) {
 		return (false);
 	}
 	if (free_rent) {
-		act("$n сказал$g вам : \"Сегодня спим нахаляву!\"", false, recep, 0, ch, kToVict);
+		act(specials::RentMsg(specials::ERentMsg::kFreeRent), false, recep, 0, ch, kToVict);
 		rentshow = false;
 	}
-	if (CMD_IS("rent") || CMD_IS("постой")) {
+	if (action == ERentAction::kRent) {
 
 		if (!Crash_offer_rent(ch, recep, rentshow, mode, &cost))
 			return (true);
 
 		if (rentshow) {
 			if (mode == RENT_FACTOR)
-				sprintf(buf,
-						"$n сказал$g вам : \"Дневной постой обойдется тебе в! %d %s.\"",
-						cost, GetDeclensionInNumber(cost, EWhat::kMoneyU));
-			else if (mode == CRYO_FACTOR)
-				sprintf(buf,
-						"$n сказал$g вам : \"Дневной постой обойдется тебе в %d %s (за пользование холодильником :)\"",
-						cost, GetDeclensionInNumber(cost, EWhat::kMoneyU));
-			act(buf, false, recep, 0, ch, kToVict);
-
-			if (cost > ch->get_gold() + ch->get_bank()) {
-				act("$n сказал$g вам : '..но такой голытьбе, как ты, это не по карману.'",
+				act(fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kDailyCost)),
+								fmt::arg("amount", cost),
+								fmt::arg("currency",
+										 MUD::Currency(currencies::kGoldVnum)
+											 .GetNameWithAmount(cost, grammar::ECase::kNom))),
 					false, recep, 0, ch, kToVict);
+			else if (mode == CRYO_FACTOR)
+				act(fmt::format(fmt::runtime(specials::RentMsg(specials::ERentMsg::kDailyCostCryo)), fmt::arg("amount", cost), fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(cost, grammar::ECase::kNom).c_str())), false, recep, 0, ch, kToVict);
+
+			if (cost > currencies::GetHand(*ch, currencies::kGold) + currencies::GetBank(*ch, currencies::kGold)) {
+				act(specials::RentMsg(specials::ERentMsg::kCantAfford), false, recep, 0, ch, kToVict);
 				return (true);
 			}
 			if (cost && (mode == RENT_FACTOR))
@@ -2390,89 +2510,121 @@ int gen_receptionist(CharData *ch, CharData *recep, int cmd, char * /*arg*/, int
 			cost = 0;
 		}
 		if (mode == RENT_FACTOR) {
-			act("$n запер$q ваши вещи в сундук и повел$g в тесную каморку.", false, recep, 0, ch, kToVict);
+			act(specials::RentMsg(specials::ERentMsg::kLockedAway), false, recep, 0, ch, kToVict);
 			Crash_rentsave(ch, cost);
-			sprintf(buf, "%s has rented (%d/day, %ld tot.)",
-					GET_NAME(ch), cost, ch->get_gold() + ch->get_bank());
+			rent_log = fmt::format("{} has rented ({}/day, {} tot.)", GET_NAME(ch), cost,
+								   currencies::GetHand(*ch, currencies::kGold)
+									   + currencies::GetBank(*ch, currencies::kGold));
 		} else    // cryo
 		{
-			act("$n запер$q ваши вещи в сундук и повел$g в тесную каморку.\r\n"
-				"Белый призрак появился в комнате, обдав вас холодом...\r\n"
-				"Вы потеряли связь с окружающими вас...", false, recep, 0, ch, kToVict);
+			act(specials::RentMsg(specials::ERentMsg::kLockedAway) + "\r\n" + specials::RentMsg(specials::ERentMsg::kCryoGhost) + "\r\n" + specials::RentMsg(specials::ERentMsg::kCryoLostTouch), false, recep, 0, ch, kToVict);
 			Crash_cryosave(ch, cost);
-			sprintf(buf, "%s has cryo-rented.", GET_NAME(ch));
+			rent_log = fmt::format("{} has cryo-rented.", GET_NAME(ch));
 			ch->SetFlag(EPlrFlag::kCryo);
 		}
 
-		mudlog(buf, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+		mudlog(rent_log, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
 
 		if ((save_room == r_helled_start_room)
 			|| (save_room == r_named_start_room)
 			|| (save_room == r_unreg_start_room))
-			act("$n проводил$g $N3 мощным пинком на свободную лавку.", false, recep, 0, ch, kToRoom);
+			act(specials::RentMsg(specials::ERentMsg::kKickedToBench), false, recep, 0, ch, kToRoom);
 		else {
-			act("$n помог$q $N2 отойти ко сну.", false, recep, 0, ch, kToNotVict);
+			act(specials::RentMsg(specials::ERentMsg::kHelpedToSleep), false, recep, 0, ch, kToNotVict);
 			GET_LOADROOM(ch) = GET_ROOM_VNUM(save_room);
 		}
 		Clan::clan_invoice(ch, false);
 		ch->save_char();
 		ExtractCharFromWorld(ch, false);
-	} else if (CMD_IS("offer") || CMD_IS("предложение")) {
+	} else if (action == ERentAction::kOffer) {
 		Crash_offer_rent(ch, recep, rentshow, mode, &cost);
-		act("$N предложил$G $n2 остановиться у н$S.", false, ch, 0, recep, kToRoom);
+		act(specials::RentMsg(specials::ERentMsg::kOfferStay), false, ch, 0, recep, kToRoom);
 	} else {
 		if ((save_room == r_helled_start_room)
 			|| (save_room == r_named_start_room)
 			|| (save_room == r_unreg_start_room))
-			act("$N сказал$G : \"Куда же ты денешься от меня?\"", false, ch, 0, recep, kToChar);
+			act(specials::RentMsg(specials::ERentMsg::kSettleForced), false, ch, 0, recep, kToChar);
 		else {
-			act("$n предложил$g $N2 поселиться у н$s.", false, recep, 0, ch, kToNotVict);
-			act("$N сказал$G вам : \"Примем в любое время и почти в любом состоянии!\"",
-				false,
-				ch,
-				0,
-				recep,
-				kToChar);
-			sprintf(buf,
-					"%s has changed loadroom from %d to %d.",
-					GET_NAME(ch),
-					GET_LOADROOM(ch),
-					GET_ROOM_VNUM(save_room));
+			act(specials::RentMsg(specials::ERentMsg::kSettleOffer), false, recep, 0, ch, kToNotVict);
+			act(specials::RentMsg(specials::ERentMsg::kSettleWelcome), false, ch, 0, recep, kToChar);
+			mudlog(fmt::format("{} has changed loadroom from {} to {}.",
+							   GET_NAME(ch), GET_LOADROOM(ch), GET_ROOM_VNUM(save_room)),
+				   NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
 			GET_LOADROOM(ch) = GET_ROOM_VNUM(save_room);
-			mudlog(buf, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
-			SetWaitState(ch, 1 * kBattleRound);
+			SetBattleLag(ch, 1);
 			ch->save_char();
 		}
 	}
 	return (true);
 }
 
-int receptionist(CharData *ch, void *me, int cmd, char *argument) {
-	return (gen_receptionist(ch, (CharData *) me, cmd, argument, RENT_FACTOR));
+namespace {
+// issue.specials: rent-keeper subcommands. постой = rent+exit, предложение = show cost, поселиться =
+// set this inn as home. (Plain quit/конец is do_quit; quitting next to a renter sets loadroom there.)
+int RentRent(CharData *ch, void *me, char * /*rest*/) {
+	return gen_receptionist(ch, reinterpret_cast<CharData *>(me), ERentAction::kRent, RENT_FACTOR);
+}
+int RentOffer(CharData *ch, void *me, char * /*rest*/) {
+	return gen_receptionist(ch, reinterpret_cast<CharData *>(me), ERentAction::kOffer, RENT_FACTOR);
+}
+int RentSettle(CharData *ch, void *me, char * /*rest*/) {
+	return gen_receptionist(ch, reinterpret_cast<CharData *>(me), ERentAction::kSettle, RENT_FACTOR);
+}
+
+const SubCmdResolver kRentCmds([] { return specials::RentMsg(specials::ERentMsg::kGreeting); }, {
+	{{"постой", "rent"}, static_cast<int>(ERentAction::kRent), RentRent},
+	{{"предложение", "offer"}, static_cast<int>(ERentAction::kOffer), RentOffer},
+	{{"поселиться", "settle"}, static_cast<int>(ERentAction::kSettle), RentSettle},
+});
+} // namespace
+
+int RentReceptionist(CharData *ch, void *me, int /*cmd*/, char *argument) {
+	if (ch->IsNpc() || !ch->desc) {
+		return 0;
+	}
+	return kRentCmds.Dispatch(ch, me, argument);
 }
 
 void Crash_frac_save_all(int frac_part) {
 	DescriptorData *d;
+	// OpenTelemetry: Track fractional save
+	auto save_span = tracing::TraceManager::Instance().StartSpan("Player Save (Fractional)");
+	save_span->SetAttribute("save_type", "frac");
+	save_span->SetAttribute("frac_part", static_cast<int64_t>(frac_part));
+	
+	int saved_count = 0;
 
 	for (d = descriptor_list; d; d = d->next) {
 		if ((d->state == EConState::kPlaying) && !d->character->IsNpc() && GET_ACTIVITY(d->character) == frac_part) {
 
 			utils::CExecutionTimer timer;
 			Crash_crashsave(d->character.get());
-			if (timer.delta().count() > 0.1)
+			if (timer.delta().count() > 0.002)
 				log("Crash_frac_save_all: Crash_crashsave, timer %f, save player: %s", timer.delta().count(), d->character->get_name().c_str());
 
 			utils::CExecutionTimer timer1;
 			d->character->save_char();
-			if (timer1.delta().count() > 0.1)
+			if (timer1.delta().count() > 0.002)
 				log("Crash_frac_save_all: save_char, timer %f, save player: %s", timer1.delta().count(), d->character->get_name().c_str());
 			d->character->UnsetFlag(EPlrFlag::kCrashSave);
+			saved_count++;
+			
+			// OpenTelemetry: Record save metrics
+			std::map<std::string, std::string> attrs;
+			attrs["save_type"] = "frac";
+			attrs["character"] = d->character->get_name();
+			
+			observability::OtelMetrics::RecordHistogram("player.save.duration", timer.delta().count(), attrs);
+			observability::OtelMetrics::RecordCounter("player.save.total", 1, attrs);
 		}
 	}
 }
 
 void Crash_save_all(void) {
 	DescriptorData *d;
+	auto save_span = tracing::TraceManager::Instance().StartSpan("Player Save (Full)");
+	save_span->SetAttribute("save_type", "full");
+
 	for (d = descriptor_list; d; d = d->next) {
 		if ((d->state == EConState::kPlaying) && d->character->IsFlagged(EPlrFlag::kCrashSave)) {
 			Crash_crashsave(d->character.get());
@@ -2490,7 +2642,7 @@ void Crash_save_all_rent(void) {
 			log("Saving char: %s", GET_NAME(ch));
 			ch->UnsetFlag(EPlrFlag::kCrashSave);
 			//AFF_FLAGS(ch.get()).unset(EAffectFlag::AFF_GROUP);
-			(ch.get())->removeGroupFlags();
+			group::RemoveGroupFlags(ch.get());
 			AFF_FLAGS(ch.get()).unset(EAffect::kHorse);
 			ExtractCharFromWorld(ch.get(), false);
 		}

@@ -3,37 +3,41 @@
 //
 
 #include "throwout.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/mount.h"
+#include "skill_messages.h"
+#include "engine/db/global_objects.h"
 
 #include "gameplay/fight/fight.h"
 #include "engine/core/char_movement.h"
-#include "engine/core/action_targeting.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/common.h"
 #include "gameplay/fight/fight_hit.h"
 
 void DoThrowout(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (ch->GetSkill(ESkill::kThrowout) < 1) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (GetSkill(ch, ESkill::kThrowout) < 1) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kThrowout, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
-	if (ch->HasCooldown(ESkill::kThrowout)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kThrowout)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kThrowout, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	}
-	one_argument(argument, arg);
-	CharData *vict = FindVictim(ch, argument);
+	std::string target_name;
+	CharData *vict = FindVictim(ch, argument, target_name);
 
 	if (!vict) {
-		SendMsgToChar("Кого вы так сильно ненавидите, что хотите вышвырнуть отсюда?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kThrowout, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
-	if (!IsAffectedBySpell(ch, ESpell::kFrenzy) && !IS_IMMORTAL(ch)) {
+	if (!IsAffected(ch, EAffect::kFrenzy) && !privilege::IsImmortal(ch)) {
 		SendMsgToChar("Не получается! Вы ещё не достаточно разъярились!\r\n", ch);
 		return;
 	}
 	if (!may_kill_here(ch, vict, argument))
 		return;
-	if (!check_pkill(ch, vict, arg))
+	if (!check_pkill(ch, vict, target_name))
 		return;
 	if (NPC_FLAGGED(vict, ENpcFlag::kBlockDown)
 		||NPC_FLAGGED(vict, ENpcFlag::kBlockUp)
@@ -45,20 +49,20 @@ void DoThrowout(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			false, ch, nullptr,vict, kToChar);
 		return;
 	}
-	if (!IS_IMMORTAL(ch) && ch->HasCooldown(ESkill::kThrowout)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (!privilege::IsImmortal(ch) && ch->Skills().HasActiveCooldown(ESkill::kThrowout)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kThrowout, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	}
 	if (ch->GetPosition() < EPosition::kFight) {
-		SendMsgToChar("Вам стоит встать на ноги.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kThrowout, ESkillMsg::kGetOnFeet) + "\r\n", ch);
 		return;
 	}
 	if (vict == ch) {
-		SendMsgToChar("Вышвырнуть самого себя?!\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kThrowout, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 	if (IsUnableToAct(ch)) {
-		SendMsgToChar("Вы временно не в состоянии сражаться.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kThrowout, ESkillMsg::kCantFightNow) + "\r\n", ch);
 		return;
 	}
 	GoThrowout(ch, vict);
@@ -78,7 +82,7 @@ void ProcessThrowoutFail(CharData *ch, CharData *vict) {
 void GoThrowout(CharData *ch, CharData *vict) {
 //Если у моба 30 или выше уровня больше 75% хп - вышвырнуть нельзя.
 	int vict_hp_limit = 0.75 * vict->get_real_max_hit();
-	if (!IS_IMMORTAL(ch) && GetRealLevel(vict) >= 30 && (vict->get_hit() > vict_hp_limit)) {
+	if (!privilege::IsImmortal(ch) && GetRealLevel(vict) >= 30 && (vict->get_hit() > vict_hp_limit)) {
 		act("Вы не можете вышвырнуть $N3 - $E ещё слишком цел$G и бодр$G!",
 			false, ch, nullptr,vict, kToChar);
 		return;
@@ -90,7 +94,7 @@ void GoThrowout(CharData *ch, CharData *vict) {
 		ProcessThrowoutFail(ch, vict);
 	} else {
 		//Поскольку это соло-умение, запрещаем использование если в клетке есть другие игроки.
-		ActionTargeting::FoesRosterType roster{ch};
+		target_resolver::FoesRosterType roster{ch};
 		for (const auto target: roster) {
 			if (!target->IsNpc() && target != vict) {
 				act("Вы швырнули своего соперника куда подальше, но нечаянно попали им прямо в $N3!",
@@ -101,7 +105,7 @@ void GoThrowout(CharData *ch, CharData *vict) {
 				return;
 			}
 		}
-		int cooldown_if_success = std::max(10, 20 - (ch->GetSkill(ESkill::kThrowout) / 25));
+		int cooldown_if_success = std::max(10, 20 - (GetSkill(ch, ESkill::kThrowout) / 25));
 		EDirection direction = SelectRndDirection(vict, 0);
 	    if (IsCorrectDirection(vict, direction, false, false)) {
     		act("&YВы сгребли $N3 в охапку и вышвырнули отсюда прочь!&Y&n",
@@ -111,14 +115,14 @@ void GoThrowout(CharData *ch, CharData *vict) {
 	        act("$N сгреб$Q $n3 в охапку и вышвырнул$G $s прочь!",
 	            false, vict, nullptr, ch, kToNotVict | kToArenaListen);
 	    		if (vict->GetPosition() > EPosition::kSit) {
-	    			vict->DropFromHorse();
+	    			mount::DropFromHorse(vict);
 	    			vict->SetPosition(EPosition::kSit);
 	    			SetWait(vict, 2, false);
 	    			SetSkillCooldown(ch, ESkill::kGlobalCooldown, 1);
 	    		}
 	    	stop_fighting(vict, true);
 			PerformSimpleMove(vict, direction, false, nullptr, EMoveType::kThrowOut);
-	    	if (!IS_IMMORTAL(ch)) {
+	    	if (!privilege::IsImmortal(ch)) {
 	    		SetSkillCooldown(ch, ESkill::kThrowout, cooldown_if_success);
 	    	}
 	    } else if (!IsCorrectDirection(vict, direction, false, false)) {

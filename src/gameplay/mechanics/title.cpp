@@ -2,14 +2,23 @@
 // Copyright (c) 2006 Krodo
 // Part of Bylins http://www.bylins.su
 
+#include <fmt/format.h>
+
+#include "utils/native_text.h"
 #include "title.h"
+#include "gameplay/economics/currencies.h"
+#include "engine/db/player_index.h"
+#include "engine/db/global_objects.h"
 #include "engine/entities/char_player.h"
 #include "gameplay/fight/pk.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
+#include "engine/core/target_resolver.h"
 #include "administration/privilege.h"
 #include "engine/ui/color.h"
+#include "gameplay/core/remort.h"
+#include "gameplay/economics/currencies.h"
 
-extern void SendMsgToGods(char *text, bool demigod);
+extern void SendMsgToGods(const std::string &text, bool demigod);
 
 namespace TitleSystem {
 
@@ -22,7 +31,6 @@ struct waiting_title {
 
 const unsigned int MAX_TITLE_LENGTH = 80; // макс.длина строки титула (титул+предтитул)
 const int SET_TITLE_COST = 1000;          // цена за попытку установки титула
-const char *TITLE_FILE = LIB_PLRSTUFF"titles.lst"; // файл сохранения/подгрузки ждущих одобрения титулов
 const char *MORTAL_DO_TITLE_FORMAT =
 	"титул - справка о команде и информация по титулу, находящемуся на рассмотрении или ждущего вашего подтверждения\r\n"
 	"титул установить <текст> - предварительная установка нового титула, требует подтверждения\r\n"
@@ -79,11 +87,11 @@ void TitleSystem::do_title(CharData *ch, char *argument, int/* cmd*/, int/* subc
 
 	// какие тока извраты не приходится делать, чтобы соответствовать синтаксису одобрения имен
 	int result = TITLE_NEED_HELP;
-	if (IS_GOD(ch) || privilege::CheckFlag(ch, privilege::kTitle)) {
+	if (privilege::IsGod(ch) || privilege::CheckFlag(ch, privilege::kTitle)) {
 		utils::Trim(buffer);
 		if (CompareParam(buffer, "удалить")) {
 			utils::Trim(buffer2);
-			CharData *vict = get_player_pun(ch, buffer2, EFind::kCharInWorld);
+			CharData *vict = target_resolver::FindPlayer(ch, buffer2);
 			if (!vict) {
 				SendMsgToChar("Нет такого игрока.\r\n", ch);
 				return;
@@ -93,8 +101,7 @@ void TitleSystem::do_title(CharData *ch, char *argument, int/* cmd*/, int/* subc
 				return;
 			}
 			if (!vict->GetTitleStr().empty()) {
-				sprintf(buf, "&c%s удалил титул игрока %s.&n\r\n", GET_NAME(ch), GET_NAME(vict));
-				SendMsgToGods(buf, true);
+				SendMsgToGods(fmt::format("&c{} удалил титул игрока {}.&n\r\n", GET_NAME(ch), GET_NAME(vict)), true);
 				vict->SetTitleStr("");
 				//SendMsgToChar("Титул удален.\r\n", ch);
 			} else
@@ -129,8 +136,8 @@ void TitleSystem::do_title(CharData *ch, char *argument, int/* cmd*/, int/* subc
 			utils::Trim(title);
 			utils::Trim(pre_title);
 			if (!pre_title.empty()) {
-				sprintf(buf2, "%c%s", UPPER(pre_title.substr(0, 1).c_str()[0]), pre_title.substr(1).c_str());
-				pre_title = buf2;
+				// Поднимаем первую букву целиком, а не первый байт (issue #3681).
+				native_text::capitalize_first(pre_title);
 			}
 			if (!pre_title.empty() && !check_pre_title(pre_title, ch)) return;
 			if (!title.empty() && !check_title(title, ch)) return;
@@ -138,7 +145,7 @@ void TitleSystem::do_title(CharData *ch, char *argument, int/* cmd*/, int/* subc
 			if (!check_title(buffer, ch)) return;
 			title = buffer;
 		}
-		if (IS_GOD(ch) || privilege::CheckFlag(ch, privilege::kTitle)) {
+		if (privilege::IsGod(ch) || privilege::CheckFlag(ch, privilege::kTitle)) {
 			set_player_title(ch, pre_title, title, GET_NAME(ch));
 			SendMsgToChar("Титул установлен\r\n", ch);
 			return;
@@ -152,7 +159,7 @@ void TitleSystem::do_title(CharData *ch, char *argument, int/* cmd*/, int/* subc
 		WaitingTitlePtr temp(new waiting_title);
 		temp->title = title;
 		temp->pre_title = pre_title;
-		temp->unique = GET_UID(ch);
+		temp->unique = ch->get_uid();
 		temp_title_list[GET_NAME(ch)] = temp;
 
 		std::stringstream out;
@@ -162,11 +169,11 @@ void TitleSystem::do_title(CharData *ch, char *argument, int/* cmd*/, int/* subc
 	} else if (CompareParam(buffer2, "согласен")) {
 		auto it = temp_title_list.find(GET_NAME(ch));
 		if (it != temp_title_list.end()) {
-			if (ch->get_bank() < SET_TITLE_COST) {
+			if (currencies::GetBank(*ch, currencies::kGold) < SET_TITLE_COST) {
 				SendMsgToChar("На вашем счету не хватает денег для оплаты этой услуги.\r\n", ch);
 				return;
 			}
-			ch->remove_bank(SET_TITLE_COST);
+			currencies::RemoveBank(*ch, currencies::kGold, SET_TITLE_COST);
 			title_list[it->first] = it->second;
 			temp_title_list.erase(it);
 			SendMsgToChar("Ваша заявка отправлена Богам и будет рассмотрена в ближайшее время.\r\n", ch);
@@ -177,7 +184,7 @@ void TitleSystem::do_title(CharData *ch, char *argument, int/* cmd*/, int/* subc
 		auto it = title_list.find(GET_NAME(ch));
 		if (it != title_list.end()) {
 			title_list.erase(it);
-			ch->add_bank(SET_TITLE_COST);
+			currencies::AddBank(*ch, currencies::kGold, SET_TITLE_COST);
 			SendMsgToChar("Ваша заявка на титул отменена.\r\n", ch);
 		} else
 			SendMsgToChar("В данный момент вам нечего отменять.\r\n", ch);
@@ -203,7 +210,7 @@ void TitleSystem::do_title(CharData *ch, char *argument, int/* cmd*/, int/* subc
 bool TitleSystem::check_title(const std::string &text, CharData *ch) {
 	if (!check_alphabet(text, ch, " ,.-?Ёё")) return false;
 
-	if (GetRealLevel(ch) < 25 && !GetRealRemort(ch) && !IS_GOD(ch) && !privilege::CheckFlag(ch, privilege::kTitle)) {
+	if (GetRealLevel(ch) < 25 && !remort::GetRealRemort(ch) && !privilege::IsGod(ch) && !privilege::CheckFlag(ch, privilege::kTitle)) {
 		SendMsgToChar(ch, "Для права на титул вы должны достигнуть 25го уровня или иметь перевоплощения.\r\n");
 		return false;
 	}
@@ -221,10 +228,10 @@ bool TitleSystem::check_pre_title(const std::string& text, CharData *ch) {
 	if (!check_alphabet(text, ch, " .-?Ёё")) 
 		return false;
 
-	if (IS_GOD(ch) || privilege::CheckFlag(ch, privilege::kTitle)) 
+	if (privilege::IsGod(ch) || privilege::CheckFlag(ch, privilege::kTitle)) 
 		return true;
 
-	if (!GetRealRemort(ch)) {
+	if (!remort::GetRealRemort(ch)) {
 		SendMsgToChar(ch, "Вы должны иметь по крайней мере одно перевоплощение для предтитула.\r\n");
 		return false;
 	}
@@ -240,7 +247,7 @@ bool TitleSystem::check_pre_title(const std::string& text, CharData *ch) {
 		SendMsgToChar(ch, "Слишком много слов в предтитуле.\r\n");
 		return false;
 	}
-	if (word > GetRealRemort(ch)) {
+	if (word > remort::GetRealRemort(ch)) {
 		SendMsgToChar(ch, "У вас недостаточно перевоплощений для стольких слов в предтитуле.\r\n");
 		return false;
 	}
@@ -254,15 +261,23 @@ bool TitleSystem::check_pre_title(const std::string& text, CharData *ch) {
 * \return 0 не сканало, 1 сканало
 */
 bool TitleSystem::check_alphabet(const std::string &text, CharData *ch, const std::string &allowed) {
-	int i = 0;
-	std::string::size_type idx;
-	for (std::string::const_iterator it = text.begin(); it != text.end(); ++it, ++i) {
-		unsigned char c = static_cast<char>(*it);
-		idx = allowed.find(*it);
-		if (c < 192 && idx == std::string::npos) {
-			SendMsgToChar(ch, "Недопустимый символ '%c' в позиции %d.\r\n", *it, ++i);
-			return false;
+	// Проверяем по символам, а не по байтам. Раньше условие было "байт >= 192", то есть
+	// кириллица KOI8-R; под UTF-8 у русской буквы два байта, и хвостовой (0x80..0xBF) попадал
+	// в "меньше 192" -- титул с кириллицей отвергался на второй позиции (issue #3681).
+	//
+	// Набор букв оставлен ровно прежним: диапазон 0xC0..0xFF в KOI8-R -- это а-я и А-Я без "ё",
+	// поэтому "ё" по-прежнему допустима только если перечислена в allowed.
+	int position = 0;
+	for (const std::string_view symbol : native_text::chars(text)) {
+		++position;
+		const char32_t code = native_text::first_char_code(std::string(symbol).c_str());
+		const bool russian_letter = (code >= 0x0410 && code <= 0x044F);
+		if (russian_letter || native_text::list_contains_char(allowed, symbol)) {
+			continue;
 		}
+		SendMsgToChar(ch, "Недопустимый символ '%.*s' в позиции %d.\r\n",
+					  static_cast<int>(symbol.size()), symbol.data(), position);
+		return false;
 	}
 	return true;
 }
@@ -294,8 +309,7 @@ bool TitleSystem::manage_title_list(std::string &name, bool action, CharData *ch
 			// Что внизу за хрень ?
 			if (d) {
 				set_player_title(d->character.get(), it->second->pre_title, it->second->title, GET_NAME(ch));
-				sprintf(buf, "&c%s одобрил титул игрока %s!&n\r\n", GET_NAME(ch), GET_NAME(d->character));
-				SendMsgToGods(buf, true);
+				SendMsgToGods(fmt::format("&c{} одобрил титул игрока {}!&n\r\n", GET_NAME(ch), GET_NAME(d->character)), true);
 			} else {
 				Player victim;
 				if (LoadPlayerCharacter(it->first.c_str(), &victim, ELoadCharFlags::kFindId) < 0) {
@@ -304,8 +318,7 @@ bool TitleSystem::manage_title_list(std::string &name, bool action, CharData *ch
 					return TITLE_FIND_CHAR;
 				}
 				set_player_title(&victim, it->second->pre_title, it->second->title, GET_NAME(ch));
-				sprintf(buf, "&c%s одобрил титул игрока %s[ОФФЛАЙН].&n\r\n", GET_NAME(ch), GET_NAME(&victim));
-				SendMsgToGods(buf, true);
+				SendMsgToGods(fmt::format("&c{} одобрил титул игрока {}[ОФФЛАЙН].&n\r\n", GET_NAME(ch), GET_NAME(&victim)), true);
 				victim.save_char();
 			}
 		} else {
@@ -313,8 +326,7 @@ bool TitleSystem::manage_title_list(std::string &name, bool action, CharData *ch
 
 			DescriptorData *d = send_result_message(it->second->unique, action);
 			if (d) {
-				sprintf(buf, "&c%s запретил титул игрока %s.&n\r\n", GET_NAME(ch), GET_NAME(d->character));
-				SendMsgToGods(buf, true);
+				SendMsgToGods(fmt::format("&c{} запретил титул игрока {}.&n\r\n", GET_NAME(ch), GET_NAME(d->character)), true);
 			} else {
 				Player victim;
 				if (LoadPlayerCharacter(it->first.c_str(), &victim, ELoadCharFlags::kFindId) < 0) {
@@ -322,8 +334,7 @@ bool TitleSystem::manage_title_list(std::string &name, bool action, CharData *ch
 					title_list.erase(it);
 					return TITLE_FIND_CHAR;
 				}
-				sprintf(buf, "&c%s запретил титул игрока %s[ОФФЛАЙН].&n\r\n", GET_NAME(ch), GET_NAME(&victim));
-				SendMsgToGods(buf, true);
+				SendMsgToGods(fmt::format("&c{} запретил титул игрока {}[ОФФЛАЙН].&n\r\n", GET_NAME(ch), GET_NAME(&victim)), true);
 				victim.save_char();
 			}
 		}
@@ -393,7 +404,7 @@ void TitleSystem::set_player_title(CharData *ch,
 
 // * Для распечатки разных подсказок имму и игроку
 const char *TitleSystem::print_help_string(CharData *ch) {
-	if (IS_GOD(ch) || privilege::CheckFlag(ch, privilege::kTitle))
+	if (privilege::IsGod(ch) || privilege::CheckFlag(ch, privilege::kTitle))
 		return GOD_DO_TITLE_FORMAT;
 
 	return MORTAL_DO_TITLE_FORMAT;
@@ -401,14 +412,20 @@ const char *TitleSystem::print_help_string(CharData *ch) {
 
 // * Сохранение списка титулов на одобрение
 void TitleSystem::save_title_list() {
-	std::ofstream file(TITLE_FILE);
+	const std::string &title_file = MUD::StateManager().Path(state::EStateFile::kTitles);
+	std::ofstream file(title_file);
 	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", TITLE_FILE, __FILE__, __func__, __LINE__);
+		log("Error open file: %s! (%s %s %d)", title_file.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
+	std::ostringstream out;
 	for (TitleListType::const_iterator it = title_list.begin(); it != title_list.end(); ++it)
-		file << it->first << " " << it->second->unique << "\n" << it->second->pre_title << "\n" << it->second->title
-			 << "\n";
+		out << it->first << " " << it->second->unique << "\n" << it->second->pre_title << "\n" << it->second->title
+			<< "\n";
+	// Граница записи: state/ хранится в нативной кодировке, поэтому титулы уходят на диск
+	// как есть. Чтение (from_disk_line) принимает и старый KOI8-R (issue #3787).
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 	file.close();
 }
 
@@ -416,9 +433,10 @@ void TitleSystem::save_title_list() {
 void TitleSystem::load_title_list() {
 	title_list.clear();
 
-	std::ifstream file(TITLE_FILE);
+	const std::string &title_file = MUD::StateManager().Path(state::EStateFile::kTitles);
+	std::ifstream file(title_file);
 	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", TITLE_FILE, __FILE__, __func__, __LINE__);
+		log("Error open file: %s! (%s %s %d)", title_file.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
 	std::string name, pre_title, title;
@@ -428,10 +446,11 @@ void TitleSystem::load_title_list() {
 		std::getline(file, pre_title);
 		std::getline(file, title);
 		WaitingTitlePtr temp(new waiting_title);
-		temp->title = title;
-		temp->pre_title = pre_title;
+		// Граница чтения: список лежит на диске в кодировке мира (issue #3681).
+		temp->title = native_text::from_disk_line(title.c_str());
+		temp->pre_title = native_text::from_disk_line(pre_title.c_str());
 		temp->unique = unique;
-		title_list[name] = temp;
+		title_list[native_text::from_disk_line(name.c_str())] = temp;
 	}
 	file.close();
 }
@@ -462,7 +481,7 @@ std::string TitleSystem::print_agree_string(bool new_petition) {
 
 // * Обработка пустого вызова команды титул
 void TitleSystem::do_title_empty(CharData *ch) {
-	if ((IS_GOD(ch) || privilege::CheckFlag(ch, privilege::kTitle)) && !title_list.empty())
+	if ((privilege::IsGod(ch) || privilege::CheckFlag(ch, privilege::kTitle)) && !title_list.empty())
 		show_title_list(ch);
 	else {
 		std::stringstream out;

@@ -7,12 +7,17 @@
 */
 
 #include "administration/proxy.h"
+#include "administration/privilege.h"
 
 #include "engine/network/descriptor_data.h"
 #include "engine/boot/boot_constants.h"
+#include "engine/db/global_objects.h"
 #include "engine/core/comm.h"
 #include "engine/entities/char_data.h"
 #include "utils/utils.h"
+#include "utils/native_text.h"
+
+#include <sstream>
 #include "utils/logger.h"
 
 const int kMaxProxyConnect{50};
@@ -21,42 +26,38 @@ const int kMaxProxyConnect{50};
 ProxyListType proxy_list;
 
 void SaveProxyList() {
-	std::ofstream file(PROXY_FILE);
-	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", PROXY_FILE, __FILE__, __func__, __LINE__);
-		return;
-	}
-
+	// issue.misc-migrate: build the lines and let StateManager write them atomically (tmp+rename).
+	std::vector<std::string> lines;
+	lines.reserve(proxy_list.size());
 	for (auto &it : proxy_list) {
-		file << it.second->textIp << "  " << (it.second->textIp2.empty() ? "0"
-																		 : it.second->textIp2) << "  "
-			 << it.second->num << "  " << it.second->text << "\n";
+		std::ostringstream oss;
+		oss << it.second->textIp << "  " << (it.second->textIp2.empty() ? "0" : it.second->textIp2)
+			<< "  " << it.second->num << "  " << it.second->text;
+		lines.push_back(oss.str());
 	}
-	file.close();
+	MUD::StateManager().SaveLines(state::EStateFile::kProxy, lines);
 }
 
 void RegisterSystem::LoadProxyList() {
-	// если релоадим
+	// issue.misc-migrate: read records via StateManager. Parse each non-empty line the same way
+	// (ip ip2 num text); a malformed record still aborts+clears. This drops the old stream loop's
+	// trailing-line quirk that could abort a valid list, then re-normalises via SaveProxyList().
+	const std::string &proxy_file = MUD::StateManager().Path(state::EStateFile::kProxy);
 	proxy_list.clear();
 
-	std::ifstream file(PROXY_FILE);
-	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", PROXY_FILE, __FILE__, __func__, __LINE__);
-		return;
-	}
-
-	std::string buffer, textIp, textIp2;
-	int num = 0;
-
-	while (file) {
-		file >> textIp >> textIp2 >> num;
-		std::getline(file, buffer);
+	for (const auto &line : MUD::StateManager().LoadLines(state::EStateFile::kProxy)) {
+		if (line.empty()) {
+			continue;
+		}
+		std::istringstream iss(line);
+		std::string buffer, textIp, textIp2;
+		int num = 0;
+		iss >> textIp >> textIp2 >> num;
+		std::getline(iss, buffer);
 		utils::Trim(buffer);
 		if (textIp.empty() || textIp2.empty() || buffer.empty() || num < 2 || num > kMaxProxyConnect) {
-			log("Error read file: %s! IP: %s IP2: %s Num: %d Text: %s (%s %s %d)", PROXY_FILE, textIp.c_str(),
+			log("Error read file: %s! IP: %s IP2: %s Num: %d Text: %s (%s %s %d)", proxy_file.c_str(), textIp.c_str(),
 				textIp2.c_str(), num, buffer.c_str(), __FILE__, __func__, __LINE__);
-			// не стоит грузить файл, если там чет не то - похерится потом при сохранении
-			// хотя будет смешно, если после неудачного лоада кто-то добавит запись в онлайне Ж)
 			proxy_list.clear();
 			return;
 		}
@@ -72,38 +73,45 @@ void RegisterSystem::LoadProxyList() {
 		tempIp->ip2 = TxtToIp(textIp2);
 		proxy_list[ip] = tempIp;
 	}
-	file.close();
 	SaveProxyList();
 }
 
-// проверка на присутствие в списке зарегистрированных ip и кол-ва соединений
-// 0 - нету, 1 - в маде уже макс. число коннектов с данного ip, 2 - все ок
-int CheckProxy(DescriptorData *ch) {
-	//сначала ищем в списке, зачем зря коннекты считать
-	ProxyListType::const_iterator it;
-	// мысль простая - есть второй ип, знач смотрим диапазон, нету - знач сверяем на равенство ип
-	for (it = proxy_list.begin(); it != proxy_list.end(); ++it) {
-		if (!it->second->ip2) {
-			if (it->first == ch->ip)
-				break;
-		} else if ((it->first <= ch->ip) && (ch->ip <= it->second->ip2))
-			break;
+const ProxyIpPtr FindProxyEntry(unsigned long ip) {
+	for (const auto &it : proxy_list) {
+		if (!it.second->ip2) {
+			if (it.first == ip) {
+				return it.second;
+			}
+		} else if (it.first <= ip && ip <= it.second->ip2) {
+			return it.second;
+		}
 	}
-	if (it == proxy_list.end())
-		return 0;
+	return nullptr;
+}
 
-	// терь можно и посчитать
-	DescriptorData *i;
-	int num_ip = 0;
-	for (i = descriptor_list; i; i = i->next)
-		if (i != ch && i->character && !IS_IMMORTAL(i->character) && (i->ip == ch->ip))
-			num_ip++;
+int CountPlayersFromIp(DescriptorData *d) {
+	int count = 0;
+	for (auto *i = descriptor_list; i; i = i->next) {
+		if (i != d
+			&& i->character
+			&& !privilege::IsImmortal(i->character.get())
+			&& i->ip == d->ip
+			&& (i->state == EConState::kPlaying || i->state == EConState::kMenu)) {
+			count++;
+		}
+	}
+	return count;
+}
 
-	// проверяем на кол-во коннектов
-	if (it->second->num <= num_ip)
-		return 1;
-
-	return 2;
+EProxyCheck CheckProxy(DescriptorData *d) {
+	auto proxy = FindProxyEntry(d->ip);
+	if (!proxy) {
+		return EProxyCheck::kNotInList;
+	}
+	if (CountPlayersFromIp(d) >= proxy->num) {
+		return EProxyCheck::kLimitReached;
+	}
+	return EProxyCheck::kAllowed;
 }
 
 // Тут все, что связано с регистрацией клубов и т.п.
@@ -153,7 +161,6 @@ typedef std::map<std::string, std::string> EmailListType;
 // список зарегистрированных мыл
 EmailListType email_list;
 // файл для соъхранения/лоада
-const char *REGISTERED_EMAIL_FILE = LIB_PLRSTUFF"registered-email.lst";
 // т.к. список потенциально может быть довольно большим, то сейвить бум только в случае изменений в add и remove
 bool need_save = false;
 
@@ -196,7 +203,22 @@ bool RegisterSystem::IsRegistered(CharData *ch) {
 	if (ch->IsFlagged(EPlrFlag::kRegistred) || (ch->desc && ch->desc->registered_email)) {
 		return true;
 	}
-	return false;
+	if (ch->IsNpc()) {
+		return false;
+	}
+	// Мыло в списке -- это тоже регистрация, "каким-нибудь образом". Прежде её видел только вход:
+	// desc->registered_email ставил check_dupes_host, и только если в тот самый миг с этого IP уже
+	// кто-то играл. Кто заходил с адреса первым, флага не получал и для секундной проверки
+	// оставался незарегистрированным -- а как только с его адреса входил второй, проверка уносила
+	// его в комнату для незарегистрированных. Выйти оттуда он тоже не мог: освобождение идёт через
+	// ту же проверку.
+	if (!RegisterSystem::IsRegisteredEmail(GET_EMAIL(ch))) {
+		return false;
+	}
+	if (ch->desc) {
+		ch->desc->registered_email = true;   // кэш, чтобы не искать по списку каждую секунду
+	}
+	return true;
 }
 
 /**
@@ -227,16 +249,21 @@ std::string RegisterSystem::ShowComment(const std::string &email) {
 void RegisterSystem::load() {
 	email_list.clear();
 
-	std::ifstream file(REGISTERED_EMAIL_FILE);
+	const std::string &registered_email_file = MUD::StateManager().Path(state::EStateFile::kRegisteredEmails);
+	std::ifstream file(registered_email_file);
 	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", REGISTERED_EMAIL_FILE, __FILE__, __func__, __LINE__);
+		log("Error open file: %s! (%s %s %d)", registered_email_file.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
 	std::string email, comment;
 	while (file >> email) {
 		ReadEndString(file);
 		std::getline(file, comment);
-		email_list[email] = comment;
+		// Границы чтения тут не было вовсе: комментарий держит имя того, кто регистрировал,
+		// и причину -- то есть русский текст, который уходил в память дисковыми байтами и
+		// показывался богам в "stat" мусором. Запись всегда шла нативной, так что файл ещё и
+		// расходился сам с собой по мере добавления записей (issue #3787).
+		email_list[email] = native_text::from_disk_line(comment.c_str());
 	}
 	file.close();
 }
@@ -246,12 +273,14 @@ void RegisterSystem::save() {
 	if (!need_save) {
 		return;
 	}
-	std::ofstream file(REGISTERED_EMAIL_FILE);
+	const std::string &registered_email_file = MUD::StateManager().Path(state::EStateFile::kRegisteredEmails);
+	std::ofstream file(registered_email_file);
 	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", REGISTERED_EMAIL_FILE, __FILE__, __func__, __LINE__);
+		log("Error open file: %s! (%s %s %d)", registered_email_file.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
 	for (auto &it : email_list) {
+		// Зеркало к чтению: state/ хранится в нативной кодировке, пишем как есть.
 		file << it.first << "\n" << it.second << "\n";
 	}
 	file.close();

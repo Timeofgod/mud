@@ -1,4 +1,8 @@
 #include "overhelm.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/sight.h"
+#include "gameplay/mechanics/mount.h"
+#include "skill_messages.h"
 
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/common.h"
@@ -8,12 +12,14 @@
 #include "protect.h"
 #include "engine/db/global_objects.h"
 
+#include <fmt/format.h>
+
 void PerformOverhelm(CharData *ch, CharData *victim, HitData &hit_data);
 [[nodiscard]] int CalcOverhelmDmg(CharData *ch, CharData *victim, int dmg);
 
 void GoOverhelm(CharData *ch, CharData *victim) {
 	if (IsUnableToAct(ch)) {
-		SendMsgToChar("Вы временно не в состоянии сражаться.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kOverwhelm, ESkillMsg::kCantFightNow) + "\r\n", ch);
 		return;
 	}
 
@@ -28,7 +34,7 @@ void GoOverhelm(CharData *ch, CharData *victim) {
 		ch->battle_affects.set(kEafOverwhelm);
 		hit(ch, victim, ESkill::kOverwhelm, fight::kMainHand);
 		//set_wait(ch, 2, true);
-		if (ch->getSkillCooldown(ESkill::kOverwhelm) > 0) {
+		if (ch->Skills().GetCooldown(ESkill::kOverwhelm) > 0) {
 			SetSkillCooldownInFight(ch, ESkill::kGlobalCooldown, 1);
 		}
 	} else {
@@ -44,38 +50,39 @@ void GoOverhelm(CharData *ch, CharData *victim) {
 }
 
 void DoOverhelm(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (ch->GetSkill(ESkill::kOverwhelm) < 1) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (GetSkill(ch, ESkill::kOverwhelm) < 1) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kOverwhelm, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 
-	CharData *vict = FindVictim(ch, argument);
+	std::string target_name;
+	CharData *vict = FindVictim(ch, argument, target_name);
 	if (!vict) {
-		SendMsgToChar("Кого вы хотите оглушить?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kOverwhelm, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 
 	if (!may_kill_here(ch, vict, argument))
 		return;
-	if (!check_pkill(ch, vict, arg))
+	if (!check_pkill(ch, vict, target_name))
 		return;
 
 	DoOverhelm(ch, vict);
 }
 
 void DoOverhelm(CharData *ch, CharData *victim) {
-	if (ch->GetSkill(ESkill::kOverwhelm) < 1) {
+	if (GetSkill(ch, ESkill::kOverwhelm) < 1) {
 		log("ERROR: вызов глуша для персонажа %s (%d) без проверки умения", ch->get_name().c_str(), GET_MOB_VNUM(ch));
 		return;
 	}
 
-	if (ch->HasCooldown(ESkill::kOverwhelm)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kOverwhelm)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kOverwhelm, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	};
 
 	if (victim == ch) {
-		SendMsgToChar("Вы громко заорали, заглушая свой собственный голос.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kOverwhelm, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 
@@ -95,7 +102,7 @@ void PerformOverhelm(CharData *ch, CharData *victim, HitData &hit_data) {
 	ch->battle_affects.unset(kEafOverwhelm);
 	hit_data.SetFlag(fight::kIgnoreBlink);
 	const int minimum_weapon_weigth = 19;
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		hit_data.dam = CalcOverhelmDmg(ch, victim, hit_data.dam);
 	} else if (ch->IsNpc()) {
 		const bool wielded_with_bow = hit_data.wielded &&
@@ -124,10 +131,8 @@ void PerformOverhelm(CharData *ch, CharData *victim, HitData &hit_data) {
 		}
 	}
 	else {
-		sprintf(buf, "&c&qВы оказались без оружия, а пальцем оглушить нельзя.&Q&n\r\n");
-		SendMsgToChar(buf, ch);
-		sprintf(buf, "&c&q%s оказался без оружия и не смог вас оглушить.&Q&n\r\n", GET_NAME(ch));
-		SendMsgToChar(buf, victim);
+		SendMsgToChar("&c&qВы оказались без оружия, а пальцем оглушить нельзя.&Q&n\r\n", ch);
+		SendMsgToChar(fmt::format("&c&q{} оказался без оружия и не смог вас оглушить.&Q&n\r\n", GET_NAME(ch)), victim);
 	}
 }
 
@@ -142,55 +147,51 @@ int CalcOverhelmDmg(CharData *ch, CharData *victim, int dmg) {
 		prob = std::max(prob, percent * 150 / 100 + 1);
 	}
 
-	if (IS_IMMORTAL(victim)) {
+	if (privilege::IsImmortal(victim)) {
 		prob = 0;
 	}
 
 	if (prob < percent || dmg == 0 || victim->IsFlagged(EMobFlag::kNoOverwhelm)) {
-		sprintf(buf, "&c&qВы попытались оглушить %s, но не смогли.&Q&n\r\n", PERS(victim, ch, 3));
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("&c&qВы попытались оглушить {}, но не смогли.&Q&n\r\n", sight::PersonName(victim, ch, 3)), ch);
 		lag = 3;
 		dmg = 0;
 	} else if (prob * 100 / percent < 300) {
-		sprintf(buf, "&g&qВаша мощная атака оглушила %s.&Q&n\r\n", PERS(victim, ch, 3));
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("&g&qВаша мощная атака оглушила {}.&Q&n\r\n", sight::PersonName(victim, ch, 3)), ch);
 		lag = 2;
-		int k = ch->GetSkill(ESkill::kOverwhelm) / 30;
+		int k = GetSkill(ch, ESkill::kOverwhelm) / 30;
 		if (!victim->IsNpc()) {
 			k = std::min(2, k);
 		}
 		dmg *= std::max(2, number(1, k));
-		SetWaitState(victim, 3 * kBattleRound);
-		sprintf(buf, "&R&qВаше сознание слегка помутилось после удара %s.&Q&n\r\n", PERS(ch, victim, 1));
-		SendMsgToChar(buf, victim);
+		SetBattleLag(victim, 3);
+		SendMsgToChar(fmt::format("&R&qВаше сознание слегка помутилось после удара {}.&Q&n\r\n", sight::PersonName(ch, victim, 1)), victim);
 		act("$n оглушил$a $N3.", true, ch, nullptr, victim, kToNotVict | kToArenaListen);
 	} else {
 		if (victim->IsFlagged(EMobFlag::kNoBash)) {
-			sprintf(buf, "&G&qВаш мощнейший удар оглушил %s.&Q&n\r\n", PERS(victim, ch, 3));
+			SendMsgToChar(fmt::format("&G&qВаш мощнейший удар оглушил {}.&Q&n\r\n",
+									  sight::PersonName(victim, ch, 3)), ch);
 		} else {
-			sprintf(buf, "&G&qВаш мощнейший удар сбил %s с ног.&Q&n\r\n", PERS(victim, ch, 3));
+			SendMsgToChar(fmt::format("&G&qВаш мощнейший удар сбил {} с ног.&Q&n\r\n",
+									  sight::PersonName(victim, ch, 3)), ch);
 		}
-		SendMsgToChar(buf, ch);
 		if (victim->IsFlagged(EMobFlag::kNoBash)) {
 			act("$n мощным ударом оглушил$a $N3.", true, ch, nullptr, victim, kToNotVict | kToArenaListen);
 		} else {
 			act("$n своим оглушающим ударом сбил$a $N3 с ног.", true, ch, nullptr, victim, kToNotVict | kToArenaListen);
 		}
 		lag = 2;
-		int k = ch->GetSkill(ESkill::kOverwhelm) / 20;
+		int k = GetSkill(ch, ESkill::kOverwhelm) / 20;
 		if (!victim->IsNpc()) {
 			k = std::min(4, k);
 		}
 		dmg *= std::max(3, number(1, k));
-		SetWaitState(victim, 3 * kBattleRound);
+		SetBattleLag(victim, 3);
 		if (victim->GetPosition() > EPosition::kSit && !victim->IsFlagged(EMobFlag::kNoBash)) {
 			victim->SetPosition(EPosition::kSit);
-			victim->DropFromHorse();
-			sprintf(buf, "&R&qОглушающий удар %s сбил вас с ног.&Q&n\r\n", PERS(ch, victim, 1));
-			SendMsgToChar(buf, victim);
+			mount::DropFromHorse(victim);
+			SendMsgToChar(fmt::format("&R&qОглушающий удар {} сбил вас с ног.&Q&n\r\n", sight::PersonName(ch, victim, 1)), victim);
 		} else {
-			sprintf(buf, "&R&qВаше сознание слегка помутилось после удара %s.&Q&n\r\n", PERS(ch, victim, 1));
-			SendMsgToChar(buf, victim);
+			SendMsgToChar(fmt::format("&R&qВаше сознание слегка помутилось после удара {}.&Q&n\r\n", sight::PersonName(ch, victim, 1)), victim);
 		}
 	}
 	//set_wait(ch, lag, true);

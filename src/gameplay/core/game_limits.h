@@ -4,17 +4,18 @@
 extern const int kRecallSpellsInterval;
 
 class CharData;
+class ObjData;
+bool NO_TIMER(const ObjData *obj);
+bool NO_DESTROY(const ObjData *obj);
+int up_obj_where(ObjData *obj);
 void underwater_check();
 void beat_points_update(int pulse);
 void hour_update();
-void gain_exp_regardless(CharData *ch, int gain);
 int CalcManaGain(const CharData *ch);
 void obj_point_update();
 void exchange_point_update();
 void room_point_update();
 void point_update();
-void EndowExpToChar(CharData *ch, int gain);
-void gain_battle_exp(CharData *ch, CharData *victim, int dam);
 void gain_condition(CharData *ch, unsigned condition, int value);
 int hit_gain(CharData *ch);
 int move_gain(CharData *ch);

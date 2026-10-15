@@ -6,10 +6,12 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
 #include "gameplay/mechanics/doors.h"
 #include "utils/utils.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
 
 void do_gen_door(CharData *ch, char *argument, int, int subcmd) {
 	if (AFF_FLAGGED(ch, EAffect::kBlind)) {
@@ -17,14 +19,14 @@ void do_gen_door(CharData *ch, char *argument, int, int subcmd) {
 		return;
 	}
 
-	if (subcmd == kScmdPick && !ch->GetSkill(ESkill::kPickLock)) {
+	if (subcmd == kScmdPick && !GetSkill(ch, ESkill::kPickLock)) {
 		SendMsgToChar("Это умение вам недоступно.\r\n", ch);
 		return;
 	}
 	skip_spaces(&argument);
 	if (!*argument) {
-		sprintf(buf, "%s что?\r\n", a_cmd_door[subcmd]);
-		SendMsgToChar(utils::CAP(buf), ch);
+		// CAP(std::string) возвращает копию, а не правит на месте
+		SendMsgToChar(utils::CAP(fmt::format("{} что?\r\n", a_cmd_door[subcmd])), ch);
 		return;
 	}
 	char type[kMaxInputLength], dir[kMaxInputLength];

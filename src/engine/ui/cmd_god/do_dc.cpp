@@ -6,14 +6,19 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
+#include "utils/utils_string.h"
 #include "engine/core/comm.h"
+#include "gameplay/mechanics/sight.h"
 
 void DoDropConnect(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	DescriptorData *d;
 	int num_to_dc;
-	one_argument(argument, arg);
-	if (!(num_to_dc = atoi(arg))) {
+	std::string remains;
+	const std::string arg = utils::ExtractFirstArgumentLower(argument, remains);
+	if (!(num_to_dc = atoi(arg.c_str()))) {
 		SendMsgToChar("Usage: DC <user number> (type USERS for a list)\r\n", ch);
 		return;
 	}
@@ -29,7 +34,7 @@ void DoDropConnect(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		int victim_level = d->character->IsFlagged(EPrf::kCoderinfo) ? kLvlImplementator : GetRealLevel(d->character);
 		int god_level = ch->IsFlagged(EPrf::kCoderinfo) ? kLvlImplementator : GetRealLevel(ch);
 		if (victim_level >= god_level) {
-			if (!CAN_SEE(ch, d->character))
+			if (!sight::CanSee(ch, d->character))
 				SendMsgToChar("Нет такого соединения.\r\n", ch);
 			else
 				SendMsgToChar("Да уж.. Это не есть праффильная идея...\r\n", ch);
@@ -62,8 +67,7 @@ void DoDropConnect(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			d->state = EConState::kClose;
 		}
 
-		sprintf(buf, "Соединение #%d закрыто.\r\n", num_to_dc);
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("Соединение #{} закрыто.\r\n", num_to_dc), ch);
 		imm_log("Connect closed by %s.", GET_NAME(ch));
 	}
 }

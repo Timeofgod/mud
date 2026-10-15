@@ -6,20 +6,25 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
-#include "gameplay/classes/classes.h"
-#include "engine/core/handler.h"
+#include "utils/utils_string.h"
+#include "gameplay/core/experience.h"
+#include "gameplay/classes/pc_classes.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/core/game_limits.h"
 
 void DoAdvance(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	CharData *victim;
-	char *name = arg, *level = buf2;
 	int newlevel, oldlevel;
 
-	two_arguments(argument, name, level);
+	std::string remains;
+	const std::string name = utils::ExtractFirstArgumentLower(argument, remains);
+	const std::string level = utils::ExtractFirstArgumentLower(remains, remains);
 
-	if (*name) {
-		if (!(victim = get_player_vis(ch, name, EFind::kCharInWorld))) {
+	if (!name.empty()) {
+		if (!(victim = target_resolver::FindPlayerVis(ch, name))) {
 			SendMsgToChar("Не найду такого игрока.\r\n", ch);
 			return;
 		}
@@ -32,13 +37,12 @@ void DoAdvance(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("Нелогично.\r\n", ch);
 		return;
 	}
-	if (!*level || (newlevel = atoi(level)) <= 0) {
+	if (level.empty() || (newlevel = atoi(level.c_str())) <= 0) {
 		SendMsgToChar("Это не похоже на уровень.\r\n", ch);
 		return;
 	}
 	if (newlevel > kLvlImplementator) {
-		sprintf(buf, "%d - максимальный возможный уровень.\r\n", kLvlImplementator);
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("{} - максимальный возможный уровень.\r\n", kLvlImplementator), ch);
 		return;
 	}
 	if (newlevel > GetRealLevel(ch) && !ch->IsFlagged(EPrf::kCoderinfo)) {
@@ -59,7 +63,7 @@ void DoAdvance(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			false, ch, nullptr, victim, kToVict);
 	}
 
-	SendMsgToChar(OK, ch);
+	SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 	if (newlevel < oldlevel) {
 		log("(GC) %s demoted %s from level %d to %d.", GET_NAME(ch), GET_NAME(victim), oldlevel, newlevel);
 		imm_log("%s demoted %s from level %d to %d.", GET_NAME(ch), GET_NAME(victim), oldlevel, newlevel);
@@ -69,8 +73,8 @@ void DoAdvance(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		imm_log("%s has advanced %s to level %d (from %d)", GET_NAME(ch), GET_NAME(victim), newlevel, oldlevel);
 	}
 
-	gain_exp_regardless(victim, GetExpUntilNextLvl(victim, newlevel)
-		- GET_EXP(victim));
+	experience::gain_exp_regardless(victim, experience::GetExpUntilNextLvl(victim, newlevel)
+		- victim->get_exp());
 	victim->save_char();
 }
 

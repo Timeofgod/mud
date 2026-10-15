@@ -5,7 +5,12 @@
 \details Весь код по работе с очередью заучивания заклинаний должен располагаться в данном модуле.
 */
 
+#include <fmt/format.h>
+
 #include "mem_queue.h"
+#include "utils/logger.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/magic_item.h"
 
 #include "engine/ui/color.h"
 #include "engine/entities/char_data.h"
@@ -14,6 +19,7 @@
 #include "gameplay/magic/magic_utils.h"
 #include "gameplay/magic/spells_info.h"
 #include "engine/db/global_objects.h"
+#include "gameplay/core/remort.h"
 
 const double kManaCostModifier = 0.5;
 
@@ -132,7 +138,7 @@ float druid_manacost_modifier[] {
 int CalcSpellManacost(CharData *ch, ESpell spell_id) {
 	int result = 0;
 
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		return 1;
 	}
 	if (IS_MANA_CASTER(ch) && GetRealLevel(ch) >= MagusCastRequiredLevel(ch, spell_id)) {
@@ -144,9 +150,9 @@ int CalcSpellManacost(CharData *ch, ESpell spell_id) {
 			int tmp =  std::max(MUD::Spell(spell_id).GetMaxMana() 
 					- (MUD::Spell(spell_id).GetManaChange() * (GetRealLevel(ch) - CalcMinRuneSpellLvl(ch, spell_id))),  
 				MUD::Spell(spell_id).GetMinMana());
-		ch->send_to_TC(false, true, true, "&MМакс манна %d, маначенж %d minrunespelllevel %d&n\r\n", MUD::Spell(spell_id).GetMaxMana(),
+		SendToTC(ch, false, true, true, "&MМакс манна %d, маначенж %d minrunespelllevel %d&n\r\n", MUD::Spell(spell_id).GetMaxMana(),
 				MUD::Spell(spell_id).GetManaChange(), CalcMinRuneSpellLvl(ch, spell_id));
-		ch->send_to_TC(false, true, true, "&MПотрачено манны множитель %f  затраты %d всего = %d&n\r\n", druid_manacost_modifier[GetRealInt(ch)], tmp, result );
+		SendToTC(ch, false, true, true, "&MПотрачено манны множитель %f  затраты %d всего = %d&n\r\n", druid_manacost_modifier[GetRealInt(ch)], tmp, result );
 //		log("manacost Макс манна %d, маначенж %d minrunespelllevel %d\r\n", MUD::Spell(spell_id).GetMaxMana(),
 //				MUD::Spell(spell_id).GetManaChange(), CalcMinRuneSpellLvl(ch, spell_id));
 //		log("manacost Потрачено манны множитель %f  затраты %d всего = %d\r\n", druid_manacost_modifier[GetRealInt(ch)], tmp, result );
@@ -154,7 +160,7 @@ int CalcSpellManacost(CharData *ch, ESpell spell_id) {
 	} else {
 		if (!IS_MANA_CASTER(ch)
 					&& GetRealLevel(ch) >= CalcMinSpellLvl(ch, spell_id)
-					&& GetRealRemort(ch) >= MUD::Class(ch->GetClass()).spells[spell_id].GetMinRemort()) {
+					&& remort::GetRealRemort(ch) >= MUD::Class(ch->GetClass()).spells[spell_id].GetMinRemort()) {
 			result = std::max(MUD::Spell(spell_id).GetMaxMana() 
 					- (MUD::Spell(spell_id).GetManaChange() * (GetRealLevel(ch) - CalcMinSpellLvl(ch, spell_id))),
 				MUD::Spell(spell_id).GetMinMana());
@@ -172,7 +178,7 @@ int CalcSpellManacost(CharData *ch, ESpell spell_id) {
 		}
 	}
 	if (result > 0)
-		return result * koef_skill_magic(ch->GetSkill(GetMagicSkillId(spell_id))) / 100;
+		return result * koef_skill_magic(GetSkill(ch, MUD::Spell(spell_id).GetSuccessRoll().GetBaseSkill())) / 100;
 		// при скилле 200 + 25%, чем меньше тем лучше
 	else
 		return 99999;
@@ -199,16 +205,15 @@ ESpell MemQ_learn(CharData *ch) {
 	if (ch->mem_queue.Empty()) {
 		return ESpell::kUndefined;
 	}
-	auto num = GET_MEM_CURRENT(ch);
+	auto num = ch->mem_queue.Empty() ? 0 : CalcSpellManacost(ch, ch->mem_queue.queue->spell_id);
 	ch->mem_queue.stored -= num;
 	ch->mem_queue.total -= num;
 	auto spell_id = ch->mem_queue.queue->spell_id;
 	i = ch->mem_queue.queue;
 	ch->mem_queue.queue = i->next;
 	free(i);
-	sprintf(buf, "Вы выучили заклинание \"%s%s%s\".\r\n",
-			kColorBoldCyn, MUD::Spell(spell_id).GetCName(), kColorNrm);
-	SendMsgToChar(buf, ch);
+	SendMsgToChar(fmt::format("Вы выучили заклинание \"{}{}{}\".\r\n",
+							  kColorBoldCyn, MUD::Spell(spell_id).GetName(), kColorNrm), ch);
 	return spell_id;
 }
 
@@ -228,13 +233,15 @@ void MemQ_remember(CharData *ch, ESpell spell_id) {
 		return;
 	}
 
-	if (GET_RELIGION(ch) == kReligionMono)
-		sprintf(buf, "Вы дописали заклинание \"%s%s%s\" в свой часослов.\r\n",
-				kColorBoldMag, MUD::Spell(spell_id).GetCName(), kColorNrm);
-	else
-		sprintf(buf, "Вы занесли заклинание \"%s%s%s\" в свои резы.\r\n",
-				kColorBoldMag, MUD::Spell(spell_id).GetCName(), kColorNrm);
-	SendMsgToChar(buf, ch);
+	// Формат у fmt должен быть известен на компиляции, поэтому ветвим не строку формата,
+	// а готовое сообщение.
+	if (GET_RELIGION(ch) == kReligionMono) {
+		SendMsgToChar(fmt::format("Вы дописали заклинание \"{}{}{}\" в свой часослов.\r\n",
+								  kColorBoldMag, MUD::Spell(spell_id).GetName(), kColorNrm), ch);
+	} else {
+		SendMsgToChar(fmt::format("Вы занесли заклинание \"{}{}{}\" в свои резы.\r\n",
+								  kColorBoldMag, MUD::Spell(spell_id).GetName(), kColorNrm), ch);
+	}
 
 	ch->mem_queue.total += CalcSpellManacost(ch, spell_id);
 	while (*pi)
@@ -263,10 +270,8 @@ void MemQ_forget(CharData *ch, ESpell spell_id) {
 		ptr = q[0];
 		q[0] = q[0]->next;
 		free(ptr);
-		sprintf(buf,
-				"Вы вычеркнули заклинание \"%s%s%s\" из списка для запоминания.\r\n",
-				kColorBoldMag, MUD::Spell(spell_id).GetCName(), kColorNrm);
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("Вы вычеркнули заклинание \"{}{}{}\" из списка для запоминания.\r\n",
+								  kColorBoldMag, MUD::Spell(spell_id).GetName(), kColorNrm), ch);
 	}
 }
 
@@ -291,7 +296,7 @@ int *MemQ_slots(CharData *ch) {
 		}
 		sloti = MUD::Class(ch->GetClass()).spells[spell_id].GetCircle() - 1;
 		if (CalcMinSpellLvl(ch, spell_id) > GetRealLevel(ch) ||
-			MUD::Class(ch->GetClass()).spells[spell_id].GetMinRemort() > GetRealRemort(ch)) {
+			MUD::Class(ch->GetClass()).spells[spell_id].GetMinRemort() > remort::GetRealRemort(ch)) {
 			GET_SPELL_MEM(ch, spell_id) = 0;
 			continue;
 		}
@@ -308,7 +313,7 @@ int *MemQ_slots(CharData *ch) {
 		if (sloti >= 0 && sloti <= 10) {
 			--slots[sloti];
 			if (slots[sloti] >= 0 && CalcMinSpellLvl(ch, q[0]->spell_id) <= GetRealLevel(ch) &&
-				MUD::Class(ch->GetClass()).spells[q[0]->spell_id].GetMinRemort() <= GetRealRemort(ch)) {
+				MUD::Class(ch->GetClass()).spells[q[0]->spell_id].GetMinRemort() <= remort::GetRealRemort(ch)) {
 				q = &(q[0]->next);
 			} else {
 				if (q == &ch->mem_queue.queue)
@@ -383,14 +388,13 @@ void forget_all_spells(CharData *ch) {
 	}
 	if (max_slot) {
 		Affect<EApply> af;
-		af.type = ESpell::kRecallSpells;
 		af.location = EApply::kNone;
 		af.modifier = 1; // номер круга, который восстанавливаем
 		//добавим 1 проход про запас, иначе неуспевает отмемиться последний круг -- аффект спадает раньше
 
-		af.duration = CalcDuration(ch, max_slot*kRecallSpellsInterval + kSecsPerPlayerAffect, 0, 0, 0, 0);
-		af.bitvector = to_underlying(EAffect::kMemorizeSpells);
-		af.battleflag = kAfPulsedec | kAfDeadkeep;
+		af.duration = CalcDuration(ch, ch, ESkill::kUndefined, max_slot*kRecallSpellsInterval + kSecsPerPlayerAffect, 0, 0, 0);
+		af.affect_type = EAffect::kMemorizeSpells;
+		af.battleflag = {kAfPulsedec, kAfDeadkeep};
 		ImposeAffect(ch, af, false, false, false, false);
 	}
 }

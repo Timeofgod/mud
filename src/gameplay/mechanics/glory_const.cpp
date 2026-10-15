@@ -3,7 +3,13 @@
 // Copyright (c) 2010 Krodo
 // Part of Bylins http://www.mud.ru
 
+#include <sstream>
 #include "glory_const.h"
+#include "utils/russian_keys.h"
+#include "utils/native_text.h"
+#include "engine/db/player_index.h"
+#include "administration/privilege.h"
+#include "utils/grammar/declensions.h"
 
 #include <list>
 #include <map>
@@ -11,7 +17,7 @@
 #include <iomanip>
 #include <vector>
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include "administration/karma.h"
 #include "utils/logger.h"
@@ -23,7 +29,7 @@
 #include "engine/core/comm.h"
 #include "engine/db/db.h"
 #include "gameplay/core/genchar.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
 #include "engine/entities/char_player.h"
 #include "glory_misc.h"
 #include "gameplay/statistics/top.h"
@@ -120,11 +126,9 @@ void glory_hide(CharData *ch,
 		 ++t_it) {
 		if (ch->get_uid() == t_it->get()->uid) {
 			if (mode == true) {
-				sprintf(buf, "Проставляю hide славы для %s", GET_NAME(ch));
-				mudlog(buf, CMP, kLvlGreatGod, SYSLOG, true);
+				mudlog(fmt::format("Проставляю hide славы для {}", GET_NAME(ch)), CMP, kLvlGreatGod, SYSLOG, true);
 			} else {
-				sprintf(buf, "Убираю hide славы для %s", GET_NAME(ch));
-				mudlog(buf, CMP, kLvlGreatGod, SYSLOG, true);
+				mudlog(fmt::format("Убираю hide славы для {}", GET_NAME(ch)), CMP, kLvlGreatGod, SYSLOG, true);
 			}
 			t_it->get()->hide = mode;
 		}
@@ -132,11 +136,11 @@ void glory_hide(CharData *ch,
 }
 
 void transfer_log(const char *format, ...) {
-	const char *filename = "../log/glory_transfer.log";
+	const auto filename = runtime_config.log_dir() + "/glory_transfer.log";
 
-	FILE *file = fopen(filename, "a");
+	FILE *file = fopen(filename.c_str(), "a");
 	if (!file) {
-		log("SYSERR: can't open %s!", filename);
+		log("SYSERR: can't open %s!", filename.c_str());
 		return;
 	}
 
@@ -183,7 +187,7 @@ void add_glory(long uid, int amount) {
 	if (d) {
 		SendMsgToChar(d->character.get(), "%sВы заслужили %d %s постоянной славы!%s\r\n",
 					  kColorGrn,
-					  amount, GetDeclensionInNumber(amount, EWhat::kPoint),
+					  amount, grammar::GetDeclensionInNumber(amount, grammar::EWhat::kPoint),
 					  kColorNrm);
 	}
 	save();
@@ -220,25 +224,26 @@ int calculate_glory_in_stats(GloryListType::const_iterator &i) {
 // * Распечатка 'слава информация'.
 void print_glory(CharData *ch, GloryListType::iterator &it) {
 	int spent = 0;
-	*buf = '\0';
+	std::string out;
 	for (auto i = it->second->stats.begin(), iend = it->second->stats.end(); i != iend; ++i) {
 		if ((i->first >= 0) && (i->first < (int) sizeof(olc_stat_name))) {
-			sprintf(buf + strlen(buf), "%-16s: +%d", olc_stat_name[i->first], i->second * stat_multi(i->first));
-			if (stat_multi(i->first) > 1)
-				sprintf(buf + strlen(buf), "(%d)", i->second);
-			strcat(buf, "\r\n");
+			out += fmt::format("{:<16}: +{}", olc_stat_name[i->first], i->second * stat_multi(i->first));
+			if (stat_multi(i->first) > 1) {
+				out += fmt::format("({})", i->second);
+			}
+			out += "\r\n";
 		} else {
 			log("Glory: некорректный номер стата %d (uid: %ld)", i->first, it->first);
 		}
 		spent = spent + 1000 * i->second + 200 * (i->second - 1);
 	}
-	sprintf(buf + strlen(buf), "Свободных очков: %d. Вложено: %d\r\n", it->second->free_glory, spent);
-	SendMsgToChar(buf, ch);
+	out += fmt::format("Свободных очков: {}. Вложено: {}\r\n", it->second->free_glory, spent);
+	SendMsgToChar(out, ch);
 }
 
 // * Показ свободной и вложенной славы у чара (glory имя).
 void print_to_god(CharData *ch, CharData *god) {
-	GloryListType::iterator it = glory_list.find(GET_UID(ch));
+	GloryListType::iterator it = glory_list.find(ch->get_uid());
 	if (it == glory_list.end()) {
 		SendMsgToChar(god, "У %s совсем не славы.\r\n", GET_PAD(ch, 1));
 		return;
@@ -324,7 +329,7 @@ std::string olc_print_stat(CharData *ch, int stat) {
 		stat_add = fmt::format("+{}", ch->desc->glory_const->stat_add[stat]);
 	}
 
-	return fmt::format("  {:<16} :  {}(+{:<5}){}  ({}{}{}) %4d ({}{}{})  {}(-{:<5})  | {:+}{}\r\n",
+	return fmt::format("  {:<17} :  {}(+{:<5}){}  ({}{}{}) {:4} ({}{}{})  {}(-{:<5})  | {}{}\r\n",
 					   olc_stat_name[stat],
 					   kColorBoldBlk, remove_stat_cost(stat, ch->desc->glory_const), kColorNrm,
 					   kColorBoldGrn, olc_del_name[stat], kColorNrm,
@@ -338,7 +343,7 @@ std::string olc_print_stat(CharData *ch, int stat) {
 // * Распечатка олц меню.
 void spend_glory_menu(CharData *ch) {
 	std::ostringstream out;
-	out << "\r\n                         -      +\r\n";
+	out << "\r\n                                  -        +\r\n";
 
 	out << olc_print_stat(ch, GLORY_STR)
 		<< olc_print_stat(ch, GLORY_DEX)
@@ -462,32 +467,32 @@ int olc_real_stat(CharData *ch, int stat) {
 }
 
 bool parse_spend_glory_menu(CharData *ch, char *arg) {
-	switch (LOWER(*arg)) {
-		case 'а': olc_del_stat(ch, GLORY_STR);
+	switch (native_text::first_char_code_lower(arg)) {
+		case rus::kA: olc_del_stat(ch, GLORY_STR);
 			break;
-		case 'б': olc_del_stat(ch, GLORY_DEX);
+		case rus::kBe: olc_del_stat(ch, GLORY_DEX);
 			break;
-		case 'г': olc_del_stat(ch, GLORY_INT);
+		case rus::kGe: olc_del_stat(ch, GLORY_INT);
 			break;
-		case 'д': olc_del_stat(ch, GLORY_WIS);
+		case rus::kDe: olc_del_stat(ch, GLORY_WIS);
 			break;
-		case 'е': olc_del_stat(ch, GLORY_CON);
+		case rus::kIe: olc_del_stat(ch, GLORY_CON);
 			break;
-		case 'ж': olc_del_stat(ch, GLORY_CHA);
+		case rus::kZhe: olc_del_stat(ch, GLORY_CHA);
 			break;
-		case 'з': olc_del_stat(ch, GLORY_HIT);
+		case rus::kZe: olc_del_stat(ch, GLORY_HIT);
 			break;
-		case 'и': olc_del_stat(ch, GLORY_SUCCESS);
+		case rus::kI: olc_del_stat(ch, GLORY_SUCCESS);
 			break;
-		case 'к': olc_del_stat(ch, GLORY_WILL);
+		case rus::kKa: olc_del_stat(ch, GLORY_WILL);
 			break;
-		case 'л': olc_del_stat(ch, GLORY_STABILITY);
+		case rus::kEl: olc_del_stat(ch, GLORY_STABILITY);
 			break;
-		case 'м': olc_del_stat(ch, GLORY_REFLEX);
+		case rus::kEm: olc_del_stat(ch, GLORY_REFLEX);
 			break;
-		case 'н': olc_del_stat(ch, GLORY_MIND);
+		case rus::kEn: olc_del_stat(ch, GLORY_MIND);
 			break;
-		case 'э': olc_del_stat(ch, GLORY_MANAREG);
+		case rus::kE: olc_del_stat(ch, GLORY_MANAREG);
 			break;
 		case 'x': olc_add_stat(ch, GLORY_BONUSPSYS);
 			break;
@@ -497,33 +502,33 @@ bool parse_spend_glory_menu(CharData *ch, char *arg) {
 			break;
 		case 'd': olc_del_stat(ch, GLORY_BONUSMAG);
 			break;
-		case 'о': olc_add_stat(ch, GLORY_STR);
+		case rus::kO: olc_add_stat(ch, GLORY_STR);
 			break;
-		case 'п': olc_add_stat(ch, GLORY_DEX);
+		case rus::kPe: olc_add_stat(ch, GLORY_DEX);
 			break;
-		case 'р': olc_add_stat(ch, GLORY_INT);
+		case rus::kEr: olc_add_stat(ch, GLORY_INT);
 			break;
-		case 'с': olc_add_stat(ch, GLORY_WIS);
+		case rus::kEs: olc_add_stat(ch, GLORY_WIS);
 			break;
-		case 'т': olc_add_stat(ch, GLORY_CON);
+		case rus::kTe: olc_add_stat(ch, GLORY_CON);
 			break;
-		case 'у': olc_add_stat(ch, GLORY_CHA);
+		case rus::kU: olc_add_stat(ch, GLORY_CHA);
 			break;
-		case 'ф': olc_add_stat(ch, GLORY_HIT);
+		case rus::kEf: olc_add_stat(ch, GLORY_HIT);
 			break;
-		case 'х': olc_add_stat(ch, GLORY_SUCCESS);
+		case rus::kHa: olc_add_stat(ch, GLORY_SUCCESS);
 			break;
-		case 'ц': olc_add_stat(ch, GLORY_WILL);
+		case rus::kTse: olc_add_stat(ch, GLORY_WILL);
 			break;
-		case 'ч': olc_add_stat(ch, GLORY_STABILITY);
+		case rus::kChe: olc_add_stat(ch, GLORY_STABILITY);
 			break;
-		case 'ш': olc_add_stat(ch, GLORY_REFLEX);
+		case rus::kSha: olc_add_stat(ch, GLORY_REFLEX);
 			break;
-		case 'щ': olc_add_stat(ch, GLORY_MIND);
+		case rus::kScha: olc_add_stat(ch, GLORY_MIND);
 			break;
-		case 'ю': olc_add_stat(ch, GLORY_MANAREG);
+		case rus::kYu: olc_add_stat(ch, GLORY_MANAREG);
 			break;
-		case 'в': {
+		case rus::kVe: {
 			// получившиеся статы
 			ch->set_str(olc_real_stat(ch, GLORY_STR));
 			ch->set_dex(olc_real_stat(ch, GLORY_DEX));
@@ -532,7 +537,7 @@ bool parse_spend_glory_menu(CharData *ch, char *arg) {
 			ch->set_con(olc_real_stat(ch, GLORY_CON));
 			ch->set_cha(olc_real_stat(ch, GLORY_CHA));
 			// обновление записи в списке славы
-			GloryListType::const_iterator it = glory_list.find(GET_UID(ch));
+			GloryListType::const_iterator it = glory_list.find(ch->get_uid());
 			if (glory_list.end() == it) {
 				log("SYSERROR : нет записи чара при выходе из олц постоянной славы name=%s (%s:%d)",
 					ch->get_name().c_str(), __FILE__, __LINE__);
@@ -569,7 +574,7 @@ bool parse_spend_glory_menu(CharData *ch, char *arg) {
 			save();
 			return 1;
 		}
-		case 'я': ch->desc->glory_const.reset();
+		case rus::kYa: ch->desc->glory_const.reset();
 			ch->desc->state = EConState::kPlaying;
 			SendMsgToChar("Редактирование прервано.\r\n", ch);
 			return 1;
@@ -584,8 +589,8 @@ const char *GLORY_CONST_FORMAT =
 	"        слава2 перевести <имя> <кол-во>\r\n";
 
 void do_spend_glory(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	GloryListType::iterator it = glory_list.find(GET_UID(ch));
-	if (glory_list.end() == it || IS_IMMORTAL(ch)) {
+	GloryListType::iterator it = glory_list.find(ch->get_uid());
+	if (glory_list.end() == it || privilege::IsImmortal(ch)) {
 		SendMsgToChar("Вам это не нужно...\r\n", ch);
 		return;
 	}
@@ -639,15 +644,11 @@ void do_spend_glory(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		int tax = int(amount / 100. * TRANSFER_FEE);
 		int total_amount = amount - tax;
 
-		remove_glory(GET_UID(ch), amount);
-		add_glory(GET_UID(vict), total_amount);
+		remove_glory(ch->get_uid(), amount);
+		add_glory(vict->get_uid(), total_amount);
 
-		snprintf(buf, kMaxStringLength,
-				 "Transfer %d const glory from %s", total_amount, GET_NAME(ch));
-		AddKarma(vict, buf, "командой");
-
-		snprintf(buf, kMaxStringLength, "Transfer %d const glory to %s", amount, GET_NAME(vict));
-		AddKarma(ch, buf, "командой");
+		AddKarma(vict, fmt::format("Transfer {} const glory from {}", total_amount, GET_NAME(ch)), "командой");
+		AddKarma(ch, fmt::format("Transfer {} const glory to {}", amount, GET_NAME(vict)), "командой");
 
 		total_charge += tax;
 		transfer_log("%s -> %s transfered %d (%d tax)", GET_NAME(ch), GET_NAME(vict), total_amount, tax);
@@ -739,7 +740,7 @@ int remove_glory(long uid, int amount) {
 }
 
 bool reset_glory(CharData *ch) {
-	GloryListType::iterator i = glory_list.find(GET_UID(ch));
+	GloryListType::iterator i = glory_list.find(ch->get_uid());
 	if (glory_list.end() != i) {
 		glory_list.erase(i);
 		save();
@@ -762,10 +763,10 @@ void do_glory(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 	enum { SHOW_GLORY, ADD_GLORY, SUB_GLORY, RESET_GLORY };
 
-	char num[kMaxInputLength];
+	char name[kMaxInputLength], num[kMaxInputLength];
 	int mode = 0;
 
-	char *reason = two_arguments(argument, arg, num);
+	char *reason = two_arguments(argument, name, num);
 	skip_spaces(&reason);
 
 	if (!*num) {
@@ -785,14 +786,14 @@ void do_glory(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		return;
 	}
 
-	CharData *vict = get_player_vis(ch, arg, EFind::kCharInWorld);
+	CharData *vict = target_resolver::FindPlayerVis(ch, name);
 	if (vict && vict->desc && vict->desc->state == EConState::kGloryConst) {
 		SendMsgToChar("Персонаж в данный момент редактирует свою славу.\r\n", ch);
 		return;
 	}
 	Player t_vict; // TODO: мутно
 	if (!vict) {
-		if (LoadPlayerCharacter(arg, &t_vict, ELoadCharFlags::kFindId) < 0) {
+		if (LoadPlayerCharacter(name, &t_vict, ELoadCharFlags::kFindId) < 0) {
 			SendMsgToChar("Такого персонажа не существует.\r\n", ch);
 			return;
 		}
@@ -802,45 +803,48 @@ void do_glory(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	switch (mode) {
 		case ADD_GLORY: {
 			int amount = atoi((num + 1));
-			add_glory(GET_UID(vict), amount);
+			add_glory(vict->get_uid(), amount);
 			SendMsgToChar(ch, "%s добавлено %d у.е. постоянной славы (Всего: %d у.е.).\r\n",
-						  GET_PAD(vict, 2), amount, get_glory(GET_UID(vict)));
+						  GET_PAD(vict, 2), amount, get_glory(vict->get_uid()));
 			// запись в карму, логи
-			sprintf(buf, "(GC) %s sets +%d const glory to %s.", GET_NAME(ch), amount, GET_NAME(vict));
-			mudlog(buf, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
-			imm_log("%s", buf);
-			sprintf(buf, "Change const glory +%d by %s", amount, GET_NAME(ch));
-			AddKarma(vict, buf, reason);
-			GloryMisc::add_log(mode, amount, std::string(buf), std::string(reason), vict);
+			const std::string log_line =
+				fmt::format("(GC) {} sets +{} const glory to {}.", GET_NAME(ch), amount, GET_NAME(vict));
+			mudlog(log_line, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+			imm_log("%s", log_line.c_str());
+			const std::string karma_line = fmt::format("Change const glory +{} by {}", amount, GET_NAME(ch));
+			AddKarma(vict, karma_line, reason);
+			GloryMisc::add_log(mode, amount, karma_line, std::string(reason), vict);
 			break;
 		}
 		case SUB_GLORY: {
-			int amount = remove_glory(GET_UID(vict), atoi((num + 1)));
+			int amount = remove_glory(vict->get_uid(), atoi((num + 1)));
 			if (amount <= 0) {
 				SendMsgToChar(ch, "У %s нет свободной постоянной славы.\r\n", GET_PAD(vict, 1));
 				break;
 			}
 			SendMsgToChar(ch, "У %s вычтено %d у.е. постоянной славы (Всего: %d у.е.).\r\n",
-						  GET_PAD(vict, 1), amount, get_glory(GET_UID(vict)));
+						  GET_PAD(vict, 1), amount, get_glory(vict->get_uid()));
 			// запись в карму, логи
-			sprintf(buf, "(GC) %s sets -%d const glory to %s.", GET_NAME(ch), amount, GET_NAME(vict));
-			mudlog(buf, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
-			imm_log("%s", buf);
-			sprintf(buf, "Change const glory -%d by %s", amount, GET_NAME(ch));
-			AddKarma(vict, buf, reason);
-			GloryMisc::add_log(mode, amount, std::string(buf), std::string(reason), vict);
+			const std::string log_line =
+				fmt::format("(GC) {} sets -{} const glory to {}.", GET_NAME(ch), amount, GET_NAME(vict));
+			mudlog(log_line, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+			imm_log("%s", log_line.c_str());
+			const std::string karma_line = fmt::format("Change const glory -{} by {}", amount, GET_NAME(ch));
+			AddKarma(vict, karma_line, reason);
+			GloryMisc::add_log(mode, amount, karma_line, std::string(reason), vict);
 			break;
 		}
 		case RESET_GLORY: {
 			if (reset_glory(vict)) {
 				SendMsgToChar(ch, "%s - очищена запись постоянной славы.\r\n", vict->get_name().c_str());
 				// запись в карму, логи
-				sprintf(buf, "(GC) %s reset const glory to %s.", GET_NAME(ch), GET_NAME(vict));
-				mudlog(buf, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
-				imm_log("%s", buf);
-				sprintf(buf, "Reset stats and const glory by %s", GET_NAME(ch));
-				AddKarma(vict, buf, reason);
-				GloryMisc::add_log(mode, 0, std::string(buf), std::string(reason), vict);
+				const std::string log_line =
+					fmt::format("(GC) {} reset const glory to {}.", GET_NAME(ch), GET_NAME(vict));
+				mudlog(log_line, NRM, MAX(kLvlGod, GET_INVIS_LEV(ch)), SYSLOG, true);
+				imm_log("%s", log_line.c_str());
+				const std::string karma_line = fmt::format("Reset stats and const glory by {}", GET_NAME(ch));
+				AddKarma(vict, karma_line, reason);
+				GloryMisc::add_log(mode, 0, karma_line, std::string(reason), vict);
 			} else {
 				SendMsgToChar(ch, "%s - запись постоянной славы и так пустая.\r\n", vict->get_name().c_str());
 			}
@@ -853,7 +857,6 @@ void do_glory(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 void save() {
 	pugi::xml_document doc;
-	doc.append_attribute("encoding") = "koi8-r";
 	doc.append_child().set_name("glory_list");
 	pugi::xml_node char_list = doc.child("glory_list");
 
@@ -888,28 +891,31 @@ void save() {
 	spent_node.set_name("total_spent");
 	spent_node.append_attribute("amount") = total_spent;
 
-	doc.save_file(LIB_PLRSTUFF"glory_const.xml");
+	// Граница записи: XML лежит в нативной кодировке, пишем как есть. Чтение
+	// (read_data_file) принимает и старый KOI8-R (issue #3787).
+	std::ostringstream xml;
+	doc.save(xml, "\t", pugi::format_default, pugi::encoding_utf8);
+	native_text::write_file(LIB_USERDATA"glory_const.xml", xml.str());
 }
 
 void load() {
 	int ver = 0;
 	pugi::xml_document doc;
-	pugi::xml_parse_result result = doc.load_file(LIB_PLRSTUFF"glory_const.xml");
+	// Файл лежит на диске в KOI8-R; читаем через границу кодировки, а разбираем уже
+	// буфер в нативной кодировке движка (issue #3681). Под KOI8-R это тождество.
+	const std::string xml_glory_const = native_text::read_data_file(LIB_USERDATA"glory_const.xml");
+	pugi::xml_parse_result result = doc.load_buffer(xml_glory_const.data(), xml_glory_const.size());
 	if (!result) {
-		snprintf(buf, kMaxStringLength, "SYSERR: error reading glory_const.xml: %s", result.description());
-		perror(buf);
+		perror(fmt::format("WARNING: glory_const.xml not found or unreadable ({}), skipping (non-fatal)",
+						   result.description()).c_str());
 		return;
 	}
 	pugi::xml_node char_list = doc.child("glory_list");
 	if (char_list.attribute("version")) {
 		ver = std::stoi(char_list.attribute("version").value(), nullptr, 10);
 		if (ver > cur_ver) {
-			snprintf(buf,
-					 kMaxStringLength,
-					 "SYSERR: error reading glory_const.xml: unsupported version: %d, current version: %d",
-					 ver,
-					 cur_ver);
-			perror(buf);
+			perror(fmt::format("SYSERR: error reading glory_const.xml: unsupported version: {}, current version: {}",
+							   ver, cur_ver).c_str());
 			return;
 		}
 	}
@@ -986,7 +992,7 @@ void load() {
 }
 
 void set_stats(CharData *ch) {
-	GloryListType::iterator i = glory_list.find(GET_UID(ch));
+	GloryListType::iterator i = glory_list.find(ch->get_uid());
 	if (glory_list.end() == i) {
 		return;
 	}
@@ -1006,14 +1012,14 @@ void set_stats(CharData *ch) {
 				break;
 			case G_CHA: ch->inc_cha(k->second);
 				break;
-			default: log("Glory: некорректный номер стата %d (uid: %ld)", k->first, GET_UID(ch));
+			default: log("Glory: некорректный номер стата %d (uid: %ld)", k->first, ch->get_uid());
 		}
 	}
 }
 
 // * Количество вложенных статов (только из числа 6 основных).
 int main_stats_count(CharData *ch) {
-	GloryListType::iterator i = glory_list.find(GET_UID(ch));
+	GloryListType::iterator i = glory_list.find(ch->get_uid());
 	if (glory_list.end() == i) {
 		return 0;
 	}
@@ -1054,7 +1060,7 @@ void add_total_spent(int amount) {
 }
 
 void apply_modifiers(CharData *ch) {
-	auto it = glory_list.find(GET_UID(ch));
+	auto it = glory_list.find(ch->get_uid());
 	if (it == glory_list.end()) {
 		return;
 	}
@@ -1098,7 +1104,7 @@ void PrintGloryChart(CharData *ch) {
 	std::stringstream hide;
 
 	bool print_hide = false;
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		print_hide = true;
 		hide << "\r\nПерсонажи, исключенные из списка: ";
 	}
@@ -1123,7 +1129,7 @@ void PrintGloryChart(CharData *ch) {
 		 t_it != playerGloryList.end() && i < kPlayerChartSize; ++t_it, ++i) {
 
 		std::string name = GetNameByUnique(t_it->get()->uid);
-		name[0] = UPPER(name[0]);
+		native_text::capitalize_first(name);
 		if (name.length() == 0) {
 			name = "*скрыто*";
 		}

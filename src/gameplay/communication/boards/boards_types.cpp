@@ -1,4 +1,5 @@
 #include "boards_types.h"
+#include "utils/native_text.h"
 
 #include "boards_constants.h"
 #include "utils/logger.h"
@@ -57,6 +58,13 @@ void Board::Load() {
 			std::getline(file, message->subject, '~');
 			ReadEndString(file);
 			std::getline(file, message->text, '~');
+
+			// Доски лежат на диске в KOI8-R и читаются потоком, минуя FBFILE, поэтому границу
+			// кодировки проходим здесь -- по текстовым полям (issue #3681). Под KOI8-R это
+			// тождество.
+			message->author = native_text::from_disk_line(message->author.c_str());
+			message->subject = native_text::from_disk_line(message->subject.c_str());
+			message->text = native_text::from_disk_line(message->text.c_str());
 
 			// не помешает глянуть че мы там залоадили
 			if (message->author.empty()
@@ -131,29 +139,30 @@ void Board::Save() {
 		return;
 	}
 	std::ofstream file(file_.c_str());
-	if (chmod(file_.c_str(), S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP) < 0) {
-		std::stringstream ss;
-		ss << "Error chmod file: " << file_.c_str() << " (" << __FILE__ << " "<< __func__ << "  "<< __LINE__ << ")";
-		mudlog(ss.str(), BRF, kLvlGod, SYSLOG, true);
-	}
 	if (!file.is_open()) {
 		log("Error open file: %s! (%s %s %d)", file_.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
-	file << "Type: " << type_ << " "
-		 << "Clan: " << clan_rent_ << " "
-		 << "PersUID: " << pers_unique_ << " "
-		 << "PersName: " << (pers_name_.empty() ? "none" : pers_name_) << "\n";
+	// Граница записи: доски лежат в нативной кодировке, поэтому текст уходит на диск как есть.
+	// Чтение (from_disk_line) принимает и старый KOI8-R, так что не переведённые доски
+	// читаются по-прежнему (issue #3787).
+	std::ostringstream out;
+	out << "Type: " << type_ << " "
+		<< "Clan: " << clan_rent_ << " "
+		<< "PersUID: " << pers_unique_ << " "
+		<< "PersName: " << (pers_name_.empty() ? "none" : pers_name_) << "\n";
 	for (MessageListType::const_reverse_iterator message = messages.rbegin(); message != messages.rend(); ++message) {
-		file << "Message: " << (*message)->num << "\n"
-			 << (*message)->author << " "
-			 << (*message)->unique << " "
-			 << (*message)->level << " "
-			 << (*message)->date << " "
-			 << (*message)->rank << "\n"
-			 << (*message)->subject << "~\n"
-			 << (*message)->text << "~\n";
+		out << "Message: " << (*message)->num << "\n"
+			<< (*message)->author << " "
+			<< (*message)->unique << " "
+			<< (*message)->level << " "
+			<< (*message)->date << " "
+			<< (*message)->rank << "\n"
+			<< (*message)->subject << "~\n"
+			<< (*message)->text << "~\n";
 	}
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 	file.close();
 }
 

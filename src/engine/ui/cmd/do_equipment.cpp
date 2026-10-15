@@ -5,21 +5,24 @@
 \brief description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
+#include "utils/grammar/declensions.h"
 #include "engine/ui/color.h"
 #include "gameplay/mechanics/sight.h"
 #include "engine/core/utils_char_obj.inl"
+#include "gameplay/affects/affect_messages.h"
 
 void DoEquipment(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	int i, found = 0;
 	skip_spaces(&argument);
-
 	SendMsgToChar("На вас надето:\r\n", ch);
 	for (i = 0; i < EEquipPos::kNumEquipPos; i++) {
 		if (GET_EQ(ch, i)) {
-			if (CAN_SEE_OBJ(ch, GET_EQ(ch, i))) {
+			if (sight::CanSeeObj(ch, GET_EQ(ch, i))) {
 				SendMsgToChar(where[i], ch);
-				show_obj_to_char(GET_EQ(ch, i), ch, 1, true, 1);
+				sight::show_obj_to_char(GET_EQ(ch, i), ch, 1, true, 1);
 				found = true;
 			} else {
 				SendMsgToChar(where[i], ch);
@@ -45,14 +48,13 @@ void DoEquipment(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 						continue;
 				}
 				SendMsgToChar(where[i], ch);
-				sprintf(buf, "%s[ Ничего ]%s\r\n", kColorBoldBlk, kColorNrm);
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("{}[ Ничего ]{}\r\n", kColorBoldBlk, kColorNrm), ch);
 				found = true;
 			}
 		}
 	}
 	if (!found) {
-		if (IS_FEMALE(ch)) {
+		if (IsFemale(ch)) {
 			SendMsgToChar("Костюм Евы вам очень идет :)\r\n", ch);
 		} else {
 			SendMsgToChar(" Вы голы, аки сокол.\r\n", ch);

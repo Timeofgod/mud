@@ -6,6 +6,9 @@
 #include "bonus_command_parser.h"
 #include "engine/ui/modify.h"
 #include "engine/entities/char_player.h"
+#include "engine/db/global_objects.h"
+#include "utils/native_text.h"
+#include "gameplay/core/remort.h"
 
 namespace Bonus {
 const size_t MAXIMUM_BONUS_RECORDS = 10;
@@ -40,7 +43,7 @@ bool can_get_bonus_exp(CharData *ch) {
 	}
 
 	const short MAX_REMORT_FOR_BONUS = 50;
-	return GetRealRemort(ch) <= MAX_REMORT_FOR_BONUS;
+	return remort::GetRealRemort(ch) <= MAX_REMORT_FOR_BONUS;
 }
 
 void setup_bonus(const int duration, const int multilpier, EBonusType type) {
@@ -57,7 +60,8 @@ void bonus_log_add(const std::string &name) {
 	utils::EraseAll(buf, "\r\n");
 	bonus_log.push_back(buf);
 
-	std::ofstream fout("../log/bonus.log", std::ios_base::app);
+	const auto bonus_log_file = runtime_config.log_dir() + "/bonus.log";
+	std::ofstream fout(bonus_log_file, std::ios_base::app);
 	fout << buf << "\r\n";
 	fout.close();
 }
@@ -201,14 +205,18 @@ bool is_bonus_active() {
 
 // загружает лог бонуса из файла
 void bonus_log_load() {
-	std::ifstream fin("../log/bonus.log");
+	const auto bonus_log_file = runtime_config.log_dir() + "/bonus.log";
+	std::ifstream fin(bonus_log_file);
 	if (!fin.is_open()) {
 		return;
 	}
 	std::string temp_buf;
 	bonus_log.clear();
 	while (std::getline(fin, temp_buf)) {
-		bonus_log.push_back(temp_buf);
+		// Граница чтения: в строке дата через rustime и имя игрока, то есть русский текст.
+		// Записывается он нативным, а читался дисковыми байтами -- и показывался мусором
+		// всё, что осталось от старой сборки (issue #3787).
+		bonus_log.push_back(native_text::from_disk_line(temp_buf.c_str()));
 	}
 	fin.close();
 }

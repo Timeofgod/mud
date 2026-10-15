@@ -1,0 +1,24 @@
+name: macOS
+
+on:
+  workflow_call:
+
+jobs:
+  clang:
+    name: Clang / Base
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install openssl curl expat googletest meson ninja pkgconf
+
+      - name: Configure meson
+        run: meson setup build --wipe -Dbuild_profile=release --unity=on -Dunity_size=45
+
+      - name: Build
+        run: meson compile -C build tests
+
+      - name: Run tests
+        run: meson test -C build

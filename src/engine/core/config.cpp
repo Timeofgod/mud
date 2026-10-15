@@ -15,17 +15,33 @@
 #define __CONFIG_C__
 
 #include "config.h"
+#include "administration/privilege.h"
+#include "utils/utils_encoding.h"
+#include "common_messages.h"
+#include "engine/structs/msg_container.h"
+#include "engine/structs/info_container.h"   // kUndefinedVnum
+#include "utils/timestamp.h"
 
+#include "third_party_libs/pugixml/pugixml.h"
+
+#include "gameplay/core/remort.h"
 #include "gameplay/communication/boards/boards_changelog_loaders.h"
 #include "gameplay/communication/boards/boards_constants.h"
 #include "engine/entities/char_data.h"
 #include "engine/structs/meta_enum.h"
 
+using utils::NowTs;
+
+#include "engine/observability/provider.h"
+
 #if CIRCLE_UNIX
+using ETelemetryLogMode = RuntimeConfiguration::ETelemetryLogMode;
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include <iostream>
+#include <cstdlib>
 
 #define YES        1
 #define NO        0
@@ -47,7 +63,6 @@
  * efficency of doing it the other way.
  *
  */
-long GetExpUntilNextLvl(CharData *ch, int level);
 
 // GAME PLAY OPTIONS
 
@@ -77,10 +92,8 @@ int dts_are_dumps = YES;
  */
 int load_into_inventory = YES;
 
-const char *OK = "Ладушки.\r\n";
-const char *NOPERSON = "Нет такого создания в этом мире.\r\n";
-const char *NOEFFECT = "Ваши потуги оказались напрасными.\r\n";
-const char *nothing_string = "ничего";
+// issue.common-msg: OK / NOPERSON / nothing_string (and SIELENCE / SOUNDPROOF from constants.cpp) moved
+// to cfg/messages/ru/common_msg.xml; see CommonMsg() / CommonMessagesLoader below.
 
 /*
  * You can define or not define TRACK_THOUGH_DOORS, depending on whether
@@ -103,10 +116,10 @@ int free_rent = YES;
 
 // receptionist's surcharge on top of item costs
 int min_rent_cost(CharData *ch) {
-	if ((GetRealLevel(ch) < 15) && (GetRealRemort(ch) == 0))
+	if ((GetRealLevel(ch) < 15) && (remort::GetRealRemort(ch) == 0))
 		return (0);
 	else
-		return ((GetRealLevel(ch) + 30 * GetRealRemort(ch)) * 2);
+		return ((GetRealLevel(ch) + 30 * remort::GetRealRemort(ch)) * 2);
 }
 
 // Lifetime of crashfiles, forced-rent and idlesave files in days
@@ -254,54 +267,13 @@ int siteok_everyone = true;
 
 int nameserver_is_slow = YES;
 
-const char *MENU = "\r\n"
-				   "0) Отсоединиться.\r\n"
-				   "1) Начать игру.\r\n"
-				   "2) Ввести описание вашего персонажа.\r\n"
-				   "3) Узнать историю.\r\n"
-				   "4) Изменить пароль.\r\n"
-				   "5) Удалить персонажа.\r\n"
-				   "6) Изменить параметры персонажа.\r\n"
-				   "7) Включить/выключить режим слепого игрока.\r\n"
-				   "8) Посмотреть всех персонажей на данном email'e.\r\n"
-				   "\r\n"
-				   "   Чего ваша душа желает? ";
 
-const char *WELC_MESSG =
-	"\r\n"
-	"  Добро пожаловать на землю Киевскую, богатую историей и самыми невероятными\r\n"
-	"приключениями. Возможно, вам они понравятся, и вы станете в один ряд с героями\r\n" "давно минувших дней.\r\n\r\n";
 
-const char *START_MESSG =
-	" Буде здравы, странник.\r\n"
-	" Вот и ты стал на тропу увлекательных приключений, которые, надеемся, ждут\r\n"
-	"тебя в нашем мире.\r\n"
-	" Твоя задача непроста, но надеемся, что ты сумеешь достойно решить ее.\r\n"
-	" В добрый час, путник, и да будет скатертью тебе дорога...\r\n" "\r\n";
-
-int max_exp_gain_pc(CharData *ch) {
-	int result = 1;
-	if (!ch->IsNpc()) {
-		int max_per_lev = GetExpUntilNextLvl(ch, ch->GetLevel() + 1) - GetExpUntilNextLvl(ch, ch->GetLevel() + 0); //тут берем левел без плюсов от стафа
-		result = max_per_lev / (10 + GetRealRemort(ch));
-	}
-	return result;
-}
-
-int max_exp_loss_pc(CharData *ch) {
-	return (ch->IsNpc() ? 1 : (GetExpUntilNextLvl(ch, GetRealLevel(ch) + 1) - GetExpUntilNextLvl(ch, GetRealLevel(ch) + 0)) / 3);
-}
-
-int calc_loadroom(const CharData *ch, int bplace_mode /*= BIRTH_PLACE_UNDEFINED*/) {
-	if (IS_IMMORTAL(ch)) {
+int calc_loadroom(const CharData *ch) {
+	if (privilege::IsImmortal(ch)) {
 		return (immort_start_room);
 	} else if (ch->IsFlagged(EPlrFlag::kFrozen)) {
 		return (frozen_start_room);
-	} else {
-		const int loadroom = Birthplaces::GetLoadRoom(bplace_mode);
-		if (loadroom != kBirthplaceUndefined) {
-			return loadroom;
-		}
 	}
 
 	return (mortal_start_room);
@@ -394,9 +366,9 @@ void RuntimeConfiguration::setup_converters() {
 		// set up converter
 		const auto &encoding = log_stderr();
 		if ("cp1251" == encoding) {
-			m_syslog_converter = &koi_to_win;
+			m_syslog_converter = &codepages::koi_to_win;
 		} else if ("alt" == encoding) {
-			m_syslog_converter = static_cast<void (*)(char *, int)>(koi_to_alt);
+			m_syslog_converter = static_cast<void (*)(char *, int)>(codepages::koi_to_alt);
 		}
 	}
 }
@@ -459,11 +431,23 @@ void RuntimeConfiguration::load_features_configuration(const pugi::xml_node *roo
 	if (msdp) {
 		load_msdp_configuration(&msdp);
 	}
+
+	// issue.3678-affect-timer: <features><offline_affect_aging>true</offline_affect_aging>
+	const auto offline_aging = features.child("offline_affect_aging");
+	if (offline_aging) {
+		const auto v = offline_aging.child_value();
+		m_offline_affect_aging = (v && 0 == strcmp("true", v));
+	}
 }
 
 void RuntimeConfiguration::setup_logs() {
 	mkdir("log", 0700);
 	mkdir("log/perslog", 0700);
+
+	char abs_path[4096];
+	if (getcwd(abs_path, sizeof(abs_path))) {
+		m_log_dir = std::string(abs_path) + "/log";
+	}
 
 	for (int i = 0; i < 1 + LAST_LOG; ++i) {
 		auto stream = static_cast<EOutputStream>(i);
@@ -475,20 +459,20 @@ void RuntimeConfiguration::setup_logs() {
 
 		if (logs(stream).filename().empty()) {
 			handle(stream, stderr);
-			puts("Using file descriptor for logging.");
+			printf("[%s] Using file descriptor for logging.\n", NowTs().c_str());
 			continue;
 		}
 
 		if (!runtime_config.open_log(stream))    //s_fp
 		{
-			puts("SYSERR: Couldn't open anything to log to, giving up.");
+			printf("[%s] SYSERR: Couldn't open anything to log to, giving up.\n", NowTs().c_str());
 			exit(1);
 		}
 	}
 
 	setup_converters();
 
-	printf("Bylins server will use %schronous output into syslog file.\n",
+	printf("[%s] Bylins server will use %schronous output into syslog file.\n", NowTs().c_str(),
 		   output_thread() ? "asyn" : "syn");
 }
 
@@ -564,6 +548,64 @@ void RuntimeConfiguration::load_statistics_configuration(const pugi::xml_node *r
 	}
 
 	m_statistics = StatisticsConfiguration(host, port);
+}
+
+void RuntimeConfiguration::load_thread_pools_configuration(const pugi::xml_node *root) {
+	// Single section governs every worker pool:
+	//   <thread_pools>
+	//     <loader>N</loader>   -- world YAML parsing at boot (0 = all cores)
+	//     <savers>N</savers>   -- background clan-chest saving  (0 = half the cores)
+	//   </thread_pools>
+	const auto node = root->child("thread_pools");
+	if (node) {
+		const char *loader = node.child_value("loader");
+		if (loader && *loader) {
+			m_thread_pools_loader = static_cast<size_t>(std::strtoul(loader, nullptr, 10));
+		}
+		const char *savers = node.child_value("savers");
+		if (savers && *savers) {
+			m_thread_pools_savers = static_cast<size_t>(std::strtoul(savers, nullptr, 10));
+		}
+	}
+
+	// MUD_WORKERS environment variable overrides every pool at once (handy for
+	// quick experiments without editing the config file).
+	const char *env = std::getenv("MUD_WORKERS");
+	if (env) {
+		const size_t n = static_cast<size_t>(std::strtoul(env, nullptr, 10));
+		if (n > 0 && n <= 256) {
+			m_thread_pools_loader = n;
+			m_thread_pools_savers = n;
+		}
+	}
+}
+
+void RuntimeConfiguration::load_world_sources_configuration(const pugi::xml_node *root) {
+	// <world_loader>
+	//   <sources>          -- order defines priority (first == highest)
+	//     <yaml/>
+	//     <sqlite/>
+	//   </sources>
+	// </world_loader>
+	// Each child element names a backend ("yaml"/"sqlite"/"legacy"). When the
+	// block is absent or empty the engine keeps the compile-time default single
+	// source, so existing single-format setups are unaffected.
+	m_world_sources.clear();
+
+	const auto world_loader = root->child("world_loader");
+	if (!world_loader) {
+		return;
+	}
+	const auto sources = world_loader.child("sources");
+	if (!sources) {
+		return;
+	}
+	for (pugi::xml_node child = sources.first_child(); child; child = child.next_sibling()) {
+		if (child.type() != pugi::node_element) {
+			continue;
+		}
+		m_world_sources.emplace_back(child.name());
+	}
 }
 
 typedef std::map<EOutputStream, std::string> EOutputStream_name_by_value_t;
@@ -669,7 +711,7 @@ const std::string &NAME_BY_ITEM<CLogInfo::EMode>(const CLogInfo::EMode item) {
 	return EMode_name_by_value.at(item);
 }
 
-const char *RuntimeConfiguration::CONFIGURATION_FILE_NAME = "lib/misc/configuration.xml";
+const char *RuntimeConfiguration::CONFIGURATION_FILE_NAME = "cfg/configuration.xml";
 
 const RuntimeConfiguration::logs_t LOGS({
 											CLogInfo("syslog", "СИСТЕМНЫЙ"),
@@ -690,7 +732,16 @@ RuntimeConfiguration::RuntimeConfiguration() :
 	m_msdp_disabled(false),
 	m_msdp_debug(false),
 	m_changelog_file_name(Boards::constants::CHANGELOG_FILE_NAME),
-	m_changelog_format(Boards::constants::loader_formats::GIT) {
+	m_changelog_format(Boards::constants::loader_formats::GIT),
+	m_telemetry_enabled(false),
+	m_telemetry_metrics_endpoint("http://localhost:4318/v1/metrics"),
+	m_telemetry_traces_endpoint("http://localhost:4318/v1/traces"),
+	m_telemetry_logs_endpoint("http://localhost:4318/v1/logs"),
+	m_telemetry_service_name("bylins-mud"),
+	m_telemetry_service_version("1.0.0"),
+	m_telemetry_log_mode(ETelemetryLogMode::kFileOnly),
+	m_thread_pools_loader(0),
+	m_thread_pools_savers(0) {
 }
 
 void RuntimeConfiguration::load_from_file(const char *filename) {
@@ -710,12 +761,21 @@ void RuntimeConfiguration::load_from_file(const char *filename) {
 		load_boards_configuration(&root);
 		load_external_triggers(&root);
 		load_statistics_configuration(&root);
+		load_telemetry_configuration_impl(&root);
+		load_telemetry_configuration(&root);
+		load_thread_pools_configuration(&root);
+		load_world_sources_configuration(&root);
+#ifdef ENABLE_ADMIN_API
+		load_admin_api_configuration(&root);
+#endif
 	}
 	catch (const std::exception &e) {
-		std::cerr << "Error when loading configuration file " << filename << ": " << e.what() << "\r\n";
+		std::cerr << "ERROR: Failed to load configuration file " << filename << ": " << e.what() << "\r\n";
+		std::cerr << "WARNING: Running with default configuration settings. Thread pools will use hardware_concurrency().\r\n";
 	}
 	catch (...) {
-		std::cerr << "Unexpected error when loading configuration file " << filename << "\r\n";
+		std::cerr << "ERROR: Unexpected error when loading configuration file " << filename << "\r\n";
+		std::cerr << "WARNING: Running with default configuration settings.\r\n";
 	}
 }
 
@@ -746,8 +806,8 @@ bool CLogInfo::open() {
 		setvbuf(handle, m_buffer, buffered(), BUFFER_SIZE);
 
 		m_handle = handle;
-		printf("Using log file '%s' with %s buffering. Opening in %s mode.\n",
-			   filename().c_str(),
+		printf("[%s] Using log file '%s' with %s buffering. Opening in %s mode.\n",
+			   NowTs().c_str(), filename().c_str(),
 			   NAME_BY_ITEM(buffered()).c_str(),
 			   NAME_BY_ITEM(this->mode()).c_str());
 		return true;
@@ -760,4 +820,193 @@ bool CLogInfo::open() {
 
 RuntimeConfiguration runtime_config;
 
+void RuntimeConfiguration::load_telemetry_configuration_impl(const pugi::xml_node *root) {
+	const auto telemetry = root->child("telemetry");
+	if (!telemetry) {
+		return;
+	}
+
+	const auto enabled = telemetry.child("enabled");
+	if (enabled) {
+		const std::string value = enabled.child_value();
+		m_telemetry_enabled = (value == "true" || value == "1");
+	}
+
+	const auto otlp = telemetry.child("otlp");
+	if (otlp) {
+		const auto metrics = otlp.child("metrics");
+		if (metrics) {
+			const auto endpoint = metrics.child("endpoint");
+			if (endpoint) {
+				m_telemetry_metrics_endpoint = endpoint.child_value();
+			}
+		}
+		
+		const auto traces = otlp.child("traces");
+		if (traces) {
+			const auto endpoint = traces.child("endpoint");
+			if (endpoint) {
+				m_telemetry_traces_endpoint = endpoint.child_value();
+			}
+		}
+		
+		const auto logs_otlp = otlp.child("logs_otlp");
+		if (logs_otlp) {
+			const auto endpoint = logs_otlp.child("endpoint");
+			if (endpoint) {
+				m_telemetry_logs_endpoint = endpoint.child_value();
+			}
+		}
+	}
+
+	const auto service = telemetry.child("service");
+	if (service) {
+		const auto name = service.child("name");
+		if (name) {
+			m_telemetry_service_name = name.child_value();
+		}
+		const auto version = service.child("version");
+		if (version) {
+			m_telemetry_service_version = version.child_value();
+		}
+	}
+
+	const auto logs = telemetry.child("logs");
+	if (logs) {
+		const auto mode = logs.child("mode");
+		if (mode) {
+			const std::string mode_str = mode.child_value();
+			if (mode_str == "file-only") {
+				m_telemetry_log_mode = ETelemetryLogMode::kFileOnly;
+			} else if (mode_str == "otel-only") {
+				m_telemetry_log_mode = ETelemetryLogMode::kOtelOnly;
+			} else if (mode_str == "duplicate") {
+				m_telemetry_log_mode = ETelemetryLogMode::kDuplicate;
+			}
+		}
+	}
+}
+
+void RuntimeConfiguration::load_telemetry_configuration(const pugi::xml_node *) {
+	// OtelProvider is initialized later via setup_telemetry(port)
+	// once the game port is known from command-line arguments.
+}
+
+void RuntimeConfiguration::setup_telemetry(int port) {
+	if (!m_telemetry_enabled) {
+		return;
+	}
+
+	// Interpolate variables in service name: ${port}, ${host}, ${version}
+	char hostname[256] = "unknown";
+	gethostname(hostname, sizeof(hostname));
+
+	auto replace_all = [](std::string str, const std::string &var, const std::string &val) {
+		std::string::size_type pos;
+		while ((pos = str.find(var)) != std::string::npos) {
+			str.replace(pos, var.size(), val);
+		}
+		return str;
+	};
+
+	std::string name = m_telemetry_service_name;
+	name = replace_all(name, "${port}", std::to_string(port));
+	name = replace_all(name, "${host}", hostname);
+	name = replace_all(name, "${version}", m_telemetry_service_version);
+
+	observability::OtelProvider::Instance().Initialize(
+		m_telemetry_metrics_endpoint,
+		m_telemetry_traces_endpoint,
+		m_telemetry_logs_endpoint,
+		name,
+		m_telemetry_service_version);
+}
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :
+
+#ifdef ENABLE_ADMIN_API
+void RuntimeConfiguration::load_admin_api_configuration(const pugi::xml_node *root) {
+	const auto admin_api = root->child("admin_api");
+	if (!admin_api) {
+		return;
+	}
+
+	const auto enabled = admin_api.child("enabled");
+	if (enabled) {
+		const std::string value = enabled.child_value();
+		m_admin_api_enabled = (value == "true" || value == "1" || value == "yes");
+	}
+
+	const auto socket_path = admin_api.child("socket_path");
+	if (socket_path) {
+		m_admin_socket_path = socket_path.child_value();
+	}
+
+	const auto require_auth = admin_api.child("require_auth");
+	if (require_auth) {
+		const std::string value = require_auth.child_value();
+		m_admin_require_auth = (value == "true" || value == "1" || value == "yes");
+	}
+
+	const auto max_connections = admin_api.child("max_connections");
+	if (max_connections) {
+		m_admin_max_connections = atoi(max_connections.child_value());
+		if (m_admin_max_connections < 1) {
+			m_admin_max_connections = 1;
+		}
+	}
+}
+#endif
+
+// --- issue.common-msg: shared engine messages (cfg/messages/ru/common_msg.xml) ----------------------
+namespace {
+const std::map<ECommonMsg, std::string> kCommonMsgNames{
+		{ECommonMsg::kUndefined, "kUndefined"},
+		{ECommonMsg::kSilenced, "kSilenced"},
+		{ECommonMsg::kSoundproof, "kSoundproof"},
+		{ECommonMsg::kOk, "kOk"},
+		{ECommonMsg::kNoPerson, "kNoPerson"},
+		{ECommonMsg::kNothing, "kNothing"},
+		{ECommonMsg::kBrokenScales, "kBrokenScales"},
+		{ECommonMsg::kMenuExit, "kMenuExit"},
+		{ECommonMsg::kMenuEnterGame, "kMenuEnterGame"},
+		{ECommonMsg::kMenuDescription, "kMenuDescription"},
+		{ECommonMsg::kMenuHistory, "kMenuHistory"},
+		{ECommonMsg::kMenuChangePassword, "kMenuChangePassword"},
+		{ECommonMsg::kMenuDelete, "kMenuDelete"},
+		{ECommonMsg::kMenuResetStats, "kMenuResetStats"},
+		{ECommonMsg::kMenuBlind, "kMenuBlind"},
+		{ECommonMsg::kMenuEmailList, "kMenuEmailList"},
+		{ECommonMsg::kMenuPrompt, "kMenuPrompt"},
+	};
+
+msg_container::MsgContainer<int, ECommonMsg> &CommonMsgContainer() {
+	static msg_container::MsgContainer<int, ECommonMsg> container;
+	return container;
+}
+}  // namespace
+
+template<>
+const std::string &NAME_BY_ITEM<ECommonMsg>(const ECommonMsg item) {
+	return kCommonMsgNames.at(item);
+}
+template<>
+const std::map<ECommonMsg, std::string> &NAMES_OF<ECommonMsg>() {
+	return kCommonMsgNames;
+}
+template<>
+ECommonMsg ITEM_BY_NAME<ECommonMsg>(const std::string &name) {
+	static std::map<std::string, ECommonMsg> by_name;
+	if (by_name.empty()) {
+		for (const auto &[value, token] : kCommonMsgNames) {
+			by_name.emplace(token, value);
+		}
+	}
+	return by_name.at(name);
+}
+
+const std::string &CommonMsg(ECommonMsg id) {
+	return CommonMsgContainer().GetMessage(info_container::kUndefinedVnum, id);
+}
+
+void CommonMessagesLoader::Load(parser_wrapper::DataNode data) { CommonMsgContainer().Init(data.Children()); }
+void CommonMessagesLoader::Reload(parser_wrapper::DataNode data) { CommonMsgContainer().Reload(data.Children()); }

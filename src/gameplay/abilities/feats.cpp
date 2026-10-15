@@ -1,12 +1,17 @@
 //#include "feats.h"
 //#include "feats_constants.h"
 
-#include "third_party_libs/fmt/include/fmt/core.h"
+#include <fmt/core.h>
 
 #include "gameplay/mechanics/player_races.h"
 #include "engine/ui/color.h"
 #include "gameplay/magic/magic_utils.h"
 #include "engine/db/global_objects.h"
+#include "gameplay/core/remort.h"
+#include "feats.h"                              // issue.perk-action-patching
+#include "gameplay/magic/spells_info.h"         // issue.perk-action-patching: SpellInfo::talent_patches
+#include <unordered_map>
+#include <cstring>
 
 /* Служебные функции */
 bool CheckVacantFeatSlot(CharData *ch, EFeat feat);
@@ -28,7 +33,7 @@ bool CanUseFeat(const CharData *ch, EFeat feat_id) {
 	if (CalcMaxFeatSlotPerLvl(ch) < MUD::Class(ch->GetClass()).feats[feat_id].GetSlot()) {
 		return false;
 	};
-	if (GetRealRemort(ch) < MUD::Class(ch->GetClass()).feats[feat_id].GetMinRemort()) {
+	if (remort::GetRealRemort(ch) < MUD::Class(ch->GetClass()).feats[feat_id].GetMinRemort()) {
 		return false;
 	};
 
@@ -40,13 +45,22 @@ bool CanUseFeat(const CharData *ch, EFeat feat_id) {
 		case EFeat::kGreatPowerAttack: return (GetRealStr(ch) > 21);
 		case EFeat::kAimingAttack: return (GetRealDex(ch) > 15);
 		case EFeat::kGreatAimingAttack: return (GetRealDex(ch) > 17);
-		case EFeat::kDoubleShot: return (ch->GetSkill(ESkill::kBows) > 39);
-		case EFeat::kJeweller: return (ch->GetSkill(ESkill::kJewelry) > 59);
-		case EFeat::kSkilledTrader: return ((GetRealLevel(ch) + GetRealRemort(ch) / 3) > 19);
+			// Обе способности требуют парного "любимого оружия" -- так написано и в справке,
+			// и так их проверяет CanGetFeat при изучении. Раньше требование жило только на
+			// входе: выучить без "любимого оружия" было нельзя, но если способность всё же
+			// оказалась у персонажа, список способностей красил её жёлтым, как рабочую.
+		case EFeat::kDoubleShot:
+			return ch->HaveFeat(EFeat::kBowsFocus) && GetSkill(ch, ESkill::kBows) > 39;
+			// Допудар двуручем и так срабатывает только вместе с "любимым оружием"
+			// (см. fight.cpp), здесь это условие просто оказывается в одном месте с прочими.
+		case EFeat::kSlashMaster:
+			return ch->HaveFeat(EFeat::kTwohandsFocus);
+		case EFeat::kJeweller: return (GetSkill(ch, ESkill::kJewelry) > 59);
+		case EFeat::kSkilledTrader: return ((GetRealLevel(ch) + remort::GetRealRemort(ch) / 3) > 19);
 		case EFeat::kMagicUser: return (GetRealLevel(ch) < 25);
-		case EFeat::kLiveShield: return (ch->GetSkill(ESkill::kRescue) > 124);
-		case EFeat::kShadowThrower: return (ch->GetSkill(ESkill::kDarkMagic) > 120);
-		case EFeat::kAnimalMaster: return (ch->GetSkill(ESkill::kMindMagic) > 79);
+		case EFeat::kLiveShield: return (GetSkill(ch, ESkill::kRescue) > 124);
+		case EFeat::kShadowThrower: return (GetSkill(ch, ESkill::kDarkMagic) > 120);
+		case EFeat::kAnimalMaster: return (GetSkill(ch, ESkill::kMindMagic) > 79);
 		case EFeat::kScirmisher: return !(AFF_FLAGGED(ch, EAffect::kStopFight) ||
 			AFF_FLAGGED(ch, EAffect::kMagicStopFight) ||
 			ch->GetPosition() < EPosition::kFight);
@@ -62,21 +76,21 @@ bool CanGetFocusFeat(const CharData *ch, const EFeat feat_id) {
 		}
 	}
 
-	if (count >= 2 + GetRealRemort(ch) / 6) {
+	if (count >= 2 + remort::GetRealRemort(ch) / 6) {
 		return false;
 	}
 
 	switch (feat_id) {
-		case EFeat::kPunchFocus: return ch->GetSkillWithoutEquip(ESkill::kPunch);
-		case EFeat::kClubsFocus: return ch->GetSkillWithoutEquip(ESkill::kClubs);
-		case EFeat::kAxesFocus: return ch->GetSkillWithoutEquip(ESkill::kAxes);
-		case EFeat::kLongsFocus: return ch->GetSkillWithoutEquip(ESkill::kLongBlades);
-		case EFeat::kShortsFocus: return ch->GetSkillWithoutEquip(ESkill::kShortBlades);
-		case EFeat::kNonstandartsFocus: return ch->GetSkillWithoutEquip(ESkill::kNonstandart);
-		case EFeat::kTwohandsFocus: return ch->GetSkillWithoutEquip(ESkill::kTwohands);
-		case EFeat::kPicksFocus: return ch->GetSkillWithoutEquip(ESkill::kPicks);
-		case EFeat::kSpadesFocus: return ch->GetSkillWithoutEquip(ESkill::kSpades);
-		case EFeat::kBowsFocus: return ch->GetSkillWithoutEquip(ESkill::kBows);
+		case EFeat::kPunchFocus: return GetSkillWithoutEquip(ch, ESkill::kPunch);
+		case EFeat::kClubsFocus: return GetSkillWithoutEquip(ch, ESkill::kClubs);
+		case EFeat::kAxesFocus: return GetSkillWithoutEquip(ch, ESkill::kAxes);
+		case EFeat::kLongsFocus: return GetSkillWithoutEquip(ch, ESkill::kLongBlades);
+		case EFeat::kShortsFocus: return GetSkillWithoutEquip(ch, ESkill::kShortBlades);
+		case EFeat::kNonstandartsFocus: return GetSkillWithoutEquip(ch, ESkill::kNonstandart);
+		case EFeat::kTwohandsFocus: return GetSkillWithoutEquip(ch, ESkill::kTwohands);
+		case EFeat::kPicksFocus: return GetSkillWithoutEquip(ch, ESkill::kPicks);
+		case EFeat::kSpadesFocus: return GetSkillWithoutEquip(ch, ESkill::kSpades);
+		case EFeat::kBowsFocus: return GetSkillWithoutEquip(ch, ESkill::kBows);
 		default: return false;
 	}
 }
@@ -88,31 +102,31 @@ bool CanGetMasterFeat(const CharData *ch, const EFeat feat_id) {
 			count++;
 		}
 	}
-	if (count >= 1 + GetRealRemort(ch) / 7) {
+	if (count >= 1 + remort::GetRealRemort(ch) / 7) {
 		return false;
 	}
 
 	switch (feat_id) {
 		case EFeat::kPunchMaster:
-			return ch->HaveFeat(EFeat::kPunchFocus) && ch->GetSkillWithoutEquip(ESkill::kPunch);
+			return ch->HaveFeat(EFeat::kPunchFocus) && GetSkillWithoutEquip(ch, ESkill::kPunch);
 		case EFeat::kClubsMaster:
-			return ch->HaveFeat(EFeat::kClubsFocus) && ch->GetSkillWithoutEquip(ESkill::kClubs);
+			return ch->HaveFeat(EFeat::kClubsFocus) && GetSkillWithoutEquip(ch, ESkill::kClubs);
 		case EFeat::kAxesMaster:
-			return ch->HaveFeat(EFeat::kAxesFocus) && ch->GetSkillWithoutEquip(ESkill::kAxes);
+			return ch->HaveFeat(EFeat::kAxesFocus) && GetSkillWithoutEquip(ch, ESkill::kAxes);
 		case EFeat::kLongsMaster:
-			return ch->HaveFeat(EFeat::kLongsFocus) && ch->GetSkillWithoutEquip(ESkill::kLongBlades);
+			return ch->HaveFeat(EFeat::kLongsFocus) && GetSkillWithoutEquip(ch, ESkill::kLongBlades);
 		case EFeat::kShortsMaster:
-			return ch->HaveFeat(EFeat::kShortsFocus) && ch->GetSkillWithoutEquip(ESkill::kShortBlades);
+			return ch->HaveFeat(EFeat::kShortsFocus) && GetSkillWithoutEquip(ch, ESkill::kShortBlades);
 		case EFeat::kNonstandartsMaster:
-			return ch->HaveFeat(EFeat::kNonstandartsFocus) && ch->GetSkillWithoutEquip(ESkill::kNonstandart);
+			return ch->HaveFeat(EFeat::kNonstandartsFocus) && GetSkillWithoutEquip(ch, ESkill::kNonstandart);
 		case EFeat::kTwohandsMaster:
-			return ch->HaveFeat(EFeat::kTwohandsFocus) && ch->GetSkillWithoutEquip(ESkill::kTwohands);
+			return ch->HaveFeat(EFeat::kTwohandsFocus) && GetSkillWithoutEquip(ch, ESkill::kTwohands);
 		case EFeat::kPicksMaster:
-			return ch->HaveFeat(EFeat::kPicksFocus) && ch->GetSkillWithoutEquip(ESkill::kPicks);
+			return ch->HaveFeat(EFeat::kPicksFocus) && GetSkillWithoutEquip(ch, ESkill::kPicks);
 		case EFeat::kSpadesMaster:
-			return ch->HaveFeat(EFeat::kSpadesFocus) && ch->GetSkillWithoutEquip(ESkill::kSpades);
+			return ch->HaveFeat(EFeat::kSpadesFocus) && GetSkillWithoutEquip(ch, ESkill::kSpades);
 		case EFeat::kBowsMaster:
-			return ch->HaveFeat(EFeat::kBowsFocus) && ch->GetSkillWithoutEquip(ESkill::kBows);
+			return ch->HaveFeat(EFeat::kBowsFocus) && GetSkillWithoutEquip(ch, ESkill::kBows);
 		default: return false;
 	}
 }
@@ -123,8 +137,8 @@ bool CanGetFeat(CharData *ch, EFeat feat) {
 	}
 
 	if ((MUD::Class(ch->GetClass()).feats.IsUnavailable(feat) &&
-		!PlayerRace::FeatureCheck(GET_KIN(ch), GET_RACE(ch), to_underlying(feat))) ||
-		(GetRealRemort(ch) < MUD::Class(ch->GetClass()).feats[feat].GetMinRemort())) {
+		!MUD::PcRaces()[GET_RACE(ch)].HasFeature(feat)) ||
+		(remort::GetRealRemort(ch) < MUD::Class(ch->GetClass()).feats[feat].GetMinRemort())) {
 		return false;
 	}
 
@@ -134,21 +148,21 @@ bool CanGetFeat(CharData *ch, EFeat feat) {
 
 	switch (feat) {
 		case EFeat::kParryArrow:
-			return ch->GetSkillWithoutEquip(ESkill::kMultiparry) ||
-				ch->GetSkillWithoutEquip(ESkill::kParry);
+			return GetSkillWithoutEquip(ch, ESkill::kMultiparry) ||
+				GetSkillWithoutEquip(ch, ESkill::kParry);
 		case EFeat::kConnoiseur:
-			return ch->GetSkillWithoutEquip(ESkill::kIdentify);
+			return GetSkillWithoutEquip(ch, ESkill::kIdentify);
 		case EFeat::kExorcist:
-			return ch->GetSkillWithoutEquip(ESkill::kTurnUndead);
+			return GetSkillWithoutEquip(ch, ESkill::kTurnUndead);
 		case EFeat::kHealer:
-			return ch->GetSkillWithoutEquip(ESkill::kFirstAid);
+			return GetSkillWithoutEquip(ch, ESkill::kFirstAid);
 		case EFeat::kStealthy:
-			return ch->GetSkillWithoutEquip(ESkill::kHide) ||
-				ch->GetSkillWithoutEquip(ESkill::kSneak) ||
-				ch->GetSkillWithoutEquip(ESkill::kDisguise);
+			return GetSkillWithoutEquip(ch, ESkill::kHide) ||
+				GetSkillWithoutEquip(ch, ESkill::kSneak) ||
+				GetSkillWithoutEquip(ch, ESkill::kDisguise);
 		case EFeat::kTracker:
-			return (ch->GetSkillWithoutEquip(ESkill::kTrack) ||
-				ch->GetSkillWithoutEquip(ESkill::kSense));
+			return (GetSkillWithoutEquip(ch, ESkill::kTrack) ||
+				GetSkillWithoutEquip(ch, ESkill::kSense));
 		case EFeat::kPunchMaster:
 		case EFeat::kClubsMaster:
 		case EFeat::kAxesMaster:
@@ -163,8 +177,8 @@ bool CanGetFeat(CharData *ch, EFeat feat) {
 		case EFeat::kWarriorSpirit:
 			return ch->HaveFeat(EFeat::kGreatFortitude);
 		case EFeat::kNimbleFingers:
-			return ch->GetSkillWithoutEquip(ESkill::kSteal) ||
-				ch->GetSkillWithoutEquip(ESkill::kPickLock);
+			return GetSkillWithoutEquip(ch, ESkill::kSteal) ||
+				GetSkillWithoutEquip(ch, ESkill::kPickLock);
 		case EFeat::kGreatPowerAttack:
 			return ch->HaveFeat(EFeat::kPowerAttack);
 		case EFeat::kPunchFocus:
@@ -181,37 +195,37 @@ bool CanGetFeat(CharData *ch, EFeat feat) {
 		case EFeat::kGreatAimingAttack:
 			return ch->HaveFeat(EFeat::kAimingAttack);
 		case EFeat::kDoubleShot:
-			return ch->HaveFeat(EFeat::kBowsFocus) && ch->GetSkillWithoutEquip(ESkill::kBows) > 39;
+			return ch->HaveFeat(EFeat::kBowsFocus) && GetSkillWithoutEquip(ch, ESkill::kBows) > 39;
 		case EFeat::kJeweller:
-			return ch->GetSkillWithoutEquip(ESkill::kJewelry) > 59;
+			return GetSkillWithoutEquip(ch, ESkill::kJewelry) > 59;
 		case EFeat::kCutting:
 			return ch->HaveFeat(EFeat::kShortsMaster) ||
 				ch->HaveFeat(EFeat::kPicksMaster) ||
 				ch->HaveFeat(EFeat::kLongsMaster) ||
 				ch->HaveFeat(EFeat::kSpadesMaster);
 		case EFeat::kScirmisher:
-			return ch->GetSkillWithoutEquip(ESkill::kRescue);
+			return GetSkillWithoutEquip(ch, ESkill::kRescue);
 		case EFeat::kTactician:
-			return ch->GetSkillWithoutEquip(ESkill::kLeadership) > 99;
+			return GetSkillWithoutEquip(ch, ESkill::kLeadership) > 99;
 		case EFeat::kShadowThrower:
 			return ch->HaveFeat(EFeat::kPowerThrow) &&
-				ch->GetSkillWithoutEquip(ESkill::kDarkMagic) > 120;
+				GetSkillWithoutEquip(ch, ESkill::kDarkMagic) > 120;
 		case EFeat::kShadowDagger:
 		case EFeat::kShadowSpear: [[fallthrough]];
 		case EFeat::kShadowClub:
 			return ch->HaveFeat(EFeat::kShadowThrower) &&
-				ch->GetSkillWithoutEquip(ESkill::kDarkMagic) > 130;
+				GetSkillWithoutEquip(ch, ESkill::kDarkMagic) > 130;
 		case EFeat::kDoubleThrower:
 			return ch->HaveFeat(EFeat::kPowerThrow) &&
-				ch->GetSkillWithoutEquip(ESkill::kThrow) > 100;
+				GetSkillWithoutEquip(ch, ESkill::kThrow) > 100;
 		case EFeat::kTripleThrower:
 			return ch->HaveFeat(EFeat::kDeadlyThrow) &&
-				ch->GetSkillWithoutEquip(ESkill::kThrow) > 130;
+				GetSkillWithoutEquip(ch, ESkill::kThrow) > 130;
 		case EFeat::kPowerThrow:
-			return ch->GetSkillWithoutEquip(ESkill::kThrow) > 90;
+			return GetSkillWithoutEquip(ch, ESkill::kThrow) > 90;
 		case EFeat::kDeadlyThrow:
 			return ch->HaveFeat(EFeat::kPowerThrow) &&
-				ch->GetSkillWithoutEquip(ESkill::kThrow) > 110;
+				GetSkillWithoutEquip(ch, ESkill::kThrow) > 110;
 		case EFeat::kSerratedBlade:
 			return ch->HaveFeat(EFeat::kCutting);
 		default: return true;
@@ -220,7 +234,7 @@ bool CanGetFeat(CharData *ch, EFeat feat) {
 
 bool CheckVacantFeatSlot(CharData *ch, EFeat feat_id) {
 	if (MUD::Class(ch->GetClass()).feats[feat_id].IsInborn()
-		|| PlayerRace::FeatureCheck(GET_KIN(ch), GET_RACE(ch), to_underlying(feat_id))) {
+		|| MUD::PcRaces()[GET_RACE(ch)].HasFeature(feat_id)) {
 		return true;
 	}
 
@@ -232,7 +246,7 @@ bool CheckVacantFeatSlot(CharData *ch, EFeat feat_id) {
 	//т.к. возможны свободные слоты меньше требуемого, и при этом верхние заняты все
 	auto slot_list = std::vector<int>();
 	for (const auto &feat : MUD::Class(ch->GetClass()).feats) {
-		if (feat.IsInborn() || PlayerRace::FeatureCheck(GET_KIN(ch), GET_RACE(ch), to_underlying(feat.GetId()))) {
+		if (feat.IsInborn() || MUD::PcRaces()[GET_RACE(ch)].HasFeature(feat.GetId())) {
 			continue;
 		}
 
@@ -269,11 +283,9 @@ bool CheckVacantFeatSlot(CharData *ch, EFeat feat_id) {
 	return false;
 }
 
-// \todo Надо как-то переделать загрузку родовых способностей, чтобы там было не int, а сразу EFeat
 void SetRaceFeats(CharData *ch) {
-	auto race_features = PlayerRace::GetRaceFeatures((int) GET_KIN(ch), (int) GET_RACE(ch));
-	for (int i : race_features) {
-		auto feat_id = static_cast<EFeat>(i);
+	const auto &race_features = MUD::PcRaces()[GET_RACE(ch)].GetFeatures();
+	for (const EFeat feat_id : race_features) {
 		if (CanGetFeat(ch, feat_id)) {
 			ch->SetFeat(feat_id);
 		}
@@ -281,9 +293,9 @@ void SetRaceFeats(CharData *ch) {
 }
 
 void UnsetRaceFeats(CharData *ch) {
-	auto race_features = PlayerRace::GetRaceFeatures((int) GET_KIN(ch), (int) GET_RACE(ch));
-	for (int i : race_features) {
-		ch->UnsetFeat(static_cast<EFeat>(i));
+	const auto &race_features = MUD::PcRaces()[GET_RACE(ch)].GetFeatures();
+	for (const EFeat feat_id : race_features) {
+		ch->UnsetFeat(feat_id);
 	}
 }
 
@@ -456,7 +468,7 @@ EPrf GetPrfWithFeatNumber(EFeat feat_id) {
 
 int CalcMaxFeatSlotPerLvl(const CharData *ch) {
 	return (kMinBaseFeatsSlotsAmount + GetRealLevel(ch)*(kMaxBaseFeatsSlotsAmount - 1 +
-		GetRealRemort(ch)/ MUD::Class(ch->GetClass()).GetRemortsNumForFeatSlot())/kLastFeatSlotLvl);
+		remort::GetRealRemort(ch)/ MUD::Class(ch->GetClass()).GetRemortsNumForFeatSlot())/kLastFeatSlotLvl);
 }
 
 int CalcFeatSlotsAmountPerRemort(CharData *ch) {
@@ -470,6 +482,114 @@ int CalcFeatSlotsAmountPerRemort(CharData *ch) {
 namespace feats {
 
 using ItemPtr = FeatInfoBuilder::ItemPtr;
+
+// issue.perk-action-patching: map an effect-kind name ("kArea"/"kDamage"/...) to EAction, for the
+// has_effect= selector and op="modify" effect=. Returns false on an unknown name.
+static bool ParseEActionKind(const char *name, talents_actions::EAction &out) {
+	using talents_actions::EAction;
+	static const std::unordered_map<std::string, EAction> kByName = {
+		{"kDamage", EAction::kDamage}, {"kArea", EAction::kArea}, {"kPoints", EAction::kPoints},
+		{"kAffect", EAction::kAffect}, {"kUnaffect", EAction::kUnaffect}, {"kSummon", EAction::kSummon},
+		{"kCreation", EAction::kCreation}, {"kAlterObj", EAction::kAlterObj},
+	};
+	const auto it = kByName.find(name);
+	if (it == kByName.end()) { return false; }
+	out = it->second;
+	return true;
+}
+
+// issue.perk-action-patching: parse a feat talent_patches block into FeatInfo::talent_patches. Each
+// <talent_patch> carries the target spell + op + optional action/effect/anchor ids; its <action> child
+// block(s) are the perk-provided payload, parsed by the normal action parser (Actions::Build).
+static void ParseTalentPatches(FeatInfo &info, DataNode &node) {
+	if (!node.GoToChild("talent_patches")) {
+		return;
+	}
+	for (auto &pn : node.Children()) {
+		try {
+			TalentPatch sp;
+			if (const char *sv = pn.GetValue("spell"); sv && *sv) {
+				sp.target_spell = parse::ReadAsConstant<ESpell>(sv);
+			}
+			if (const char *ev = pn.GetValue("element"); ev && *ev) {
+				sp.element = parse::ReadAsConstant<EElement>(ev);
+			}
+			if (const char *bsk = pn.GetValue("base_skill"); bsk && *bsk) {
+				sp.base_skill = parse::ReadAsConstant<ESkill>(bsk);
+			}
+			if (const char *fv = pn.GetValue("flag"); fv && *fv) {
+				sp.flag_sel = static_cast<Bitvector>(parse::ReadAsConstant<EMagic>(fv));
+			}
+			if (const char *al = pn.GetValue("all"); al && *al
+					&& (strcmp(al, "true") == 0 || strcmp(al, "Y") == 0 || strcmp(al, "1") == 0)) {
+				sp.match_all = true;
+			}
+			if (const char *he = pn.GetValue("has_effect"); he && *he) {
+				if (ParseEActionKind(he, sp.has_effect_kind)) { sp.has_has_effect = true; }
+				else { err_log("talent patch: unknown has_effect [%s].", he); }
+			}
+			if (const char *cv = pn.GetValue("category"); cv && *cv) { sp.category = cv; }
+			if (const char *afv = pn.GetValue("affect"); afv && *afv) {
+				try { sp.target_affect = ITEM_BY_NAME<EAffect>(afv); }
+				catch (const std::exception &) { err_log("talent patch: unknown affect [%s].", afv); }
+			}
+			if (const char *rv = pn.GetValue("relative"); rv && *rv) {
+				if (strcmp(rv, "master") == 0) { sp.relative = TalentPatch::ERelative::kMaster; }
+				else if (strcmp(rv, "group_leader") == 0) { sp.relative = TalentPatch::ERelative::kGroupLeader; }
+				else if (strcmp(rv, "self") == 0) { sp.relative = TalentPatch::ERelative::kSelf; }
+				else { err_log("talent patch: unknown relative [%s] (self/master/group_leader).", rv); }
+			}
+			const std::string op = (pn.GetValue("op") && *pn.GetValue("op")) ? pn.GetValue("op") : "append";
+			if      (op == "append")      { sp.op = EPatchOp::kAppend; }
+			else if (op == "insert")      { sp.op = EPatchOp::kInsert; }
+			else if (op == "replace")     { sp.op = EPatchOp::kReplace; }
+			else if (op == "remove")      { sp.op = EPatchOp::kRemove; }
+			else if (op == "add_effect")  { sp.op = EPatchOp::kAddEffect; }
+			else if (op == "replace_all") { sp.op = EPatchOp::kReplaceAll; }
+			else if (op == "modify")      { sp.op = EPatchOp::kModify; }
+			else { err_log("talent patch: unknown op [%s].", op.c_str()); continue; }
+			if (const char *bv = pn.GetValue("by"); bv && *bv && strcmp(bv, "target") == 0) {
+				sp.scope = TalentPatch::EScope::kTarget;
+			}
+			if (const char *av = pn.GetValue("action"); av && *av) { sp.action_id = av; }
+			if (const char *ev = pn.GetValue("effect"); ev && *ev) { sp.effect_id = ev; }
+			if (const char *bef = pn.GetValue("before"); bef && *bef) {
+				sp.anchor_id = bef; sp.anchor_before = true;
+			} else if (const char *aft = pn.GetValue("after"); aft && *aft) {
+				sp.anchor_id = aft; sp.anchor_before = false;
+			}
+			if (!sp.HasSelector()) {
+				err_log("talent patch on feat [%s]: no selector (need spell/element/base_skill/flag/has_effect/all).",
+						NAME_BY_ITEM<EFeat>(info.GetId()).c_str());
+				continue;
+			}
+			if (sp.op == EPatchOp::kModify) {
+				if (!sp.effect_id.empty() && !ParseEActionKind(sp.effect_id.c_str(), sp.mod_kind)) {
+					err_log("talent patch: op=modify effect [%s] is not a manifestation kind.", sp.effect_id.c_str());
+				}
+				if (pn.GoToChild("modify")) {
+					if (const char *fld = pn.GetValue("field"); fld && *fld) { sp.mod_field = fld; }
+					if (const char *mv = pn.GetValue("mul"); mv && *mv) {
+						sp.mod_op = TalentPatch::EModOp::kMul; sp.mod_value = parse::ReadAsDouble(mv);
+					} else if (const char *ad = pn.GetValue("add"); ad && *ad) {
+						sp.mod_op = TalentPatch::EModOp::kAdd; sp.mod_value = parse::ReadAsDouble(ad);
+					} else if (const char *st = pn.GetValue("set"); st && *st) {
+						sp.mod_op = TalentPatch::EModOp::kSet; sp.mod_value = parse::ReadAsDouble(st);
+					}
+					pn.GoToParent();
+				} else {
+					err_log("talent patch: op=modify without a <modify field=...> child.");
+				}
+			} else {
+				sp.payload.Build(pn);
+			}
+			info.talent_patches.push_back(std::move(sp));
+		} catch (std::exception &e) {
+			err_log("Feat talent_patch parse error (%s).", e.what());
+		}
+	}
+	node.GoToParent();
+}
 
 void FeatsLoader::Load(DataNode data) {
 	MUD::Feats().Init(data.Children());
@@ -492,6 +612,7 @@ ItemPtr FeatInfoBuilder::ParseFeat(DataNode &node) {
 	auto info = ParseHeader(node);
 
 	ParseEffects(info, node);
+	ParseTalentPatches(*info, node);   // issue.perk-action-patching
 	return info;
 }
 
@@ -506,10 +627,7 @@ ItemPtr FeatInfoBuilder::ParseHeader(DataNode &node) {
 	auto mode = FeatInfoBuilder::ParseItemMode(node, EItemMode::kEnabled);
 
 	auto info = std::make_shared<FeatInfo>(id, mode);
-	try {
-		info->name_ = parse::ReadAsStr(node.GetValue("name"));
-	} catch (std::exception &) {
-	}
+	info->name_ = MUD::FeatMessages().GetName(id);   // issue.thing-names: name from feat_msg.xml
 
 	return info;
 }
@@ -528,6 +646,147 @@ void FeatInfo::Print(CharData *ch, std::ostringstream &buffer) const {
 		   << " Mode: " << kColorGrn << NAME_BY_ITEM<EItemMode>(GetMode()) << kColorNrm << "\r\n";
 
 	effects.Print(ch, buffer);
+}
+
+// issue.perk-action-patching: validate a patch target/anchor ids against the spell action blocks.
+static bool ValidatePatch(const spells::SpellInfo &spell, const TalentPatch &p, EFeat fid) {
+	auto has_block = [&](const std::string &id) {
+		if (id.empty()) { return false; }
+		for (const auto &b : spell.actions.list()) {
+			if (b.GetId() == id) { return true; }
+		}
+		return false;
+	};
+	switch (p.op) {
+		case EPatchOp::kReplace:
+		case EPatchOp::kRemove:
+		case EPatchOp::kAddEffect:
+			if (!has_block(p.action_id)) {
+				err_log("talent patch (feat [%s] -> spell [%s]): action id [%s] not found.",
+						NAME_BY_ITEM<EFeat>(fid).c_str(), spell.GetEngCName(), p.action_id.c_str());
+				return false;
+			}
+			break;
+		case EPatchOp::kInsert:
+			if (!p.anchor_id.empty() && !has_block(p.anchor_id)) {
+				err_log("talent patch (feat [%s] -> spell [%s]): insert anchor [%s] not found.",
+						NAME_BY_ITEM<EFeat>(fid).c_str(), spell.GetEngCName(), p.anchor_id.c_str());
+				return false;
+			}
+			break;
+		case EPatchOp::kModify: {
+			bool ok = false;
+			for (const auto &b : spell.actions.list()) {
+				if (b.Contains(p.mod_kind)) { ok = true; break; }
+			}
+			if (!ok) {
+				err_log("talent patch (feat [%s] -> spell [%s]): op=modify target manifestation absent.",
+						NAME_BY_ITEM<EFeat>(fid).c_str(), spell.GetEngCName());
+				return false;
+			}
+			break;
+		}
+		default:
+			break;
+	}
+	return true;
+}
+
+// issue.perk-action-patching (Phase 1): does a patch's selector match this spell? All present predicates
+// are AND-combined; an absent one is vacuously true. Evaluated once per (patch, spell) at boot only.
+static bool PatchMatchesSpell(const TalentPatch &p, const spells::SpellInfo &s) {
+	if (p.target_spell != ESpell::kUndefined && s.GetId() != p.target_spell) { return false; }
+	if (p.element != EElement::kUndefined && s.GetElement() != p.element) { return false; }
+	if (p.base_skill != ESkill::kUndefined
+			&& s.GetPotencyRoll().GetBaseSkill() != p.base_skill
+			&& s.GetSuccessRoll().GetBaseSkill() != p.base_skill) { return false; }
+	if (p.flag_sel != 0 && !s.IsFlagged(p.flag_sel)) { return false; }
+	if (!p.category.empty() && !s.HasTag(p.category)) { return false; }
+	if (p.has_has_effect) {
+		bool found = false;
+		for (const auto &b : s.actions.list()) {
+			if (b.Contains(p.has_effect_kind)) { found = true; break; }
+		}
+		if (!found) { return false; }
+	}
+	return true;
+}
+
+// issue.soullink-affect-patching: affect-targeting patches, bucketed by affect type (underlying int key
+// to avoid needing std::hash<EAffect>). Filled at boot by BuildTalentPatchIndex, read by the affect runner.
+static std::unordered_map<int, std::vector<AffectPatchRef>> g_affect_patches;
+
+const std::vector<AffectPatchRef> &AffectTalentPatches(EAffect affect_type) {
+	static const std::vector<AffectPatchRef> kEmpty;
+	const auto it = g_affect_patches.find(to_underlying(affect_type));
+	return it != g_affect_patches.end() ? it->second : kEmpty;
+}
+
+CharData *ResolvePatchRelative(CharData *owner, TalentPatch::ERelative relative) {
+	if (!owner) { return nullptr; }
+	switch (relative) {
+		case TalentPatch::ERelative::kSelf: return owner;
+		case TalentPatch::ERelative::kMaster: return owner->has_master() ? owner->get_master() : nullptr;
+		case TalentPatch::ERelative::kGroupLeader: {
+			CharData *l = owner;
+			while (l->has_master()) { l = l->get_master(); }
+			return l;
+		}
+	}
+	return owner;
+}
+
+void BuildTalentPatchIndex() {
+	g_affect_patches.clear();
+	for (auto sid = ESpell::kFirst; sid <= ESpell::kLast; ++sid) {
+		if (MUD::Spells().IsKnown(sid)) {
+			MUD::Spell(sid).talent_patches.clear();
+		}
+	}
+	size_t linked = 0, dropped = 0;
+	for (const auto &fi : MUD::Feats()) {
+		const EFeat fid = fi.GetId();
+		for (const auto &patch : fi.talent_patches) {
+			if (!patch.HasSelector()) {
+				err_log("talent patch on feat [%s]: no selector; skipped.", NAME_BY_ITEM<EFeat>(fid).c_str());
+				++dropped;
+				continue;
+			}
+			if (patch.target_affect != EAffect::kUndefined) {
+				// issue.soullink-affect-patching: an affect patch -- bucket by affect type, not onto a spell.
+				g_affect_patches[to_underlying(patch.target_affect)].push_back(AffectPatchRef{fid, &patch});
+				++linked;
+				continue;
+			}
+			size_t matched = 0, applied = 0, skipped = 0;
+			auto consider = [&](const spells::SpellInfo &spell) {
+				if (!PatchMatchesSpell(patch, spell)) { return; }
+				++matched;
+				if (!ValidatePatch(spell, patch, fid)) { ++skipped; return; }
+				spell.talent_patches.push_back(spells::TalentPatchRef{fid, &patch});
+				++applied;
+			};
+			// Specific-spell selector -> O(1); a class selector -> one linear scan of all spells (boot only).
+			if (patch.target_spell != ESpell::kUndefined) {
+				if (MUD::Spells().IsKnown(patch.target_spell)) {
+					consider(MUD::Spell(patch.target_spell));
+				} else {
+					err_log("talent patch on feat [%s]: unknown target spell.", NAME_BY_ITEM<EFeat>(fid).c_str());
+				}
+			} else {
+				for (const auto &spell : MUD::Spells()) { consider(spell); }
+			}
+			linked += applied;
+			if (matched == 0) {
+				err_log("talent patch on feat [%s]: matched no spell.", NAME_BY_ITEM<EFeat>(fid).c_str());
+				++dropped;
+			} else if (matched > 1 || skipped > 0) {
+				log("issue.perk-action-patching: feat [%s] class patch matched %zu, applied %zu, skipped %zu.",
+					NAME_BY_ITEM<EFeat>(fid).c_str(), matched, applied, skipped);
+			}
+		}
+	}
+	log("issue.perk-action-patching: linked %zu talent patch(es), dropped %zu.", linked, dropped);
 }
 
 }

@@ -8,8 +8,16 @@
 
 #include "engine/ui/cmd/do_equip.h"
 
+#include <fmt/format.h>
+
+#include "administration/privilege.h"
+#include "gameplay/mechanics/sight.h"
+#include "utils/grammar/declensions.h"
+
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_equip_flags.h"
+#include "engine/core/target_resolver.h"
+#include "gameplay/mechanics/equipment.h"
 #include "engine/core/utils_char_obj.inl"
 
 bool unique_stuff(const CharData *ch, const ObjData *obj) {
@@ -165,8 +173,7 @@ int find_eq_pos(CharData *ch, ObjData *obj, char *local_arg) {
 		equip_pos = search_block(local_arg, keywords, false);
 		if (equip_pos < 0
 			|| *local_arg == '!') {
-			sprintf(buf, "'%s'? Странная анатомия у этих русских!\r\n", local_arg);
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("'{}'? Странная анатомия у этих русских!\r\n", local_arg), ch);
 			return -1;
 		}
 	}
@@ -174,7 +181,7 @@ int find_eq_pos(CharData *ch, ObjData *obj, char *local_arg) {
 	return equip_pos;
 }
 
-void perform_wear(CharData *ch, ObjData *obj, int equip_pos) {
+void perform_wear(CharData *ch, ObjData *obj, int equip_pos, bool skip_total = false) {
 	/*
 	   * kTake is used for objects that do not require special bits
 	   * to be put into that position (e.g. you can hold any object, not just
@@ -204,7 +211,11 @@ void perform_wear(CharData *ch, ObjData *obj, int equip_pos) {
 		EWearFlag::kQuiver
 	};
 
-	const std::array<const char *, sizeof(wear_bitvectors)> already_wearing =
+	// Массив задавался размером sizeof(wear_bitvectors) -- это байты, а не число
+	// элементов, -- а перед сообщением про колчан не хватало запятой, так что оно
+	// склеивалось с предыдущим. В итоге already_wearing[kQuiver] был nullptr, и
+	// попытка надеть второй колчан уезжала в SendMsgToChar(nullptr).
+	const std::array<const char *, EEquipPos::kNumEquipPos> already_wearing =
 		{
 			"Вы уже используете свет.\r\n",
 			"YOU SHOULD NEVER SEE THIS MESSAGE.  PLEASE REPORT.\r\n",
@@ -224,7 +235,7 @@ void perform_wear(CharData *ch, ObjData *obj, int equip_pos) {
 			"У вас уже что-то надето на запястья.\r\n",
 			"Вы уже что-то держите в правой руке.\r\n",
 			"Вы уже что-то держите в левой руке.\r\n",
-			"Вы уже держите оружие в обеих руках.\r\n"
+			"Вы уже держите оружие в обеих руках.\r\n",
 			"Вы уже используете колчан.\r\n"
 		};
 
@@ -237,7 +248,7 @@ void perform_wear(CharData *ch, ObjData *obj, int equip_pos) {
 		SendMsgToChar("Вы не можете использовать более одной такой вещи.\r\n", ch);
 		return;
 	}
-	if (ch->HasCooldown(ESkill::kGlobalCooldown)) {
+	if (ch->Skills().HasActiveCooldown(ESkill::kGlobalCooldown)) {
 		if (ch->GetEnemy() && (equip_pos == EEquipPos::kShield || obj->get_type() == EObjType::kWeapon)) {
 			SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
 			return;
@@ -267,7 +278,7 @@ void perform_wear(CharData *ch, ObjData *obj, int equip_pos) {
 		return;
 	}
 	// нельзя надеть щит, если недостаточно силы
-	if (!IS_IMMORTAL(ch) && (equip_pos == EEquipPos::kShield) && !CanBeWearedAsShield(ch, obj)) {
+	if (!privilege::IsImmortal(ch) && (equip_pos == EEquipPos::kShield) && !CanBeWearedAsShield(ch, obj)) {
 	}
 
 	if ((equip_pos == EEquipPos::kFingerR) || (equip_pos == EEquipPos::kNeck) || (equip_pos == EEquipPos::kWristR))
@@ -282,7 +293,11 @@ void perform_wear(CharData *ch, ObjData *obj, int equip_pos) {
 		return;
 
 	//obj_from_char(obj);
-	EquipObj(ch, obj, equip_pos, CharEquipFlag::show_msg);
+	CharEquipFlags equip_flags{CharEquipFlag::show_msg};
+	if (skip_total) {
+		equip_flags.set(CharEquipFlag::skip_total);
+	}
+	EquipObj(ch, obj, equip_pos, equip_flags);
 }
 
 void do_wear(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
@@ -304,7 +319,7 @@ void do_wear(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("Что вы собрались надеть?\r\n", ch);
 		return;
 	}
-	dotmode = find_all_dots(arg1);
+	dotmode = ParseAllPrefix(arg1);
 
 	if (*arg2 && (dotmode != kFindIndiv)) {
 		SendMsgToChar("И на какую часть тела вы желаете это надеть?!\r\n", ch);
@@ -314,14 +329,17 @@ void do_wear(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		for (obj = ch->carrying; obj && !AFF_FLAGGED(ch, EAffect::kHold) &&
 			ch->GetPosition() > EPosition::kSleep; obj = next_obj) {
 			next_obj = obj->get_next_content();
-			if (CAN_SEE_OBJ(ch, obj)
+			if (sight::CanSeeObj(ch, obj)
 				&& (equip_pos = find_eq_pos(ch, obj, nullptr)) >= 0) {
 				items_worn++;
-				perform_wear(ch, obj, equip_pos);
+				perform_wear(ch, obj, equip_pos, true);
 			}
 		}
 		if (!items_worn) {
 			SendMsgToChar("Увы, но надеть вам нечего.\r\n", ch);
+		} else {
+			ch->obj_bonus().update(ch);
+			affect_total(ch);
 		}
 	} else if (dotmode == kFindAlldot) {
 		if (!*arg1) {
@@ -329,22 +347,26 @@ void do_wear(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			return;
 		}
 		if (!(obj = get_obj_in_list_vis(ch, arg1, ch->carrying))) {
-			sprintf(buf, "У вас нет ничего похожего на '%s'.\r\n", arg1);
-			SendMsgToChar(buf, ch);
-		} else
+			SendMsgToChar(fmt::format("У вас нет ничего похожего на '{}'.\r\n", arg1), ch);
+		} else {
 			while (obj && !AFF_FLAGGED(ch, EAffect::kHold) && ch->GetPosition() > EPosition::kSleep) {
 				next_obj = get_obj_in_list_vis(ch, arg1, obj->get_next_content());
 				if ((equip_pos = find_eq_pos(ch, obj, nullptr)) >= 0) {
-					perform_wear(ch, obj, equip_pos);
+					perform_wear(ch, obj, equip_pos, true);
+					items_worn++;
 				} else {
 					act("Вы не можете надеть $o3.", false, ch, obj, nullptr, kToChar);
 				}
 				obj = next_obj;
 			}
+			if (items_worn > 0) {
+				ch->obj_bonus().update(ch);
+				affect_total(ch);
+			}
+		}
 	} else {
 		if (!(obj = get_obj_in_list_vis(ch, arg1, ch->carrying))) {
-			sprintf(buf, "У вас нет ничего похожего на '%s'.\r\n", arg1);
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("У вас нет ничего похожего на '{}'.\r\n", arg1), ch);
 		} else {
 			if ((equip_pos = find_eq_pos(ch, obj, arg2)) >= 0)
 				perform_wear(ch, obj, equip_pos);
@@ -357,22 +379,18 @@ void do_wear(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 void do_wield(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	ObjData *obj;
 	int wear;
+	char name[kMaxInputLength];
 
 	if (ch->IsNpc() && (AFF_FLAGGED(ch, EAffect::kCharmed)
 		&& (!NPC_FLAGGED(ch, ENpcFlag::kWielding) || ch->IsFlagged(EMobFlag::kResurrected))))
 		return;
 
-	if (ch->is_morphed()) {
-		SendMsgToChar("Лапами неудобно держать оружие.\r\n", ch);
-		return;
-	}
-	argument = one_argument(argument, arg);
+	argument = one_argument(argument, name);
 
-	if (!*arg)
+	if (!*name)
 		SendMsgToChar("Вооружиться чем?\r\n", ch);
-	else if (!(obj = get_obj_in_list_vis(ch, arg, ch->carrying))) {
-		snprintf(buf, kMaxInputLength, "Вы не видите ничего похожего на \'%s\'.\r\n", arg);
-		SendMsgToChar(buf, ch);
+	else if (!(obj = get_obj_in_list_vis(ch, name, ch->carrying))) {
+		SendMsgToChar(fmt::format("Вы не видите ничего похожего на '{}'.\r\n", name), ch);
 	} else {
 		if (!CAN_WEAR(obj, EWearFlag::kWield)
 			&& !CAN_WEAR(obj, EWearFlag::kBoth)) {
@@ -384,11 +402,12 @@ void do_wield(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			&& ch->IsFlagged(EMobFlag::kCorpse)) {
 			SendMsgToChar("Ожившие трупы не могут вооружаться.\r\n", ch);
 		} else {
-			one_argument(argument, arg);
-			if (!str_cmp(arg, "обе")
+			char both_arg[kMaxInputLength];
+			one_argument(argument, both_arg);
+			if (!str_cmp(both_arg, "обе")
 				&& CAN_WEAR(obj, EWearFlag::kBoth)) {
 				// иногда бывает надо
-				if (!IS_IMMORTAL(ch) && !CanBeTakenInBothHands(ch, obj)) {
+				if (!privilege::IsImmortal(ch) && !CanBeTakenInBothHands(ch, obj)) {
 					act("Вам слишком тяжело держать $o3 двумя руками.",
 						false, ch, obj, nullptr, kToChar);
 					message_str_need(ch, obj, STR_BOTH_W);
@@ -404,7 +423,7 @@ void do_wield(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				wear = EEquipPos::kBoths;
 			}
 
-			if (wear == EEquipPos::kWield && !IS_IMMORTAL(ch) && !CanBeTakenInMajorHand(ch, obj)) {
+			if (wear == EEquipPos::kWield && !privilege::IsImmortal(ch) && !CanBeTakenInMajorHand(ch, obj)) {
 				act("Вам слишком тяжело держать $o3 в правой руке.",
 					false, ch, obj, nullptr, kToChar);
 				message_str_need(ch, obj, STR_WIELD_W);
@@ -416,7 +435,7 @@ void do_wield(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				}
 			}
 
-			if (wear == EEquipPos::kBoths && !IS_IMMORTAL(ch) && !CanBeTakenInBothHands(ch, obj)) {
+			if (wear == EEquipPos::kBoths && !privilege::IsImmortal(ch) && !CanBeTakenInBothHands(ch, obj)) {
 				act("Вам слишком тяжело держать $o3 двумя руками.",
 					false, ch, obj, nullptr, kToChar);
 				message_str_need(ch, obj, STR_BOTH_W);
@@ -430,21 +449,16 @@ void do_wield(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 void do_grab(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	auto equip_pos{EEquipPos::kHold};
 	ObjData *obj;
-	one_argument(argument, arg);
+	char name[kMaxInputLength];
+	one_argument(argument, name);
 
 	if (ch->IsNpc() && !NPC_FLAGGED(ch, ENpcFlag::kWielding))
 		return;
 
-	if (ch->is_morphed()) {
-		SendMsgToChar("Лапами неудобно это держать.\r\n", ch);
-		return;
-	}
-
-	if (!*arg)
+	if (!*name)
 		SendMsgToChar("Вы заорали : 'Держи его!!! Хватай его!!!'\r\n", ch);
-	else if (!(obj = get_obj_in_list_vis(ch, arg, ch->carrying))) {
-		snprintf(buf, kMaxInputLength, "У вас нет ничего похожего на '%s'.\r\n", arg);
-		SendMsgToChar(buf, ch);
+	else if (!(obj = get_obj_in_list_vis(ch, name, ch->carrying))) {
+		SendMsgToChar(fmt::format("У вас нет ничего похожего на '{}'.\r\n", name), ch);
 	} else {
 		if (obj->get_type() == EObjType::kLightSource) {
 			perform_wear(ch, obj, EEquipPos::kLight);
@@ -472,7 +486,7 @@ void do_grab(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				SendMsgToChar("Ожившие трупы не могут вооружаться.\r\n", ch);
 				return;
 			}
-			if (!IS_IMMORTAL(ch)
+			if (!privilege::IsImmortal(ch)
 				&& !CanBeTakenInMinorHand(ch, obj)) {
 				act("Вам слишком тяжело держать $o3 в левой руке.",
 					false, ch, obj, nullptr, kToChar);
@@ -516,7 +530,7 @@ void message_str_need(CharData *ch, ObjData *obj, int type) {
 			return;
 	}
 	SendMsgToChar(ch, "Для этого требуется %d %s.\r\n",
-				  need_str, GetDeclensionInNumber(need_str, EWhat::kStr));
+				  need_str, grammar::GetDeclensionInNumber(need_str, grammar::EWhat::kStr));
 }
 
 bool CanBeTakenInBothHands(CharData *ch, ObjData *obj) {

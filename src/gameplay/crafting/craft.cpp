@@ -4,13 +4,16 @@
  * \author Anton Gorev <kvirund@gmail.com>
  */
 
+#include <sstream>
 #include "craft.h"
+#include "utils/native_text.h"
+#include "gameplay/mechanics/magic_item.h"
 
 #include "engine/db/obj_prototypes.h"
 #include "craft_logger.h"
 #include "craft_static.h"
 #include "utils/xml_loading_helper.h"
-#include "utils/parse.h"
+#include "utils/utils_parse.h"
 #include "engine/db/db.h"
 #include "third_party_libs/pugixml/pugixml.h"
 #include "utils/utils_time.h"
@@ -49,10 +52,10 @@ bool start() {
 const char *BODY_PREFIX = "| ";
 const char *END_PREFIX = "> ";
 
-const std::string CCraftModel::FILE_NAME = LIB_MISC_CRAFT "index.xml";
+const std::string CCraftModel::FILE_NAME = LIB_CFG "craft/metacraft/index.xml";
 
 bool Cases::load_from_node(const pugi::xml_node *node) {
-	for (int c = 0; c <= ECase::kLastCase; ++c) {
+	for (int c = 0; c <= grammar::ECase::kLastCase; ++c) {
 		const std::string node_name = std::string("case") + std::to_string(1 + c);
 		const pugi::xml_node case_node = node->child(node_name.c_str());
 		if (!case_node) {
@@ -77,8 +80,8 @@ bool Cases::load_from_node(const pugi::xml_node *node) {
 void Cases::load_from_object(const CObjectPrototype::shared_ptr &object) {
 	const std::string &aliases = object->get_aliases();
 	m_aliases = utils::Split(aliases);
-	for (size_t n = ECase::kFirstCase; n <= ECase::kLastCase; ++n) {
-		auto name_case = static_cast<ECase>(n);
+	for (size_t n = grammar::ECase::kFirstCase; n <= grammar::ECase::kLastCase; ++n) {
+		auto name_case = static_cast<grammar::ECase>(n);
 		m_cases[name_case] = object->get_PName(name_case);
 	}
 }
@@ -113,7 +116,7 @@ bool Cases::save_to_node(pugi::xml_node *node) const {
 
 ObjData::pnames_t Cases::build_pnames() const {
 	ObjData::pnames_t result;
-	for (size_t n = 0; n <= ECase::kLastCase; ++n) {
+	for (size_t n = 0; n <= grammar::ECase::kLastCase; ++n) {
 		result[n] = str_dup(m_cases[n].c_str());
 	}
 	return result;
@@ -410,8 +413,8 @@ bool CObject::load_from_node(const pugi::xml_node *node) {
 									});
 
 	// loading of object weapon affect flags
-	CHelper::load_flags<EWeaponAffect>(*node, "weapon_affects", "weapon_affect",
-									   [&](const auto flag) { this->SetEWeaponAffectFlag(flag); },
+	CHelper::load_flags<EEquipmentAffect>(*node, "weapon_affects", "weapon_affect",
+									   [&](const auto flag) { this->SetEEquipmentAffectFlag(flag); },
 									   [&](const auto value) {
 											   logger("Setting weapon affect flag '%s' for object with VNUM %d.\n",
 													  NAME_BY_ITEM(value).c_str(),
@@ -536,10 +539,10 @@ bool CObject::save_to_node(pugi::xml_node *node) const {
 							 [&]() { throw std::runtime_error("WARNING: Failed to save long description"); });
 		CHelper::save_string(description, "action", get_action_description().c_str(),
 							 [&]() { throw std::runtime_error("WARNING: Failed to save action description"); });
-		if (get_ex_description()) {
-			CHelper::save_string(description, "keyword", get_ex_description()->keyword,
+		if (!get_ex_description().empty()) {
+			CHelper::save_string(description, "keyword", get_ex_description().front().keyword.c_str(),
 								 [&]() { throw std::runtime_error("WARNING: Failed to save keyword"); });
-			CHelper::save_string(description, "extended", get_ex_description()->description,
+			CHelper::save_string(description, "extended", get_ex_description().front().description.c_str(),
 								 [&]() { throw std::runtime_error("WARNING: Failed to save extended description"); });
 		}
 
@@ -606,7 +609,7 @@ bool CObject::save_to_node(pugi::xml_node *node) const {
 			// unpack item_parameters
 			std::list<std::string> item_parameters;
 			switch (get_type()) {
-				case EObjType::kIngredient: {
+				case EObjType::kMagicIngredient: {
 					int flag = 1;
 					while (flag <= get_spec_param()) {
 						if (IS_SET(get_spec_param(), flag)) {
@@ -645,7 +648,7 @@ bool CObject::save_to_node(pugi::xml_node *node) const {
 											   "WARNING: Could not save extraflag " + NAME_BY_ITEM(value));
 									   });
 
-		CHelper::save_list<EWeaponAffect>(*node, "weapon_affects", "weapon_affect", get_affect_flags(),
+		CHelper::save_list<EEquipmentAffect>(*node, "weapon_affects", "weapon_affect", get_affect_flags(),
 										  [&]() {
 												  throw std::runtime_error(
 													  "WARNING: Failed to create node \"weapon_affects\".\n");
@@ -723,7 +726,7 @@ ObjData *CObject::build_object() const {
 
 bool CObject::load_item_parameters(const pugi::xml_node *node) {
 	switch (get_type()) {
-		case EObjType::kIngredient:
+		case EObjType::kMagicIngredient:
 			for (const auto flags : node->children("parameter")) {
 				const char *flag = flags.child_value();
 				try {
@@ -1073,7 +1076,10 @@ bool CCraftModel::load() {
 	Logger::CPrefix prefix(logger, BODY_PREFIX);
 
 	pugi::xml_document doc;
-	const auto result = doc.load_file(FILE_NAME.c_str());
+	// Файл лежит на диске в KOI8-R; читаем через границу кодировки, а разбираем уже
+	// буфер в нативной кодировке движка (issue #3681). Под KOI8-R это тождество.
+	const std::string xml_craft = native_text::read_data_file(FILE_NAME.c_str());
+	const auto result = doc.load_buffer(xml_craft.data(), xml_craft.size());
 
 	if (!result) {
 		logger("Craft load error: '%s' at offset %zu\n",
@@ -1542,9 +1548,11 @@ bool CCraftModel::export_object(const ObjVnum vnum, const char *filename) {
 
 	pugi::xml_node decl = document.prepend_child(pugi::node_declaration);
 	decl.append_attribute("version") = "1.0";
-	decl.append_attribute("encoding") = "koi8-r";
+	decl.append_attribute("encoding") = "utf-8";
 
-	return document.save_file(filename);
+	std::ostringstream xml;
+	document.save(xml, "\t", pugi::format_default, pugi::encoding_utf8);
+	return native_text::write_file(filename, xml.str());
 }
 
 const std::string CObject::KIND = "simple object";

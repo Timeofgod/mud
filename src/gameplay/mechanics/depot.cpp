@@ -2,12 +2,24 @@
 // Copyright (c) 2007 Krodo
 // Part of Bylins http://www.mud.ru
 
+#include <vector>
+#include "utils/native_text.h"
 #include "depot.h"
+#include "engine/db/player_index.h"
+#include "administration/privilege.h"
+#include "gameplay/economics/currencies.h"
+#include "gameplay/ai/spec_procs.h"
+#include "utils/grammar/gender.h"
+#include "utils/grammar/declensions.h"
 
 #include "engine/db/world_characters.h"
 #include "engine/db/world_objects.h"
 #include "engine/db/obj_prototypes.h"
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/mechanics/inventory.h"
+#include "utils/utils_parse.h"
 #include "gameplay/economics/auction.h"
 #include "engine/ui/color.h"
 #include "engine/entities/char_player.h"
@@ -18,17 +30,19 @@
 #include "stable_objs.h"
 #include "weather.h"
 #include "gameplay/mechanics/dungeons.h"
+#include "gameplay/core/remort.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include <cmath>
+#include "engine/db/global_objects.h"
 
 extern int bank(CharData *, void *, int, char *);
 extern void olc_update_object(int robj_num, ObjData *obj, ObjData *olc_proto);
 namespace Depot {
 
 // максимальное кол-во шмоток в персональном хранилище (волхвам * 2)
-inline unsigned int MAX_PERS_SLOTS(CharData *ch) {return GetRealLevel(ch) + GetRealRemort(ch) * 3;};
+inline unsigned int MAX_PERS_SLOTS(CharData *ch) {return GetRealLevel(ch) + remort::GetRealRemort(ch) * 3;};
 //const unsigned int MAX_PERS_INGR_SLOTS = 50;
 
 // * Для оффлайнового списка шмоток в хранилище.
@@ -99,12 +113,12 @@ DepotListType depot_list; // список личных хранилищ
 
 // * Капитально расширенная версия сислога для хранилищ.
 void depot_log(const char *format, ...) {
-	const char *filename = "../log/depot.log";
+	const auto filename = runtime_config.log_dir() + "/depot.log";
 	static FILE *file = 0;
 	if (!file) {
-		file = fopen(filename, "a");
+		file = fopen(filename.c_str(), "a");
 		if (!file) {
-			log("SYSERR: can't open %s!", filename);
+			log("SYSERR: can't open %s!", filename.c_str());
 			return;
 		}
 		opened_files.push_back(file);
@@ -203,20 +217,19 @@ std::string generate_purged_text(long uid, int obj_vnum, unsigned int obj_uid) {
 		return out.str();
 	}
 
-	const std::shared_ptr<char> databuf(new char[fsize + 1], std::default_delete<char[]>());
+	std::vector<char> raw(fsize + 1, '\0');
 
 	fseek(fl, 0L, SEEK_SET);
-	if (!databuf
-		|| !fread(databuf.get(), fsize, 1, fl)
-		|| ferror(fl)) {
+	if (!fread(raw.data(), fsize, 1, fl) || ferror(fl)) {
 		fclose(fl);
 		log("Хранилище: ошибка чтения файла предметов (%s).", filename);
 		return out.str();
 	}
 	fclose(fl);
 
-	char *data = databuf.get();
-	data[fsize] = '\0';
+	// Граница чтения: файлы хранилищ лежат на диске в KOI8-R (issue #3681).
+	std::string databuf = native_text::from_disk_text(std::string(raw.data(), fsize));
+	char *data = databuf.data();
 	int error = 0;
 
 	for (fsize = 0; *data && *data != '$'; fsize++) {
@@ -228,15 +241,14 @@ std::string generate_purged_text(long uid, int obj_vnum, unsigned int obj_uid) {
 			continue;
 		}
 
-		if (obj->get_unique_id() == obj_uid
+		if (static_cast<unsigned int>(obj->get_unique_id()) == obj_uid
 			&& obj->get_vnum() == obj_vnum) {
-			std::ostringstream text;
-			text << "[Персональное хранилище]: " << kColorBoldRed << "'"
-				 << obj->get_short_description() << char_get_custom_label(obj.get(), ch)
-				 << " рассыпал" << GET_OBJ_SUF_2(obj.get())
-				 << " в прах'" << kColorNrm << "\r\n";
+			// Цвет повторяется после имени -- см. комментарий в SendMsgToChar ниже.
+			auto text = fmt::format("[Персональное хранилище]: &R'{}{}&R рассыпал{} в прах'&n\r\n",
+									obj->get_short_description(), char_get_custom_label(obj.get(), ch),
+									grammar::ObjSexEnding(obj->get_sex(), 2));
 			ExtractObjFromWorld(obj.get());
-			return text.str();
+			return text;
 		}
 		ExtractObjFromWorld(obj.get());
 	}
@@ -261,6 +273,9 @@ void add_purged_message(long uid, int obj_vnum, unsigned int obj_uid) {
 		log("Хранилище: error open file: %s! (%s %s %d)", name.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
 	file << generate_purged_text(uid, obj_vnum, obj_uid);
 }
 
@@ -279,10 +294,10 @@ void delete_purged_entry(long uid) {
 }
 
 bool show_purged_message(CharData *ch) {
-	auto it = purged_list.find(GET_UID(ch));
+	auto it = purged_list.find(ch->get_uid());
 	if (it != purged_list.end()) {
 		// имя у нас канеш и так есть, но че зря код дублировать
-		std::string name = generate_purged_filename(GET_UID(ch));
+		std::string name = generate_purged_filename(ch->get_uid());
 		if (name.empty()) {
 			log("Хранилище: show_purged_message пустое имя файла %ld.", ch->get_uid());
 			return true;
@@ -293,8 +308,9 @@ bool show_purged_message(CharData *ch) {
 			return true;
 		}
 		std::ostringstream out;
-		out << "\r\n" << file.rdbuf();
-		SendMsgToChar(out.str(), ch);
+		out << file.rdbuf();
+		// Граница чтения: файл записан в кодировке мира (issue #3681).
+		SendMsgToChar("\r\n" + native_text::from_disk_text(out.str()), ch);
 		remove(name.c_str());
 		purged_list.erase(it);
 		need_save_purged_list = true;
@@ -348,9 +364,9 @@ void remove_char_entry(long uid, CharNode &node) {
 	if (!node.name.empty() && (node.money_spend || node.buffer_cost)) {
 		Player t_victim;
 		Player *victim = &t_victim;
-		if (LoadPlayerCharacter(node.name.c_str(), victim, ELoadCharFlags::kFindId) > -1 && GET_UID(victim) == uid) {
+		if (LoadPlayerCharacter(node.name.c_str(), victim, ELoadCharFlags::kFindId) > -1 && victim->get_uid() == uid) {
 			int total_pay = node.money_spend + static_cast<int>(node.buffer_cost);
-			victim->remove_both_gold(total_pay);
+			currencies::RemoveTotal(*victim, currencies::kGold, total_pay);
 			victim->save_char();
 		}
 	}
@@ -463,7 +479,7 @@ void load_chests() {
 		const auto rnum = ch->get_rnum();
 		if (rnum > 0
 			&& rnum <= top_of_mobt
-			&& mob_index[rnum].func == bank) {
+			&& specials::IsBankkeeper(ch.get())) {
 			const auto pers_chest = world_objects.create_from_prototype_by_rnum(system_obj::PERS_CHEST_RNUM);
 			if (!pers_chest) {
 				return;
@@ -512,7 +528,7 @@ void save_timedata() {
 		out << "<Node>\n" << it->first << " ";
 		// чар онлайн - пишем бабло с его счета, иначе берем из оффлайновых полей инфу
 		if (it->second.ch)
-			out << it->second.ch->get_total_gold() << " 0 ";
+			out << currencies::GetTotal(*it->second.ch, currencies::kGold) << " 0 ";
 		else
 			out << it->second.money << " " << it->second.money_spend << " ";
 		out << it->second.buffer_cost << "\n";
@@ -535,7 +551,11 @@ void save_timedata() {
 		log("Хранилище: error open file: %s! (%s %s %d)", depot_file, __FILE__, __func__, __LINE__);
 		return;
 	}
-	file << out.rdbuf();
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 	file.close();
 }
 
@@ -575,7 +595,11 @@ void write_obj_file(const std::string &name, int file_type, const ObjListType &c
 		log("Хранилище: error open file: %s! (%s %s %d)", filename, __FILE__, __func__, __LINE__);
 		return;
 	}
-	file << out.rdbuf();
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 	file.close();
 }
 
@@ -607,17 +631,30 @@ void save_char_by_uid(int uid) {
 // * Апдейт таймеров в онлайн списках с оповещением о пурже, если чар онлайн и расчетом общей ренты.
 void CharNode::update_online_item() {
 	for (ObjListType::iterator obj_it = pers_online.begin(); obj_it != pers_online.end();) {
-		if ((*obj_it)->get_timer() == 0) {
+		ObjData *obj = obj_it->get();
+		// После ObjDecayManager::process_tick объекты с истёкшим дедлайном
+		// удаляются из индексов decay_manager, но shared_ptr из pers_online
+		// держит их живыми. ObjData::get_timer() в этом случае откатывается
+		// к CObjectPrototype::get_timer() (прото-таймер, обычно > 0), и
+		// проверка timer == 0 такие объекты пропускает. Тогда дальше в
+		// obj_point_update ExtractObjFromWorld(j) удалит их из world_objects,
+		// а pers_online продолжит держать ссылку -- следующий get из сундука
+		// падает в SYSERR в PlaceObjToInventory (issue #3239).
+		const bool expired_by_decay = !world_objects.decay_manager().contains(obj);
+		if (expired_by_decay || obj->get_timer() == 0) {
 			if (ch) {
 				// если чар в лд или еще чего - лучше записать и выдать это ему при след
 				// входе в игру, чтобы уж точно увидел
 				if (ch->desc && ch->desc->state == EConState::kPlaying) {
-					SendMsgToChar(ch, "[Персональное хранилище]: %s'%s%s рассыпал%s в прах'%s\r\n",
-								  kColorBoldRed, (*obj_it)->get_short_description().c_str(),
-								  char_get_custom_label(obj_it->get(), ch).c_str(),
-								  GET_OBJ_SUF_2((*obj_it)), kColorNrm);
+					// Цвет повторяем после имени: именные вещи закрывают свой цвет сбросом (&n),
+					// и без этого красной оставалась только открывающая кавычка.
+					SendMsgToChar(fmt::format("[Персональное хранилище]: &R'{}{}&R рассыпал{} в прах'&n\r\n",
+											  (*obj_it)->get_short_description(),
+											  char_get_custom_label(obj_it->get(), ch),
+											  grammar::ObjSexEnding((*obj_it)->get_sex(), 2)),
+								  ch);
 				} else {
-					add_purged_message(GET_UID(ch), GET_OBJ_VNUM(obj_it->get()), (*obj_it)->get_unique_id());
+					add_purged_message(ch->get_uid(), GET_OBJ_VNUM(obj_it->get()), (*obj_it)->get_unique_id());
 				}
 			}
 
@@ -775,7 +812,7 @@ bool is_depot(ObjData *obj) {
 // * Распечатка отдельного предмета при осмотре хранилища.
 void print_obj(std::stringstream &i_out, std::stringstream &s_out,
 			   ObjData *obj, int count, CharData *ch) {
-	const bool output_to_i = obj->get_type() == EObjType::kMagicIngredient
+	const bool output_to_i = obj->get_type() == EObjType::kMagicComponent
 		|| obj->get_type() == EObjType::kCraftMaterial;
 	std::stringstream &out = output_to_i ? i_out : s_out;
 
@@ -785,7 +822,7 @@ void print_obj(std::stringstream &i_out, std::stringstream &s_out,
 		out << " [" << count << "]";
 	}
 	out << " [" << get_object_low_rent(obj) << " "
-		<< GetDeclensionInNumber(get_object_low_rent(obj), EWhat::kMoneyA) << "]\r\n";
+		<< MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(get_object_low_rent(obj), grammar::ECase::kNom).c_str() << "]\r\n";
 }
 
 // * Расчет кол-ва слотов под шмотки в персональном хранилище с учетом профы чара.
@@ -813,7 +850,7 @@ std::string print_obj_list(CharData *ch, ObjListType &cont) {
 
 	auto prev_obj_it = cont.cend();
 	for (auto obj_it = cont.cbegin(); obj_it != cont.cend(); ++obj_it) {
-		if ((*obj_it)->get_type() == EObjType::kMagicIngredient
+		if ((*obj_it)->get_type() == EObjType::kMagicComponent
 			|| (*obj_it)->get_type() == EObjType::kCraftMaterial) {
 			++i_cnt;
 		} else {
@@ -837,16 +874,16 @@ std::string print_obj_list(CharData *ch, ObjListType &cont) {
 		print_obj(i_out, s_out, prev_obj_it->get(), count, ch);
 	}
 
-	const long money = ch->get_gold() + ch->get_bank();
+	const long money = currencies::GetHand(*ch, currencies::kGold) + currencies::GetBank(*ch, currencies::kGold);
 	const long expired = rent_per_day ? (money / rent_per_day) : 0;
 
 	std::stringstream head;
 	head << kColorWht
 		 << "Ваше персональное хранилище. Рента в день: "
-		 << rent_per_day << " " << GetDeclensionInNumber(rent_per_day, EWhat::kMoneyA);
+		 << rent_per_day << " " << MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(rent_per_day, grammar::ECase::kNom).c_str();
 	if (rent_per_day) {
 		head << ", денег хватит на " << expired
-			 << " " << GetDeclensionInNumber(expired, EWhat::kDay);
+			 << " " << grammar::GetDeclensionInNumber(expired, grammar::EWhat::kDay);
 	}
 	head << ".\r\n"
 		 << "Заполненность отделения для вещей: "
@@ -893,7 +930,7 @@ void show_depot(CharData *ch) {
 	if (ch->IsNpc()) return;
 
 #ifndef TEST_BUILD
-	if (IS_IMMORTAL(ch) && !IS_IMPL(ch)) {
+	if (privilege::IsImmortal(ch) && !privilege::IsImpl(ch)) {
 		SendMsgToChar("И без хранилища обойдешься...\r\n", ch);
 		return;
 	}
@@ -905,7 +942,7 @@ void show_depot(CharData *ch) {
 		return;
 	}
 
-	DepotListType::iterator it = create_depot(GET_UID(ch), ch);
+	DepotListType::iterator it = create_depot(ch->get_uid(), ch);
 	if (it == depot_list.end()) {
 		SendMsgToChar("Ошибочка, сообщие богам...\r\n", ch);
 		log("Хранилище: UID %ld, name: %s - возвращен некорректный уид персонажа.", ch->get_uid(), GET_NAME(ch));
@@ -926,10 +963,10 @@ void put_gold_chest(CharData *ch, const ObjData::shared_ptr &obj) {
 		return;
 	}
 	long gold = GET_OBJ_VAL(obj, 0);
-	ch->add_bank(gold);
+	currencies::AddBank(*ch, currencies::kGold, gold);
 	RemoveObjFromChar(obj.get());
 	ExtractObjFromWorld(obj.get());
-	SendMsgToChar(ch, "Вы вложили %ld %s.\r\n", gold, GetDeclensionInNumber(gold, EWhat::kMoneyU));
+	SendMsgToChar(ch, "Вы вложили %ld %s.\r\n", gold, MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(gold, grammar::ECase::kNom).c_str());
 }
 
 /**
@@ -938,24 +975,19 @@ void put_gold_chest(CharData *ch, const ObjData::shared_ptr &obj) {
 */
 bool can_put_chest(CharData *ch, ObjData *obj) {
 	// depot_log("can_put_chest: %s, %s", GET_NAME(ch), obj->get_PName(ECase::kNom));
-	if (obj->has_flag(EObjFlag::kZonedacay)
-		|| obj->has_flag(EObjFlag::kRepopDecay)
+	if (obj->is_unrentable()
 		|| obj->has_flag(EObjFlag::kDecay)
-		|| obj->has_flag(EObjFlag::kNorent)
-		|| obj->get_type() == EObjType::kKey
-		|| obj->get_rent_off() < 0
-		|| obj->get_rnum() <= kNothing
 		|| NamedStuff::check_named(ch, obj, 0)) {
-//		|| (NamedStuff::check_named(ch, obj, 0) && GET_UID(ch) != obj->get_owner())) {
-		SendMsgToChar(ch, "Неведомая сила помешала положить %s в хранилище.\r\n", obj->get_PName(ECase::kAcc).c_str());
+		SendMsgToChar(ch, "Неведомая сила помешала положить %s в хранилище.\r\n", obj->get_PName(grammar::ECase::kAcc).c_str());
 		return 0;
 	} else if (obj->get_type() == EObjType::kContainer
 		&& obj->get_contains()) {
-		SendMsgToChar(ch, "В %s что-то лежит.\r\n", obj->get_PName(ECase::kPre).c_str());
+		SendMsgToChar(ch, "В %s что-то лежит.\r\n", obj->get_PName(grammar::ECase::kPre).c_str());
 		return 0;
 	} else if (SetSystem::is_norent_set(ch, obj)) {
-		snprintf(buf, kMaxStringLength, "%s - требуется две и более вещи из набора.\r\n", obj->get_PName(ECase::kNom).c_str());
-		SendMsgToChar(utils::CAP(buf), ch);
+		// CAP(std::string) возвращает копию, а не правит на месте
+		SendMsgToChar(utils::CAP(fmt::format("{} - требуется две и более вещи из набора.\r\n",
+											 obj->get_PName(grammar::ECase::kNom))), ch);
 		return 0;
 	}
 	return 1;
@@ -964,7 +996,7 @@ bool can_put_chest(CharData *ch, ObjData *obj) {
 unsigned count_inrg(const ObjListType &cont) {
 	unsigned ingr_cnt = 0;
 	for (auto obj_it = cont.cbegin(); obj_it != cont.cend(); ++obj_it) {
-		if ((*obj_it)->get_type() == EObjType::kMagicIngredient
+		if ((*obj_it)->get_type() == EObjType::kMagicComponent
 			|| (*obj_it)->get_type() == EObjType::kCraftMaterial) {
 			++ingr_cnt;
 		}
@@ -977,7 +1009,7 @@ bool put_depot(CharData *ch, ObjData::shared_ptr &obj) {
 	if (ch->IsNpc()) return 0;
 
 #ifndef TEST_BUILD
-	if (IS_IMMORTAL(ch) && !IS_IMPL(ch)) {
+	if (privilege::IsImmortal(ch) && !privilege::IsImpl(ch)) {
 		SendMsgToChar("И без хранилища обойдешься...\r\n", ch);
 		return 0;
 	}
@@ -1000,7 +1032,7 @@ bool put_depot(CharData *ch, ObjData::shared_ptr &obj) {
 		return 1;
 	}
 
-	DepotListType::iterator it = create_depot(GET_UID(ch), ch);
+	DepotListType::iterator it = create_depot(ch->get_uid(), ch);
 	if (it == depot_list.end()) {
 		SendMsgToChar("Ошибочка, сообщие богам...\r\n", ch);
 		log("Хранилище: UID %ld, name: %s - возвращен некорректный уид персонажа.", ch->get_uid(), GET_NAME(ch));
@@ -1009,7 +1041,7 @@ bool put_depot(CharData *ch, ObjData::shared_ptr &obj) {
 
 	const size_t ingr_cnt = count_inrg(it->second.pers_online);
 	const size_t staff_cnt = it->second.pers_online.size() - ingr_cnt;
-	const bool is_ingr = obj->get_type() == EObjType::kMagicIngredient
+	const bool is_ingr = obj->get_type() == EObjType::kMagicComponent
 		|| obj->get_type() == EObjType::kCraftMaterial;
 
 	if (is_ingr && ingr_cnt >= (MAX_PERS_SLOTS(ch) * 2)) {
@@ -1020,13 +1052,13 @@ bool put_depot(CharData *ch, ObjData::shared_ptr &obj) {
 		return 0;
 	}
 
-	if (!ch->get_bank() && !ch->get_gold()) {
+	if (!currencies::GetBank(*ch, currencies::kGold) && !currencies::GetHand(*ch, currencies::kGold)) {
 		SendMsgToChar(ch, "У вас ведь совсем нет денег, чем вы собираетесь расплачиваться за хранение вещей?\r\n");
 		return 0;
 	}
 	obj = world_objects.get_by_raw_ptr(dungeons::SwapOriginalObject(obj.get()));
 	depot_log("put_depot %s %ld: %s %d %d",
-			  GET_NAME(ch), GET_UID(ch), obj->get_short_description().c_str(),
+			  GET_NAME(ch), ch->get_uid(), obj->get_short_description().c_str(),
 			  obj->get_unique_id(), GET_OBJ_VNUM(obj.get()));
 	it->second.pers_online.push_front(obj);
 	it->second.need_save = true;
@@ -1045,7 +1077,7 @@ void take_depot(CharData *vict, char *arg, int howmany) {
 	if (vict->IsNpc()) return;
 
 #ifndef TEST_BUILD
-	if (IS_IMMORTAL(vict) && !IS_IMPL(vict)) {
+	if (privilege::IsImmortal(vict) && !privilege::IsImpl(vict)) {
 		SendMsgToChar("И без хранилища обойдешься...\r\n", vict);
 		return;
 	}
@@ -1057,7 +1089,7 @@ void take_depot(CharData *vict, char *arg, int howmany) {
 		return;
 	}
 
-	DepotListType::iterator it = depot_list.find(GET_UID(vict));
+	DepotListType::iterator it = depot_list.find(vict->get_uid());
 	if (it == depot_list.end()) {
 		SendMsgToChar("В данный момент ваше хранилище абсолютно пусто.\r\n", vict);
 		return;
@@ -1107,7 +1139,7 @@ bool CharNode::obj_from_obj_list(char *name, CharData *vict) {
 void CharNode::take_item(CharData *vict, char *arg, int howmany) {
 	ObjListType &cont = pers_online;
 
-	int obj_dotmode = find_all_dots(arg);
+	int obj_dotmode = ParseAllPrefix(arg);
 	if (obj_dotmode == kFindIndiv) {
 		bool result = obj_from_obj_list(arg, vict);
 		if (!result) {
@@ -1150,7 +1182,7 @@ void CharNode::take_item(CharData *vict, char *arg, int howmany) {
 * Эта функция зовется ДО того, как поизройдет перекидывание шиота в оффлайн список.
 */
 int get_total_cost_per_day(CharData *ch) {
-	DepotListType::iterator it = depot_list.find(GET_UID(ch));
+	DepotListType::iterator it = depot_list.find(ch->get_uid());
 	if (it != depot_list.end()) {
 		int cost = 0;
 		if (!it->second.pers_online.empty())
@@ -1242,7 +1274,7 @@ void CharNode::load_online_objs(int file_type, bool reload) {
 			// собсна сверимся со списком таймеров и проставим изменившиеся данные
 			TimerListType::iterator obj_it = std::find_if(offline_list.begin(), offline_list.end(),
 														  [&](const OfflineNode &x) {
-															  return x.uid == obj->get_unique_id();
+															  return x.uid == static_cast<unsigned int>(obj->get_unique_id());
 														  });
 
 			if (obj_it != offline_list.end() && obj_it->vnum == obj->get_vnum()) {
@@ -1281,20 +1313,20 @@ void CharNode::load_online_objs(int file_type, bool reload) {
 
 // * Вход чара в игру - снятие за хранилище, пурж шмоток, оповещение о кол-ве снятых денег, перевод списков в онлайн.
 void enter_char(CharData *ch) {
-	DepotListType::iterator it = depot_list.find(GET_UID(ch));
+	DepotListType::iterator it = depot_list.find(ch->get_uid());
 	if (it != depot_list.end()) {
 		// снимаем бабло, если что-то было потрачено на ренту
 		if (it->second.money_spend > 0) {
 			SendMsgToChar(ch, "%sХранилище: за время вашего отсутствия удержано %ld %s.%s\r\n\r\n",
 						  kColorWht, it->second.money_spend,
-						  GetDeclensionInNumber(it->second.money_spend, EWhat::kMoneyA), kColorNrm);
+						  MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(it->second.money_spend, grammar::ECase::kNom).c_str(), kColorNrm);
 
-			long rest = ch->remove_both_gold(it->second.money_spend);
+			long rest = currencies::RemoveTotal(*ch, currencies::kGold, it->second.money_spend);
 			if (rest > 0) {
 				// есть вариант, что денег не хватит, потому что помимо хранилищ еще капает за
 				// одежду и инвентарь, а учитывать еще и их при расчетах уже как-то мутно
 				// поэтому мы просто готовы, если что, все технично спуржить при входе
-				depot_log("no money %s %ld: reset depot", GET_NAME(ch), GET_UID(ch));
+				depot_log("no money %s %ld: reset depot", GET_NAME(ch), ch->get_uid());
 				it->second.reset();
 				// файл убьется позже при ребуте на пустом хране,
 				// даже если не будет никаких перезаписей по ходу игры
@@ -1345,7 +1377,7 @@ void CharNode::online_to_offline(ObjListType &cont) {
 * TODO: так же мы сейчас дергаем эту функцию для пустых чаров, у которых уид заведомо нулевой.
 */
 void exit_char(CharData *ch) {
-	DepotListType::iterator it = depot_list.find(GET_UID(ch));
+	DepotListType::iterator it = depot_list.find(ch->get_uid());
 	if (it != depot_list.end()) {
 		// тут лучше дернуть сейв руками до тика, т.к. есть вариант зайти и тут же выйти
 		// в итоге к моменту сейва онлайн список будет пустой и все похерится
@@ -1353,7 +1385,7 @@ void exit_char(CharData *ch) {
 
 		it->second.online_to_offline(it->second.pers_online);
 		it->second.ch = 0;
-		it->second.money = ch->get_bank() + ch->get_gold();
+		it->second.money = currencies::GetBank(*ch, currencies::kGold) + currencies::GetHand(*ch, currencies::kGold);
 		it->second.money_spend = 0;
 	}
 }
@@ -1393,33 +1425,18 @@ void reload_char(long uid, CharData *ch) {
 		}
 	}
 
-	snprintf(buf, kMaxStringLength, "Depot: %s reload items for %s.", GET_NAME(ch), it->second.name.c_str());
-	mudlog(buf, DEF, std::max(kLvlImmortal, GET_INVIS_LEV(ch)), SYSLOG, true);
-	imm_log("%s", buf);
+	const std::string msg = fmt::format("Depot: {} reload items for {}.", GET_NAME(ch), it->second.name);
+	mudlog(msg, DEF, std::max(kLvlImmortal, GET_INVIS_LEV(ch)), SYSLOG, true);
+	imm_log("%s", msg.c_str());
 }
 
-/**
-* Учет локейт в персональных хранилищах.
-* \param count - оставшееся кол-во возможных показываемых шмоток после прохода по основному обж-списку.
-*/
-std::string PrintSpellLocateObject(CharData *ch, ObjData *obj) {
-	for (auto it : depot_list) {
-		for (auto obj_it : it.second.pers_online) {
-			if (!IS_GOD(ch)) {
-				if (number(1, 100) > (40 + std::max((GetRealInt(ch) - 25) * 2, 0))) {
-					continue;
-				}
-				if (obj_it->has_flag(EObjFlag::kNolocate)
-					&& !IS_GOD(ch)) {
-					continue;
-				}
-			}
-			if (obj->get_id() == obj_it->get_id()) {
-				return fmt::format("{} наход{}ся у кого-то в персональном хранилище.\r\n", obj_it->get_short_description().c_str(), GET_OBJ_POLY_1(ch, obj_it));
-			}
+// * Для учитывания предметов в персональных хранилищах в локейте.
+void CollectOnlineObjIds(std::unordered_set<long> &ids) {
+	for (const auto &it : depot_list) {
+		for (const auto &obj : it.second.pers_online) {
+			ids.insert(obj->get_id());
 		}
 	}
-	return {};
 }
 
 std::string print_imm_where_obj(const ObjData *obj) {
@@ -1429,7 +1446,7 @@ std::string print_imm_where_obj(const ObjData *obj) {
 			 ++obj_it) {
 			if (obj->get_id() ==  (*obj_it)->get_id()) {
 				str = fmt::format("наход{}ся в персональном хранилище ({}).\r\n",
-						GET_OBJ_POLY_1(ch, (*obj_it)),
+						grammar::ObjPluralVerbEnding(((*obj_it))->get_sex()),
 						it->second.name.c_str());
 				return str;
 			}
@@ -1466,22 +1483,10 @@ void olc_update_from_proto(int robj_num, ObjData *olc_proto) {
 
 // * Обработка ренейма персонажа.
 void rename_char(CharData *ch) {
-	DepotListType::iterator it = depot_list.find(GET_UID(ch));
+	DepotListType::iterator it = depot_list.find(ch->get_uid());
 	if (it != depot_list.end()) {
 		it->second.name = GET_NAME(ch);
 	}
-}
-
-// * Поиск цели для каста локейта.
-ObjData *locate_object(const char *str) {
-	for (DepotListType::const_iterator i = depot_list.begin(); i != depot_list.end(); ++i) {
-		for (ObjListType::const_iterator k = i->second.pers_online.begin(); k != i->second.pers_online.end(); ++k) {
-			if (isname(str, (*k)->get_aliases())) {
-				return k->get();
-			}
-		}
-	}
-	return 0;
 }
 
 // * Добавление денег чару, находящемуся оффлайн при переводе кун (типа временное решение).
@@ -1494,7 +1499,7 @@ void add_offline_money(long uid, int money) {
 
 // * Поиск в хранилище внума из списка vnum_list.
 bool find_set_item(CharData *ch, const std::set<int> &vnum_list) {
-	DepotListType::iterator it = depot_list.find(GET_UID(ch));
+	DepotListType::iterator it = depot_list.find(ch->get_uid());
 	if (it != depot_list.end()) {
 		for (ObjListType::iterator obj_it = it->second.pers_online.begin(),
 				 obj_it_end = it->second.pers_online.end(); obj_it != obj_it_end; ++obj_it) {
@@ -1508,15 +1513,14 @@ bool find_set_item(CharData *ch, const std::set<int> &vnum_list) {
 
 // * Запрет на ренту при наличии единственной сетины в хранилище с сообщением от рент-кипера.
 int report_unrentables(CharData *ch, CharData *recep) {
-	DepotListType::iterator it = depot_list.find(GET_UID(ch));
+	DepotListType::iterator it = depot_list.find(ch->get_uid());
 	if (it != depot_list.end()) {
 		for (ObjListType::iterator obj_it = it->second.pers_online.begin(),
 				 obj_it_end = it->second.pers_online.end(); obj_it != obj_it_end; ++obj_it) {
 			if (SetSystem::is_norent_set(ch, obj_it->get())) {
-				snprintf(buf, kMaxStringLength,
-						 "$n сказал$g вам : \"Я не приму на постой %s - требуется две и более вещи из набора.\"",
-						 OBJN(obj_it->get(), ch, ECase::kAcc));
-				act(buf, false, recep, 0, ch, kToVict);
+				act(fmt::format("$n сказал$g вам : \"Я не приму на постой {} - требуется две и более вещи из набора.\"",
+								OBJN(obj_it->get(), ch, grammar::ECase::kAcc)),
+					false, recep, 0, ch, kToVict);
 				return 1;
 			}
 		}

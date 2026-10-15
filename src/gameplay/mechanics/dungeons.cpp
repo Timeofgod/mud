@@ -7,9 +7,17 @@
 */
 
 #include "engine/ui/cmd/do_follow.h"
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/mechanics/follow.h"
+#include "gameplay/mechanics/portal.h"
+#include "gameplay/magic/magic_rooms.h"   // issue.room-affect-trigger-improve: ClearExitAffects on dungeon reuse
 #include "engine/scripting/dg_db_scripts.h"
 #include "dungeons.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_equip_flags.h"
+#include "engine/core/char_handler.h"
+#include "engine/core/obj_handler.h"
+#include "gameplay/mechanics/equipment.h"
+#include "gameplay/mechanics/inventory.h"
 #include "liquid.h"
 #include "engine/db/obj_prototypes.h"
 #include "engine/db/global_objects.h"
@@ -17,8 +25,9 @@
 #include "engine/entities/char_data.h"
 #include "utils/utils_time.h"
 #include "gameplay/ai/spec_procs.h"
+#include "gameplay/mechanics/deathtrap.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 
 extern void ExtractRepopDecayObject(ObjData *obj);
@@ -69,8 +78,7 @@ void TrigCommandsConvert(ZoneRnum zrn_from, ZoneRnum zrn_to, ZoneRnum replacer_z
 	bool find;
 
 	if (zone_table[zrn_from].vnum < 100) {
-		sprintf(buf, "Номер зоны меньше 100, текст триггера не изменяется!");
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog("Номер зоны меньше 100, текст триггера не изменяется!", LGH, kLvlGreatGod, SYSLOG, true);
 		return;
 	}
 	for(int i = trn_start; i <= trn_stop; i++) {
@@ -172,6 +180,7 @@ void CreateBlankZoneDungeon() {
 		new_zone.name = "Зона для данжей";
 		new_zone.under_construction = true;
 		new_zone.top = zone_vnum * 100 + 99;
+		new_zone.entrance = zone_vnum * 100;
 		new_zone.cmd = nullptr; //[0].command = 'S'; //пустой список команд
 		zone_table.push_back(std::move(new_zone));
 		zone_vnum++;
@@ -236,12 +245,12 @@ void CreateBlankObjsDungeon() {
 			obj->set_aliases("новый предмет");
 			obj->set_description("что-то новое лежит здесь");
 			obj->set_short_description("новый предмет");
-			obj->set_PName(ECase::kNom, "это что");
-			obj->set_PName(ECase::kGen, "нету чего");
-			obj->set_PName(ECase::kDat, "привязать к чему");
-			obj->set_PName(ECase::kAcc, "взять что");
-			obj->set_PName(ECase::kIns, "вооружиться чем");
-			obj->set_PName(ECase::kPre, "говорить о чем");
+			obj->set_PName(grammar::ECase::kNom, "это что");
+			obj->set_PName(grammar::ECase::kGen, "нету чего");
+			obj->set_PName(grammar::ECase::kDat, "привязать к чему");
+			obj->set_PName(grammar::ECase::kAcc, "взять что");
+			obj->set_PName(grammar::ECase::kIns, "вооружиться чем");
+			obj->set_PName(grammar::ECase::kPre, "говорить о чем");
 			obj->set_wear_flags(to_underlying(EWearFlag::kTake));
 			obj_proto.add(obj, obj_vnum);
 		}
@@ -269,7 +278,8 @@ void CreateBlankMobsDungeon() {
 			new_index[rnum].vnum = mvn + zvn * 100;
 			new_proto[rnum].set_npc_name("пустой моб");
 			new_proto[rnum].SetCharAliases("моб");
-			new_proto[rnum].player_data.PNames[ECase::kNom] = "пустой моб";
+			new_proto[rnum].SetNpcAttribute(true);
+			new_proto[rnum].player_data.PNames[grammar::ECase::kNom] = "пустой моб";
 			new_index[rnum].total_online = 0;
 			new_index[rnum].stored = 0;
 			new_index[rnum].func = nullptr;
@@ -314,7 +324,7 @@ void ZoneDataCopy(ZoneRnum zrn_from, ZoneRnum zrn_to, std::vector<ZrnComplexList
 	zone_to.typeB_count = 0;
 	zone_to.under_construction = zone_from.under_construction;
 	zone_to.locked = zone_from.locked;
-	zone_to.group = zone_from.group;
+	zone_to.group = 0;
 /*
 	if (zone_to.typeA_count) {
 		CREATE(zone_to.typeA_list, zone_to.typeA_count); //почистить
@@ -390,12 +400,15 @@ void RoomDataCopy(ZoneRnum zrn_from, ZoneRnum zrn_to, std::vector<ZrnComplexList
 		new_room->sector_type = world[i]->sector_type;
 		new_room->people.clear();
 		new_room->func = nullptr;
-		new_room->contents = nullptr;
+		new_room->contents.clear();
 		new_room->track = nullptr;
 		new_room->light = 0;
 		new_room->fires = 0;
 		new_room->gdark = 0;
 		new_room->glight = 0;
+		if (ROOM_FLAGGED(i, ERoomFlag::kSlowDeathTrap) || ROOM_FLAGGED(i, ERoomFlag::kIceTrap)) {
+			deathtrap::add(world[new_rnum]);
+		}
 		for (int dir = 0; dir < EDirection::kMaxDirNum; ++dir) {
 			const auto &from = world[i]->dir_option_proto[dir];
 			if (from) {
@@ -464,14 +477,8 @@ void RoomDataCopy(ZoneRnum zrn_from, ZoneRnum zrn_to, std::vector<ZrnComplexList
 				add_trig_to_owner(-1, trigger_vnum, new_room->vnum);
 			}
 		}
-		ExtraDescription::shared_ptr sdd = world[i]->ex_description;
-		while (sdd) {
-			const ExtraDescription::shared_ptr new_descr(new ExtraDescription);
-			new_descr->set_keyword(sdd->keyword);
-			new_descr->set_description(sdd->description);
-			new_descr->next = new_room->ex_description;
-			sdd = sdd->next;
-		}
+		// копируем экстра-описания исходной комнаты (vector по значению)
+		new_room->ex_description = world[i]->ex_description;
 	}
 }
 
@@ -530,18 +537,20 @@ void MobDataCopy(ZoneRnum zrn_from, ZoneRnum zrn_to) {
 	MobRnum rrn_first = zone_table[zrn_to].RnumMobsLocation.first;
 
 	if (mrn_from == -1) {
-		sprintf(buf, "В зоне нет мобов, копируем остальное");
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog("В зоне нет мобов, копируем остальное", LGH, kLvlGreatGod, SYSLOG, true);
 		return;
 	}
 	for (int i = mrn_from; i <= mrn_last; i++) {
 		MobRnum mrn_to = rrn_first + mob_index[i].vnum % 100;
 		auto old_rnum = mob_proto[mrn_to].get_rnum();
+
+		zone_table[zrn_to].RnumMobsLocation.second = mrn_to;
 		mob_proto[mrn_to] = mob_proto[i];
 		mob_proto[mrn_to].set_rnum(old_rnum);
 		mob_index[mrn_to] = mob_index[i];
+		mob_index[mrn_to].zone = zrn_to;
 		mob_index[mrn_to].vnum = zone_table[zrn_to].vnum * 100 + mob_index[i].vnum % 100;
-		if (mob_index[i].func == shop_ext) {
+		if (specials::IsMobSpecial(mob_index[i].vnum, specials::ESpecial::kShop)) {
 			AddDungeonShopSeller(i, mrn_to);
 		}
 		for (auto &it : mob_proto[mrn_to].dl_list) {
@@ -717,41 +726,30 @@ ZoneVnum CheckDungionErrors(ZoneRnum zrn_from) {
 	ZoneVnum zvn_from = zone_table[zrn_from].vnum;
 
 	if (!GetZoneRooms(zrn_from, &rnum_start, &rnum_stop)) {
-		sprintf(buf, "Нет комнат в зоне %d.", static_cast<int>(zvn_from));
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Нет комнат в зоне {}.", static_cast<int>(zvn_from)), LGH, kLvlGreatGod, SYSLOG, true);
 		return 0;
 	}
 	if (world[rnum_start]->vnum % 100 != 0) {
-		sprintf(buf, "Нет 00 комнаты в зоне источнике %d", zvn_from);
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Нет 00 комнаты в зоне источнике {}", zvn_from), LGH, kLvlGreatGod, SYSLOG, true);
 	}
 	if (zvn_from < 100) {
-		sprintf(buf, "Попытка склонировать двухзначную зону.");
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog("Попытка склонировать двухзначную зону.", LGH, kLvlGreatGod, SYSLOG, true);
 		return 0;
 	}
 	if (zvn_from >= kZoneStartDungeons) {
-		sprintf(buf, "Попытка склонировать данж.");
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog("Попытка склонировать данж.", LGH, kLvlGreatGod, SYSLOG, true);
 		return 0;
 	}
 	for (zvn_to = kZoneStartDungeons; zvn_to < kZoneStartDungeons + kNumberOfZoneDungeons; zvn_to++) {
 		auto zrn_to = GetZoneRnum(zvn_to);
 		if (zone_table[zrn_to].copy_from_zone == 0) {
 			zone_table[zrn_to].copy_from_zone = zvn_from;
-			sprintf(buf,
-					"Клонирую зону %s (%d) в %d, осталось мест: %d",
-					zone_table[zrn_from].name.c_str(),
-					zvn_from,
-					zvn_to,
-					kZoneStartDungeons + kNumberOfZoneDungeons - zvn_to - 1);
-			mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+			mudlog(fmt::format("Клонирую зону {} ({}) в {}, осталось мест: {}", zone_table[zrn_from].name.c_str(), zvn_from, zvn_to, kZoneStartDungeons + kNumberOfZoneDungeons - zvn_to - 1), LGH, kLvlGreatGod, SYSLOG, true);
 			break;
 		}
 	}
 	if (zvn_to == kZoneStartDungeons + kNumberOfZoneDungeons) {
-		sprintf(buf, "Нет свободного места.");
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog("Нет свободного места.", LGH, kLvlGreatGod, SYSLOG, true);
 		return 0;
 	}
 	return zvn_to;
@@ -760,63 +758,31 @@ ZoneVnum CheckDungionErrors(ZoneRnum zrn_from) {
 void DungeonReset(int zrn) {
 	utils::CExecutionTimer timer;
 
-	if (zrn == 0) {
-		sprintf(buf, "Неправильный номер зоны");
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+	if (zrn < 0) {
+		mudlog("Неправильный номер зоны", LGH, kLvlGreatGod, SYSLOG, true);
 		return;
 	}
 	if (zone_table[zrn].copy_from_zone > 0) {
 		utils::CExecutionTimer timer1;
 		RoomDataFree(zrn);
-		sprintf(buf,
-				"Free rooms. zone %s %d, delta %f",
-				zone_table[zrn].name.c_str(),
-				zone_table[zrn].vnum,
-				timer1.delta().count());
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Free rooms. zone {} {}, delta {:.6f}", zone_table[zrn].name.c_str(), zone_table[zrn].vnum, timer1.delta().count()), LGH, kLvlGreatGod, SYSLOG, true);
 		timer1.restart();
 		MobDataFree(zrn);
-		sprintf(buf,
-				"Free mobs. zone %s %d, delta %f",
-				zone_table[zrn].name.c_str(),
-				zone_table[zrn].vnum,
-				timer1.delta().count());
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Free mobs. zone {} {}, delta {:.6f}", zone_table[zrn].name.c_str(), zone_table[zrn].vnum, timer1.delta().count()), LGH, kLvlGreatGod, SYSLOG, true);
 		timer1.restart();
 		ObjDataFree(zrn);
-		sprintf(buf,
-				"Free objs. zone %s %d, delta %f",
-				zone_table[zrn].name.c_str(),
-				zone_table[zrn].vnum,
-				timer1.delta().count());
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Free objs. zone {} {}, delta {:.6f}", zone_table[zrn].name.c_str(), zone_table[zrn].vnum, timer1.delta().count()), LGH, kLvlGreatGod, SYSLOG, true);
 		timer1.restart();
 		ZoneDataFree(zrn);
-		sprintf(buf,
-				"Free zone data. zone %s %d, delta %f",
-				zone_table[zrn].name.c_str(),
-				zone_table[zrn].vnum,
-				timer1.delta().count());
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Free zone data. zone {} {}, delta {:.6f}", zone_table[zrn].name.c_str(), zone_table[zrn].vnum, timer1.delta().count()), LGH, kLvlGreatGod, SYSLOG, true);
 		timer1.restart();
 		TrigDataFree(zrn);
-		sprintf(buf,
-				"Free trigs. zone %s %d, delta %f",
-				zone_table[zrn].name.c_str(),
-				zone_table[zrn].vnum,
-				timer1.delta().count());
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
-		sprintf(buf,
-				"Free all dungeons %s %d, delta %f",
-				zone_table[zrn].name.c_str(),
-				zone_table[zrn].vnum,
-				timer.delta().count());
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Free trigs. zone {} {}, delta {:.6f}", zone_table[zrn].name.c_str(), zone_table[zrn].vnum, timer1.delta().count()), LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Free all dungeons {} {}, delta {:.6f}", zone_table[zrn].name.c_str(), zone_table[zrn].vnum, timer.delta().count()), LGH, kLvlGreatGod, SYSLOG, true);
 		zone_table[zrn].copy_from_zone = 0;
 		return;
 	} else {
-		sprintf(buf, "Попытка сбросить обычныю зону: %d", zone_table[zrn].vnum);
-		mudlog(buf, LGH, kLvlGreatGod, SYSLOG, true);
+		mudlog(fmt::format("Попытка сбросить обычныю зону: {}", zone_table[zrn].vnum), LGH, kLvlGreatGod, SYSLOG, true);
 	}
 }
 void ClearRoom(RoomData *room) {
@@ -824,14 +790,14 @@ void ClearRoom(RoomData *room) {
 		RoomRnum to_room;
 
 		for (const auto vict : people_copy) {
-			if (IS_CHARMICE(vict)) {
+			if (IsCharmice(vict)) {
 				if (vict->get_master() && !vict->get_master()->IsNpc())
 					continue;
 			}
 			if (vict->IsNpc()) {
-				if (vict->followers
+				if (!vict->followers.empty()
 					|| vict->has_master()) {
-					die_follower(vict);
+					follow::DieFollower(vict);
 				}
 				if (!vict->purged()) {
 					ExtractCharFromWorld(vict, false);
@@ -842,7 +808,7 @@ void ClearRoom(RoomData *room) {
 					to_room = GetRoomRnum(calc_loadroom(vict));
 				}
 				PlaceCharToRoom(vict, to_room);
-				look_at_room(vict, to_room);
+				sight::look_at_room(vict, to_room);
 			}
 		}
 		people_copy = room->people;
@@ -853,15 +819,13 @@ void ClearRoom(RoomData *room) {
 				act("$n появил$u, окутанн$w розовым туманом.", false, vict, nullptr, nullptr, kToRoom);
 			}
 		}
-		ObjData *obj, *next_o;
-
-		for (obj = room->contents; obj; obj = next_o) {
-			next_o = obj->get_next_content();
+		while (!room->contents.empty()) {
+			auto obj = room->contents.front();
 			ExtractObjFromWorld(obj);
 		}
 // вдруг лежала сумка с вещами игрока, пройдемся еще раз
-		for (obj = room->contents; obj; obj = next_o) {
-			next_o = obj->get_next_content();
+		while (!room->contents.empty()) {
+			auto obj = room->contents.front();
 			ExtractObjFromWorld(obj);
 		}
 }
@@ -869,9 +833,12 @@ void ClearRoom(RoomData *room) {
 void RoomDataFree(ZoneRnum zrn) {
 	RoomRnum rrn_start = zone_table[zrn].RnumRoomsLocation.first;
 
-	for (RoomVnum rrn = rrn_start; rrn <= rrn_start + 99; rrn++) {
-		while (room_spells::IsRoomAffected(world[rrn], ESpell::kPortalTimer)) {
+	for (RoomRnum rrn = rrn_start; rrn <= rrn_start + 99; rrn++) {
+		while (room_spells::RoomHasPortal(world[rrn])) {
 			RemovePortalGate(rrn);
+		}
+		if (ROOM_FLAGGED(rrn, ERoomFlag::kSlowDeathTrap) || ROOM_FLAGGED(rrn, ERoomFlag::kIceTrap)) {
+			deathtrap::remove(world[rrn]);
 		}
 	}
 	for (RoomVnum rvn = 0; rvn <= 99; rvn++) {
@@ -886,20 +853,15 @@ void RoomDataFree(ZoneRnum zrn) {
 		room->affected.clear();
 		room->vnum = zone_table[zrn].vnum * 100 + rvn;
 		for (int dir = 0; dir < EDirection::kMaxDirNum; ++dir) {
+			// issue.room-affect-trigger-improve (door affects): a reused dungeon room rebuilds its exits;
+			// drop any door affect + its registry entry so nothing outlives the old ExitData.
+			room_spells::ClearExitAffects(room, dir);
 			if (room->dir_option_proto[dir]) {
 				room->dir_option_proto[dir].reset();
 				room->dir_option[dir].reset();
 			}
 		}
-		ExtraDescription::shared_ptr sdd = room->ex_description;
-		if (sdd) {
-			while (sdd) {
-				free(sdd->keyword);
-				free(sdd->description);
-				sdd = sdd->next;
-			}
-			sdd.reset();
-		}
+		room->ex_description.clear();
 	}
 }
 
@@ -908,12 +870,13 @@ void MobDataFree(ZoneRnum zrn) {
 	ZoneVnum zvn = zone_table[zrn].vnum;
 
 	for (MobRnum mrn = 0; mrn <= 99; mrn++) {
-		if (mob_index[mrn_start + mrn].func == shop_ext) {
+		if (specials::IsMobSpecial(mob_index[mrn_start + mrn].vnum, specials::ESpecial::kShop)) {
 			RemoveShopSeller(mrn_start + mrn);
 		}
 		mob_proto[mrn_start + mrn].proto_script->clear();
 		mob_proto[mrn_start + mrn].set_npc_name("пустой моб");
 		mob_index[mrn_start + mrn].vnum = mrn + zvn * 100;
+		mob_proto[mrn_start + mrn].SetCharAliases("моб");
 	}
 // мобы удаляются в RoomDataFree
 }
@@ -923,16 +886,12 @@ void ObjDataFree(ZoneRnum zrn) {
 	ObjRnum orn;
 	std::list<ObjData *> repop_list, swap_list;
 
-	world_objects.foreach([&zrn, &repop_list, &swap_list](const ObjData::shared_ptr &j) {
+	world_objects.foreach_in_zone(zone_table[zrn].vnum, [&repop_list, &swap_list](const ObjData::shared_ptr &j) {
 		if (j->get_parent_rnum() > -1) {
-			auto ovn = j->get_vnum();
-
-			if (ovn / 100 == zone_table[zrn].vnum) {
-				if (j->has_flag(EObjFlag::kRepopDecay)) {
-					repop_list.push_back(j.get());
-				} else {
-					swap_list.push_back(j.get());
-				}
+			if (j->has_flag(EObjFlag::kRepopDecay)) {
+				repop_list.push_back(j.get());
+			} else {
+				swap_list.push_back(j.get());
 			}
 		}
 	});
@@ -950,12 +909,12 @@ void ObjDataFree(ZoneRnum zrn) {
 			obj->set_aliases("новый предмет");
 			obj->set_description("что-то новое лежит здесь");
 			obj->set_short_description("новый предмет");
-			obj->set_PName(ECase::kNom, "это что");
-			obj->set_PName(ECase::kGen, "нету чего");
-			obj->set_PName(ECase::kDat, "привязать к чему");
-			obj->set_PName(ECase::kAcc, "взять что");
-			obj->set_PName(ECase::kIns, "вооружиться чем");
-			obj->set_PName(ECase::kPre, "говорить о чем");
+			obj->set_PName(grammar::ECase::kNom, "это что");
+			obj->set_PName(grammar::ECase::kGen, "нету чего");
+			obj->set_PName(grammar::ECase::kDat, "привязать к чему");
+			obj->set_PName(grammar::ECase::kAcc, "взять что");
+			obj->set_PName(grammar::ECase::kIns, "вооружиться чем");
+			obj->set_PName(grammar::ECase::kPre, "говорить о чем");
 			obj->set_wear_flags(to_underlying(EWearFlag::kTake));
 			obj->set_parent_rnum(-1);
 			obj->clear_proto_script();
@@ -1012,7 +971,7 @@ void AddDungeonShopSeller(MobRnum mrn_from, MobRnum mrn_to) {
 	for (const auto &shop : shop_list) {
 		if (std::find(shop->mob_vnums().begin(), shop->mob_vnums().end(), mvn_from) != std::end(shop->mob_vnums())) {
 			shop->add_mob_vnum(mob_index[mrn_to].vnum);
-			mob_index[mrn_to].func = shop_ext;
+			specials::RegisterMob(mob_index[mrn_to].vnum, specials::ESpecial::kShop);
 		}
 	}
 }
@@ -1024,21 +983,21 @@ void RemoveShopSeller(MobRnum mrn) {
 		auto it = std::find(shop->mob_vnums().begin(), shop->mob_vnums().end(), mvn);
 		if (it != std::end(shop->mob_vnums())) {
 			shop->remove_mob_vnum(it);
-			mob_index[mrn].func = nullptr;
+			specials::UnregisterMob(mob_index[mrn].vnum, specials::ESpecial::kShop);
 		}
 	}
 }
 
-#define TRANS_MOB(arg) \
-    if (mob_index[zone_table[zrn_to].cmd[subcmd].arg].vnum / 100 == zone_table[zrn_from].vnum) { \
-        zone_table[zrn_to].cmd[subcmd].arg = GetMobRnum(mob_index[zone_table[zrn_from].cmd[subcmd].arg].vnum % 100 + zone_table[zrn_to].vnum * 100); }
-#define TRANS_OBJ(arg) \
-    if (obj_proto[zone_table[zrn_to].cmd[subcmd].arg]->get_vnum() / 100 == zone_table[zrn_from].vnum) { \
-        zone_table[zrn_to].cmd[subcmd].arg = GetObjRnum(obj_proto[zone_table[zrn_from].cmd[subcmd].arg]->get_vnum() % 100 + zone_table[zrn_to].vnum * 100); \
+#define TRANS_MOB(field) \
+    if (mob_index[zone_table[zrn_to].cmd[subcmd].field].vnum / 100 == zone_table[zrn_from].vnum) { \
+        zone_table[zrn_to].cmd[subcmd].field = GetMobRnum(mob_index[zone_table[zrn_from].cmd[subcmd].field].vnum % 100 + zone_table[zrn_to].vnum * 100); }
+#define TRANS_OBJ(field) \
+    if (obj_proto[zone_table[zrn_to].cmd[subcmd].field]->get_vnum() / 100 == zone_table[zrn_from].vnum) { \
+        zone_table[zrn_to].cmd[subcmd].field = GetObjRnum(obj_proto[zone_table[zrn_from].cmd[subcmd].field]->get_vnum() % 100 + zone_table[zrn_to].vnum * 100); \
     }
-#define TRANS_ROOM(arg) \
-    if (world[zone_table[zrn_to].cmd[subcmd].arg]->vnum / 100 == zone_table[zrn_from].vnum) { \
-        zone_table[zrn_to].cmd[subcmd].arg = GetRoomRnum(world[zone_table[zrn_from].cmd[subcmd].arg]->vnum % 100 + zone_table[zrn_to].vnum * 100); }
+#define TRANS_ROOM(field) \
+    if (world[zone_table[zrn_to].cmd[subcmd].field]->vnum / 100 == zone_table[zrn_from].vnum) { \
+        zone_table[zrn_to].cmd[subcmd].field = GetRoomRnum(world[zone_table[zrn_from].cmd[subcmd].field]->vnum % 100 + zone_table[zrn_to].vnum * 100); }
 
 void ZoneTransformCMD(ZoneRnum zrn_to, ZoneRnum zrn_from, std::vector<ZrnComplexList> dungeon_list) {
 	for (int subcmd = 0; zone_table[zrn_to].cmd[subcmd].command != 'S'; ++subcmd) {
@@ -1151,13 +1110,8 @@ ObjData *SwapOriginalObject(ObjData *obj) {
 			RemoveObjFromObj(obj);
 		}
 		if (obj->get_custom_label()) {
-			obj_original->set_custom_label(new custom_label());
-			obj_original->get_custom_label()->text_label = str_dup(obj->get_custom_label()->text_label);
-			obj_original->get_custom_label()->author = obj->get_custom_label()->author;
-			if (obj->get_custom_label()->clan_abbrev != nullptr) {
-				obj_original->get_custom_label()->clan_abbrev = str_dup(obj->get_custom_label()->clan_abbrev);
-			}
-			obj_original->get_custom_label()->author_mail = str_dup(obj->get_custom_label()->author_mail);
+			// custom_label is now a value-type with deep copy (issue #3568)
+			obj_original->set_custom_label(std::make_shared<custom_label>(*obj->get_custom_label()));
 		}
 		if (obj->has_flag(EObjFlag::kTicktimer)) {
 			obj_original->set_extra_flag(EObjFlag::kTicktimer);
@@ -1176,7 +1130,6 @@ ObjData *SwapOriginalObject(ObjData *obj) {
 		if (wearer) {
 			EquipObj(wearer, obj_original.get(), pos, CharEquipFlags());
 		}
-		obj_proto.dec_number(obj->get_rnum());
 		world_objects.remove(obj);
 		return obj_original.get();
 	}

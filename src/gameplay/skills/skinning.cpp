@@ -1,8 +1,15 @@
 #include "gameplay/mechanics/dead_load.h"
+#include "administration/privilege.h"
+#include "skill_messages.h"
 #include "engine/entities/char_data.h"
 #include "engine/db/global_objects.h"
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "gameplay/mechanics/inventory.h"
 #include "gameplay/mechanics/meat_maker.h"
+#include "utils/utils_string.h"
+
+#include <fmt/format.h>
 
 extern std::array<int, kMaxMobLevel / 11 + 1> animals_levels;
 
@@ -179,49 +186,49 @@ bool skill_to_skin(CharData *mob, CharData *ch) {
 				return true;
 			break;
 		case 1:
-			if (ch->GetSkill(ESkill::kSkinning) >= 40) {
+			if (GetSkill(ch, ESkill::kSkinning) >= 40) {
 				num = 20 * animals_levels[1] / 701;
 				if (number(1, 100) <= num)
 					return true;
 			} else {
-				sprintf(buf, "Ваше умение слишком низкое, чтобы содрать шкуру %s.\r\n", GET_PAD(mob, 1));
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Ваше умение слишком низкое, чтобы содрать шкуру {}.\r\n",
+										  GET_PAD(mob, 1)), ch);
 				return false;
 			}
 
 			break;
 		case 2:
-			if (ch->GetSkill(ESkill::kSkinning) >= 80) {
+			if (GetSkill(ch, ESkill::kSkinning) >= 80) {
 				num = 10 * animals_levels[2] / 594;
 				if (number(1, 100) <= num)
 					return true;
 			} else {
-				sprintf(buf, "Ваше умение слишком низкое, чтобы содрать шкуру %s.\r\n", GET_PAD(mob, 1));
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Ваше умение слишком низкое, чтобы содрать шкуру {}.\r\n",
+										  GET_PAD(mob, 1)), ch);
 				return false;
 			}
 			break;
 
 		case 3:
-			if (ch->GetSkill(ESkill::kSkinning) >= 120) {
+			if (GetSkill(ch, ESkill::kSkinning) >= 120) {
 				num = 8 * animals_levels[3] / 209;
 				if (number(1, 100) <= num)
 					return true;
 			} else {
-				sprintf(buf, "Ваше умение слишком низкое, чтобы содрать шкуру %s.\r\n", GET_PAD(mob, 1));
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Ваше умение слишком низкое, чтобы содрать шкуру {}.\r\n",
+										  GET_PAD(mob, 1)), ch);
 				return false;
 			}
 			break;
 
 		case 4:
-			if (ch->GetSkill(ESkill::kSkinning) >= 160) {
+			if (GetSkill(ch, ESkill::kSkinning) >= 160) {
 				num = 25 * animals_levels[4] / 20;
 				if (number(1, 100) <= num)
 					return true;
 			} else {
-				sprintf(buf, "Ваше умение слишком низкое, чтобы содрать шкуру %s.\r\n", GET_PAD(mob, 1));
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Ваше умение слишком низкое, чтобы содрать шкуру {}.\r\n",
+										  GET_PAD(mob, 1)), ch);
 				return false;
 			}
 			break;
@@ -299,26 +306,22 @@ ObjData *create_skin(CharData *mob, CharData *ch) {
 }
 
 void DoSkinning(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (!ch->GetSkill(ESkill::kSkinning)) {
-		SendMsgToChar("Вы не умеете этого.\r\n", ch);
+	if (!GetSkill(ch, ESkill::kSkinning)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSkinning, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 
-	one_argument(argument, arg);
-	if (!*arg) {
-		SendMsgToChar("Что вы хотите освежевать?\r\n", ch);
+	const std::string corpse_name = utils::ExtractFirstArgumentLower(argument);
+	if (corpse_name.empty()) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSkinning, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 
-//	auto obj = get_obj_in_list_vis(ch, arg, ch->carrying);
-//	if (!obj) {
-	auto obj = get_obj_in_list_vis(ch, arg, world[ch->in_room]->contents);
+	auto obj = get_obj_in_list_vis(ch, corpse_name, world[ch->in_room]->contents);
 	if (!obj) {
-		snprintf(buf, kMaxInputLength, "Вы не видите здесь '%s'.\r\n", arg);
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("Вы не видите здесь '{}'.\r\n", corpse_name), ch);
 		return;
 	}
-//	}
 
 	const auto mobn = GET_OBJ_VAL(obj, 2);
 	if (!IS_CORPSE(obj) || mobn < 0) {
@@ -327,14 +330,9 @@ void DoSkinning(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	}
 
 	const auto mob = (mob_proto + GetMobRnum(mobn));
-	mob->set_normal_morph();
 
-	if (!IS_IMMORTAL(ch)
-		&& GET_RACE(mob) != ENpcRace::kAnimal
-		&& GET_RACE(mob) != ENpcRace::kReptile
-		&& GET_RACE(mob) != ENpcRace::kFish
-		&& GET_RACE(mob) != ENpcRace::kBird
-		&& GET_RACE(mob) != ENpcRace::kBeastman) {
+	// issue.npc-races: only corpses of races with the <skinnable/> trait can be skinned.
+	if (!privilege::IsImmortal(ch) && !MUD::MobRaces()[GET_RACE(mob)].IsSkinnable()) {
 		SendMsgToChar("Этот труп невозможно освежевать.\r\n", ch);
 		return;
 	}
@@ -350,7 +348,7 @@ void DoSkinning(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	TrainSkill(ch, ESkill::kSkinning, percent <= prob, mob);
 
 	ObjData::shared_ptr tobj;
-	if (ch->GetSkill(ESkill::kSkinning) > 150 && number(1, 200) == 1) // артефакт
+	if (GetSkill(ch, ESkill::kSkinning) > 150 && number(1, 200) == 1) // артефакт
 	{
 		tobj = world_objects.create_from_prototype_by_vnum(meat_mapping.get_artefact_key());
 	} else {
@@ -374,12 +372,12 @@ void DoSkinning(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 		if (GET_RACE(mob) == ENpcRace::kAnimal) // шкуры только с животных
 		{
-			if (IS_IMMORTAL(ch) || skill_to_skin(mob, ch)) {
+			if (privilege::IsImmortal(ch) || skill_to_skin(mob, ch)) {
 				entrails.push_back(create_skin(mob, ch));
 			}
 		}
 
-		entrails.push_back(try_make_ingr(mob, 1000 - ch->GetSkill(ESkill::kSkinning) * 2));  // ингры со всех
+		entrails.push_back(try_make_ingr(mob, 1000 - GetSkill(ch, ESkill::kSkinning) * 2));  // ингры со всех
 
 		for (const auto &it : entrails) {
 			if (it) {

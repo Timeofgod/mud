@@ -7,7 +7,8 @@
 */
 
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
+#include "utils/utils_string.h"
 
 void StopSnooping(CharData *ch) {
 	if (!ch->desc->snooping)
@@ -25,11 +26,12 @@ void DoSnoop(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	if (!ch->desc)
 		return;
 
-	argument = one_argument(argument, arg);
+	std::string remains;
+	const std::string arg = utils::ExtractFirstArgumentLower(argument, remains);
 
-	if (!*arg)
+	if (arg.empty())
 		StopSnooping(ch);
-	else if (!(victim = get_player_vis(ch, arg, EFind::kCharInWorld)))
+	else if (!(victim = target_resolver::FindPlayerVis(ch, arg)))
 		SendMsgToChar("Нет такого создания в игре.\r\n", ch);
 	else if (!victim->desc)
 		act("Вы не можете $S подслушать - он$G потерял$G связь..\r\n",
@@ -53,12 +55,11 @@ void DoSnoop(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			SendMsgToChar("Вы не можете.\r\n", ch);
 			return;
 		}
-		SendMsgToChar(OK, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 
 		ch->desc->snoop_with_map = false;
-		if (god_level >= kLvlImplementator && argument && *argument) {
-			skip_spaces(&argument);
-			if (isname(argument, "map") || isname(argument, "карта")) {
+		if (god_level >= kLvlImplementator && !remains.empty()) {
+			if (isname(remains, "map") || isname(remains, "карта")) {
 				ch->desc->snoop_with_map = true;
 			}
 		}

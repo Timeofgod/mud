@@ -10,9 +10,16 @@
 **************************************************************************/
 
 #include "engine/entities/char_data.h"
+#include "gameplay/core/experience.h"
+#include "administration/privilege.h"
+#include "gameplay/magic/magic_rooms.h"   // issue.room-affect-trigger-improve: ClearExitAffects on wexit purge
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/mechanics/follow.h"
+#include "gameplay/mechanics/mount.h"
 #include "engine/ui/cmd/do_follow.h"
 #include "gameplay/fight/fight.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/core/obj_handler.h"
 #include "utils/id_converter.h"
 #include "engine/db/obj_prototypes.h"
 #include "gameplay/skills/townportal.h"
@@ -23,13 +30,13 @@
 #include "gameplay/core/game_limits.h"
 #include "gameplay/mechanics/damage.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 extern const char *dirs[];
 
 void die(CharData *ch, CharData *killer);
-void sub_write(char *arg, CharData *ch, byte find_invis, int targets);
-void send_to_zone(char *messg, int zone_rnum);
+void sub_write(char *arg, CharData *ch, int find_invis, int targets);
+void send_to_zone(const char *messg, int zone_rnum);
 CharData *get_char_by_room(RoomData *room, const char *name);
 RoomData *get_room(const char *name);
 ObjData *get_obj_by_room(RoomData *room, const char *name);
@@ -113,7 +120,7 @@ void do_wsend(RoomData *room, char *argument, int/* cmd*/, int subcmd, Trigger *
 	char buf[kMaxInputLength], *msg;
 	CharData *ch;
 
-	msg = any_one_arg(argument, buf);
+	msg = one_argument(argument, buf);
 
 	if (!*buf) {
 		wld_log(room, trig, "wsend called with no args");
@@ -129,10 +136,8 @@ void do_wsend(RoomData *room, char *argument, int/* cmd*/, int subcmd, Trigger *
 
 	if ((ch = get_char_by_room(room, buf))) {
 		if (reloc_target != -1 && reloc_target != ch->in_room) {
-			sprintf(buf,
-					"&YВНИМАНИЕ&G Неверное использование команды wat в триггере %s (VNUM=%d).",
-					GET_TRIG_NAME(cur_trig), GET_TRIG_VNUM(cur_trig));
-			mudlog(buf, BRF, kLvlBuilder, ERRLOG, true);
+			sprintf(buf, "&YВНИМАНИЕ&G Неверное использование команды wat, reloc_target %d vict room  %d", world[reloc_target]->vnum, world[ch->in_room]->vnum);
+			wld_log(room, trig, buf);
 		}
 		if (subcmd == SCMD_WSEND)
 			sub_write(msg, ch, true, kToChar);
@@ -140,8 +145,7 @@ void do_wsend(RoomData *room, char *argument, int/* cmd*/, int subcmd, Trigger *
 			sub_write(msg, ch, true, kToRoom);
 	} else {
 		if (*buf != UID_CHAR && *buf != UID_CHAR_ALL) {
-			sprintf(buf1, "no target (%s) found for wsend", buf);
-			wld_log(room, trig, buf1);
+			wld_log(room, trig, fmt::format("no target ({}) found for wsend", buf).c_str());
 		}
 	}
 }
@@ -150,7 +154,7 @@ void do_wzoneecho(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, T
 	ZoneRnum zone;
 	char zone_name[kMaxInputLength], buf[kMaxInputLength], *msg;
 
-	msg = any_one_arg(argument, zone_name);
+	msg = one_argument(argument, zone_name);
 	skip_spaces(&msg);
 
 	if (!*zone_name || !*msg)
@@ -188,26 +192,22 @@ void do_wdoor(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Trigg
 	skip_spaces(&value);
 	if (!*target || !*direction || !*field) {
 		wld_log(room, trig, "wdoor called with too few args");
-		sprintf(buf, "wdoor argument: %s", error);
-		wld_log(room, trig, buf);
+		wld_log(room, trig, fmt::format("wdoor argument: {}", error).c_str());
 		return;
 	}
 	if ((rm = get_room(target)) == nullptr) {
 		wld_log(room, trig, "wdoor: invalid target");
-		sprintf(buf, "wdoor target %s, argument: %s", target, error);
-		wld_log(room, trig, buf);
+		wld_log(room, trig, fmt::format("wdoor target {}, argument: {}", target, error).c_str());
 		return;
 	}
 	if ((dir = search_block(direction, dirs, false)) == -1) {
 		wld_log(room, trig, "wdoor: invalid direction");
-		sprintf(buf, "wdoor direction %s, argument: %s", direction, error);
-		wld_log(room, trig, buf);
+		wld_log(room, trig, fmt::format("wdoor direction {}, argument: {}", direction, error).c_str());
 		return;
 	}
 	if ((fd = search_block(field, door_field, false)) == -1) {
 		wld_log(room, trig, "wdoor: invalid field");
-		sprintf(buf, "wdoor field %s, argument: %s", field, error);
-		wld_log(room, trig, buf);
+		wld_log(room, trig, fmt::format("wdoor field {}, argument: {}", field, error).c_str());
 		return;
 	}
 
@@ -215,6 +215,9 @@ void do_wdoor(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Trigg
 	// purge exit
 	if (fd == 0) {
 		if (exit) {
+			// issue.room-affect-trigger-improve (door affects): drop any door affect + registry entry
+			// before the exit is purged.
+			room_spells::ClearExitAffects(rm, dir);
 			rm->dir_option[dir].reset();
 		}
 	} else {
@@ -271,8 +274,7 @@ void do_wteleport(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, T
 	if (nr > 0) {
 		target = GetRoomRnum(nr);
 	} else {
-		sprintf(buf, "Undefined wteleport room: %s", arg2);
-		wld_log(room, trig, buf);
+		wld_log(room, trig, fmt::format("Undefined wteleport room: {}", arg2).c_str());
 		return;
 	}
 
@@ -293,7 +295,7 @@ void do_wteleport(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, T
 			RemoveCharFromRoom(ch);
 			PlaceCharToRoom(ch, target);
 			if (!ch->IsNpc()) {
-				look_at_room(ch, true);
+				sight::look_at_room(ch, true);
 				lastchar = ch;
 			}
 		}
@@ -308,17 +310,17 @@ void do_wteleport(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, T
 		for (auto ch_i = next_ch; ch_i != people_copy.end(); ch_i = next_ch) {
 			const auto ch = *ch_i;
 			++next_ch;
-			if (ch->IsNpc() && !IS_CHARMICE(ch)) {
+			if (ch->IsNpc() && !IsCharmice(ch)) {
 				continue;
 			}
 			if (target == ch->in_room) {
 //				wld_log(room, trig, "wteleport allchar target is itself");
 				continue;
 			}
-			if (ch->get_horse()) {
-				if (ch->IsOnHorse() || ch->has_horse(true)) {
-					RemoveCharFromRoom(ch->get_horse());
-					PlaceCharToRoom(ch->get_horse(), target);
+			if (mount::GetHorse(ch)) {
+				if (mount::IsOnHorse(ch) || mount::HasHorse(ch, true)) {
+					RemoveCharFromRoom(mount::GetHorse(ch));
+					PlaceCharToRoom(mount::GetHorse(ch), target);
 					onhorse = true;
 				}
 			}
@@ -329,9 +331,9 @@ void do_wteleport(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, T
 			RemoveCharFromRoom(ch);
 			PlaceCharToRoom(ch, target);
 			if (!onhorse)
-				ch->dismount();
+				mount::Dismount(ch);
 			if (!ch->IsNpc()) {
-				look_at_room(ch, true);
+				sight::look_at_room(ch, true);
 				lastchar = ch;
 			}
 		}
@@ -345,19 +347,19 @@ void do_wteleport(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, T
 //				wld_log(room, trig, "wteleport target is itself");
 				return;
 			}
-			if (IS_CHARMICE(ch) && ch->in_room == ch->get_master()->in_room)
+			if (IsCharmice(ch) && ch->in_room == ch->get_master()->in_room)
 				ch = ch->get_master();
 			const auto people_copy = world[ch->in_room]->people;
 			for (const auto charmee : people_copy) {
-				if (IS_CHARMICE(charmee) && charmee->get_master() == ch) {
+				if (IsCharmice(charmee) && charmee->get_master() == ch) {
 					RemoveCharFromRoom(charmee);
 					PlaceCharToRoom(charmee, target);
 				}
 			}
-			if (ch->get_horse()) {
-				if (ch->IsOnHorse() || ch->has_horse(true)) {
-					RemoveCharFromRoom(ch->get_horse());
-					PlaceCharToRoom(ch->get_horse(), target);
+			if (mount::GetHorse(ch)) {
+				if (mount::IsOnHorse(ch) || mount::HasHorse(ch, true)) {
+					RemoveCharFromRoom(mount::GetHorse(ch));
+					PlaceCharToRoom(mount::GetHorse(ch), target);
 					onhorse = true;
 				}
 			}
@@ -368,8 +370,8 @@ void do_wteleport(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, T
 			RemoveCharFromRoom(ch);
 			PlaceCharToRoom(ch, target);
 			if (!onhorse)
-				ch->dismount();
-			look_at_room(ch, true);
+				mount::Dismount(ch);
+			sight::look_at_room(ch, true);
 			greet_mtrigger(ch, -1);
 			greet_otrigger(ch, -1);
 		} else {
@@ -432,9 +434,8 @@ void do_wexp(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Trigge
 	}
 
 	if ((ch = get_char_by_room(room, name))) {
-		EndowExpToChar(ch, atoi(amount));
-		sprintf(buf, "wexp: victim (%s) получил опыт %d", GET_NAME(ch), atoi(amount));
-		wld_log(room, trig, buf);
+		experience::EndowExpToChar(ch, atoi(amount));
+		wld_log(room, trig, fmt::format("wexp: victim ({}) получил опыт {}", GET_NAME(ch), atoi(amount)).c_str());
 	} else {
 		wld_log(room, trig, "wexp: target not found");
 		return;
@@ -467,9 +468,9 @@ void do_wpurge(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Trig
 		return;
 	}
 
-	if (ch->followers
+	if (!ch->followers.empty()
 		|| ch->get_master()) {
-		die_follower(ch);
+		follow::DieFollower(ch);
 	}
 	character_list.AddToExtractedList(ch);
 }
@@ -504,8 +505,7 @@ void do_wload(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Trigg
 		}
 		if (GetObjMIW(object->get_rnum()) >= 0 && obj_proto.actual_count(object->get_rnum()) > GetObjMIW(object->get_rnum())) {
 			if (!stable_objs::IsTimerUnlimited(obj_proto[object->get_rnum()].get())) {
-				sprintf(buf, "wload: количество больше чем в MIW для #%d.", number);
-				wld_log(room, trig, buf);
+				wld_log(room, trig, fmt::format("wload: количество больше чем в MIW для #{}.", number).c_str());
 //				extract_obj(object.get());
 //				return;
 			}
@@ -552,7 +552,7 @@ void do_wdamage(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 			return;
 		}
 
-		if (IS_IMMORTAL(ch) && dam > 0) {
+		if (privilege::IsImmortal(ch) && dam > 0) {
 			SendMsgToChar("Будучи бессмертным, вы избежали повреждения...\r\n", ch);
 			return;
 		}
@@ -563,7 +563,7 @@ void do_wdamage(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 				wld_log(room, trig, "wdamage: incorrect damage type.");
 				return;
 			}
-			Damage mdamage(SimpleDmg(kTypeTriggerdeath), dam, type);
+			Damage mdamage(SimpleDmg(fight::EDamageSource::kTriggerDeath), dam, type);
 			mdamage.Process(ch, ch);
 		} else {
 			ch->set_hit(ch->get_hit() - dam);
@@ -575,9 +575,10 @@ void do_wdamage(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 			char_dam_message(dam, ch, ch, 0);
 			if (ch->GetPosition() == EPosition::kDead) {
 				if (!ch->IsNpc()) {
-					sprintf(buf2, "%s killed by wdamage at %s [%d]", GET_NAME(ch),
-							ch->in_room == kNowhere ? "kNowhere" : world[ch->in_room]->name, GET_ROOM_VNUM(ch->in_room));
-					mudlog(buf2, BRF, kLvlBuilder, SYSLOG, true);
+					mudlog(fmt::format("{} killed by wdamage at {} [{}], trigger [{}]", GET_NAME(ch),
+									   ch->in_room == kNowhere ? "kNowhere" : world[ch->in_room]->name,
+									   GET_ROOM_VNUM(ch->in_room), GET_TRIG_VNUM(trig)),
+						   BRF, kLvlBuilder, SYSLOG, true);
 				}
 				die(ch, nullptr);
 			}
@@ -680,8 +681,7 @@ void do_wskillturn(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, 
 	if (MUD::Skills().IsValid(skill_id)) {
 		is_skill = true;
 	} else if ((recipenum = im_get_recipe_by_name(skill_name)) < 0) {
-		sprintf(buf, "wskillturn: %s skill not found", skill_name);
-		wld_log(room, trig, buf);
+		wld_log(room, trig, fmt::format("wskillturn: {} skill not found", skill_name).c_str());
 		return;
 	}
 
@@ -703,8 +703,7 @@ void do_wskillturn(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, 
 		if (MUD::Class(ch->GetClass()).skills[skill_id].IsAvailable()) {
 			trg_skillturn(ch, skill_id, skilldiff, last_trig_vnum);
 		} else {
-			sprintf(buf, "wskillturn: skill and character class mismatch");
-			wld_log(room, trig, buf);
+			wld_log(room, trig, "wskillturn: skill and character class mismatch");
 		}
 	} else {
 		trg_recipeturn(ch, recipenum, skilldiff);
@@ -729,8 +728,7 @@ void do_wskilladd(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, T
 	if (MUD::Skills().IsValid(skill_id)) {
 		is_skill = true;
 	} else if ((recipenum = im_get_recipe_by_name(skillname)) < 0) {
-		sprintf(buf, "wskillturn: %s skill/recipe not found", skillname);
-		wld_log(room, trig, buf);
+		wld_log(room, trig, fmt::format("wskillturn: {} skill/recipe not found", skillname).c_str());
 		return;
 	}
 
@@ -926,12 +924,8 @@ void do_wportal(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 }
 // для команды wat
 void WldDgCast(RoomData *room, char *argument, int/* cmd*/, int/* subcmd*/, Trigger *trig) {
-	std::string dg_arg = "DgCast ";
-	dg_arg += argument;
-	char *tmp_str = str_dup(dg_arg.c_str());
-
-	do_dg_cast(room, trig, WLD_TRIGGER, tmp_str);
-	free(tmp_str);
+	std::string dg_arg = std::string("dgcast ") + argument;
+	do_dg_cast(room, trig, WLD_TRIGGER, dg_arg);
 }
 
 const struct wld_command_info wld_cmd_info[] =
@@ -993,7 +987,7 @@ void wld_command_interpreter(RoomData *room, char *argument, Trigger *trig) {
 	if (!*argument)
 		return;
 
-	line = any_one_arg(argument, arg);
+	line = one_argument(argument, arg);
 
 	// find the command
 	int cmd = 0;
@@ -1005,8 +999,7 @@ void wld_command_interpreter(RoomData *room, char *argument, Trigger *trig) {
 	}
 
 	if (*wld_cmd_info[cmd].command == '\n') {
-		sprintf(buf2, "Unknown world cmd: '%s'", argument);
-		wld_log(room, trig, buf2, LGH);
+		wld_log(room, trig, fmt::format("Unknown world cmd: '{}'", argument).c_str(), LGH);
 	} else {
 		const wld_command_info::handler_f &command = wld_cmd_info[cmd].command_pointer;
 		command(room, line, cmd, wld_cmd_info[cmd].subcmd, trig);

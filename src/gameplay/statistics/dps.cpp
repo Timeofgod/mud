@@ -2,11 +2,15 @@
 // Copyright (c) 2009 Krodo
 // Part of Bylins http://www.mud.ru
 
+#include "utils/native_text.h"
+#include "utils/utils_string.h"
 #include "dps.h"
+#include "gameplay/core/remort.h"
+#include "gameplay/mechanics/minions.h"
 
 #include "engine/ui/color.h"
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
 
 namespace DpsSystem {
 
@@ -30,7 +34,7 @@ void DpsNode::set_name(const char *name) {
 	if (name && *name) {
 		name_ = name;
 		if (name_.size() > 25) {
-			name_ = name_.substr(0, 25);
+			name_ = name_.substr(0, native_text::char_offset(name_, 25));
 		}
 	}
 }
@@ -132,7 +136,7 @@ void Dps::Clear(int type) {
 struct sort_node {
 	sort_node(const std::string &in_name, int in_dps, unsigned in_round_dmg, unsigned in_over_dmg)
 		: dps(in_dps), round_dmg(in_round_dmg), over_dmg(in_over_dmg) {
-		name = in_name.substr(0, 25);
+		name = in_name.substr(0, native_text::char_offset(in_name, 25));
 	};
 
 	std::string name;
@@ -147,7 +151,7 @@ SortGroupType tmp_group_list;
 unsigned tmp_total_dmg = 0;
 
 void Dps::AddTmpGroupList(CharData *ch) {
-	auto it = group_dps_.find(GET_UID(ch));
+	auto it = group_dps_.find(ch->get_uid());
 	if (it != group_dps_.end()) {
 		sort_node tmp_node(it->second.get_name(), it->second.get_stat(),
 						   it->second.get_round_dmg(), it->second.get_over_dmg());
@@ -233,11 +237,11 @@ void Dps::PrintGroupStats(CharData *ch, CharData *coder) {
 	}
 
 	CharData *leader = ch->has_master() ? ch->get_master() : ch;
-	for (FollowerType *f = leader->followers; f; f = f->next) {
-		if (f->follower
-			&& !f->follower->IsNpc()
-			&& AFF_FLAGGED(f->follower, EAffect::kGroup)) {
-			AddTmpGroupList(f->follower);
+	for (auto *f : leader->followers) {
+		if (f
+			&& !f->IsNpc()
+			&& AFF_FLAGGED(f, EAffect::kGroup)) {
+			AddTmpGroupList(f);
 		}
 	}
 	AddTmpGroupList(leader);
@@ -269,50 +273,50 @@ void Dps::PrintGroupStats(CharData *ch, CharData *coder) {
 }
 
 void Dps::AddGroupDmg(CharData *ch, int dmg, int over_dmg) {
-	auto it = group_dps_.find(GET_UID(ch));
+	auto it = group_dps_.find(ch->get_uid());
 	if (it != group_dps_.end()) {
 		it->second.add_dmg(dmg, over_dmg);
 	} else {
 		PlayerDpsNode tmp_node;
 		tmp_node.set_name(GET_NAME(ch));
 		tmp_node.add_dmg(dmg, over_dmg);
-		group_dps_.insert(std::make_pair(GET_UID(ch), tmp_node));
+		group_dps_.insert(std::make_pair(ch->get_uid(), tmp_node));
 	}
 }
 
 void Dps::EndGroupRound(CharData *ch) {
-	auto it = group_dps_.find(GET_UID(ch));
+	auto it = group_dps_.find(ch->get_uid());
 	if (it != group_dps_.end()) {
 		it->second.end_round();
 	} else {
 		PlayerDpsNode tmp_node;
 		tmp_node.set_name(GET_NAME(ch));
 		tmp_node.end_round();
-		group_dps_.insert(std::make_pair(GET_UID(ch), tmp_node));
+		group_dps_.insert(std::make_pair(ch->get_uid(), tmp_node));
 	}
 }
 
 void Dps::AddGroupCharmDmg(CharData *ch, int dmg, int over_dmg) {
-	auto it = group_dps_.find(GET_UID(ch->get_master()));
+	auto it = group_dps_.find((ch->get_master())->get_uid());
 	if (it != group_dps_.end()) {
 		it->second.add_charm_dmg(ch, dmg, over_dmg);
 	} else {
 		PlayerDpsNode tmp_node;
 		tmp_node.set_name(GET_NAME(ch->get_master()));
 		tmp_node.add_charm_dmg(ch, dmg, over_dmg);
-		group_dps_.insert(std::make_pair(GET_UID(ch->get_master()), tmp_node));
+		group_dps_.insert(std::make_pair((ch->get_master())->get_uid(), tmp_node));
 	}
 }
 
 void Dps::EndGroupCharmRound(CharData *ch) {
-	auto it = group_dps_.find(GET_UID(ch->get_master()));
+	auto it = group_dps_.find((ch->get_master())->get_uid());
 	if (it != group_dps_.end()) {
 		it->second.end_charm_round(ch);
 	} else {
 		PlayerDpsNode tmp_node;
 		tmp_node.set_name(GET_NAME(ch->get_master()));
 		tmp_node.end_charm_round(ch);
-		group_dps_.insert(std::make_pair(GET_UID(ch->get_master()), tmp_node));
+		group_dps_.insert(std::make_pair((ch->get_master())->get_uid(), tmp_node));
 	}
 }
 
@@ -343,14 +347,14 @@ void Dps::AddBattleExp(int exp) {
 CharmListType::iterator PlayerDpsNode::find_charmice(CharData *ch) {
 	auto i = std::find_if(charm_list_.begin(), charm_list_.end(),
 											 [&](const DpsNode &x) {
-												 return x.get_id() == GET_UID(ch);
+												 return x.get_id() == ch->get_uid();
 											 });
 
 	if (i != charm_list_.end()) {
 		return i;
 	}
 
-	DpsNode tmp_node(GET_UID(ch));
+	DpsNode tmp_node(ch->get_uid());
 	tmp_node.set_name(GET_NAME(ch));
 
 	charm_list_.push_front(tmp_node);
@@ -394,13 +398,13 @@ void PlayerDpsNode::print_charm_stats(table_wrapper::Table &table) const {
 
 // * Распечатка групповой статистики живых чармисов по данному игроку.
 void PlayerDpsNode::print_group_charm_stats(CharData *ch) const {
-	for (FollowerType *f = ch->followers; f; f = f->next) {
-		if (!IS_CHARMICE(f->follower)) {
+	for (auto *f : ch->followers) {
+		if (!IsCharmice(f)) {
 			continue;
 		}
 		const auto it = std::find_if(charm_list_.begin(), charm_list_.end(),
 														[&](const DpsNode &dps_node) {
-															return dps_node.get_id() == GET_UID(f->follower);
+															return dps_node.get_id() == f->get_uid();
 														});
 
 		if (it != charm_list_.end() && it->get_dmg() > 0) {
@@ -422,7 +426,7 @@ void check_round(CharData *ch) {
 			CharData *leader = ch->has_master() ? ch->get_master() : ch;
 			leader->dps_end_round(DpsSystem::GROUP_DPS, ch);
 		}
-	} else if (IS_CHARMICE(ch) && ch->has_master()) {
+	} else if (IsCharmice(ch) && ch->has_master()) {
 		ch->get_master()->dps_end_round(DpsSystem::PERS_CHARM_DPS, ch);
 		if (AFF_FLAGGED(ch->get_master(), EAffect::kGroup)) {
 			CharData *leader = ch->get_master()->has_master() ? ch->get_master()->get_master() : ch->get_master();
@@ -437,7 +441,7 @@ void UpdateDpsStatistics(CharData *ch, int real_dam, int over_dam) {
 /*		log("DmetrLog. Name(player): %s, class: %d, remort:%d, level:%d, dmg: %d, over_dmg:%d",
 			GET_NAME(ch),
 			to_underlying(ch->GetClass()),
-			GetRealRemort(ch),
+			remort::GetRealRemort(ch),
 			GetRealLevel(ch),
 			real_dam,
 			over_dam);
@@ -446,13 +450,13 @@ void UpdateDpsStatistics(CharData *ch, int real_dam, int over_dam) {
 			CharData *leader = ch->has_master() ? ch->get_master() : ch;
 			leader->dps_add_dmg(DpsSystem::GROUP_DPS, real_dam, over_dam, ch);
 		}
-	} else if (IS_CHARMICE(ch)
+	} else if (IsCharmice(ch)
 		&& ch->has_master()) {
 		ch->get_master()->dps_add_dmg(DpsSystem::PERS_CHARM_DPS, real_dam, over_dam, ch);
 /*		if (!ch->get_master()->IsNpc()) {
 			log("DmetrLog. Name(charmice): %s, name(master): %s, class: %d, remort: %d, level: %d, dmg: %d, over_dmg:%d",
 				ch->get_name().c_str(), ch->get_master()->get_name().c_str(), to_underlying(ch->get_master()->GetClass()),
-				GetRealRemort(ch->get_master()), GetRealLevel(ch->get_master()), real_dam, over_dam);
+				remort::GetRealRemort(ch->get_master()), GetRealLevel(ch->get_master()), real_dam, over_dam);
 		}
 */
 		if (AFF_FLAGGED(ch->get_master(), EAffect::kGroup)) {
@@ -484,13 +488,14 @@ void do_dmeter(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		return;
 	}
 
-	char name[kMaxInputLength];
-	two_arguments(argument, arg, name);
+	std::string remains;
+	const std::string arg = utils::ExtractFirstArgumentLower(argument, remains);
+	const std::string name = utils::ExtractFirstArgumentLower(remains, remains);
 
-	if (!*arg) {
+	if (arg.empty()) {
 		ch->dps_print_stats();
 	} else if (isname(arg, "очистить")) {
-		if (!*name) {
+		if (name.empty()) {
 			ch->dps_clear(DpsSystem::PERS_DPS);
 			SendMsgToChar("Персональная статистика очищена.\r\n", ch);
 		} else if (isname(name, "группа")) {
@@ -506,7 +511,7 @@ void do_dmeter(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		}
 	} else if (ch->IsFlagged(EPrf::kCoderinfo)) {
 		// распечатка статистики указанного персонажа
-		CharData *vict = get_player_vis(ch, arg, EFind::kCharInWorld);
+		CharData *vict = target_resolver::FindPlayerVis(ch, arg);
 		if (vict) {
 			vict->dps_print_stats(ch);
 		} else {

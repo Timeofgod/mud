@@ -1,7 +1,6 @@
 #include "boot_index.h"
 
 #include "utils/logger.h"
-#include "utils/utils.h"
 #include "gameplay/communication/social.h"
 
 class IndexFileImplementation : public IndexFile {
@@ -77,8 +76,7 @@ int IndexFileImplementation::load() {
 
 	// Exit if 0 records, unless this is shops
 	if (!rec_count) {
-		log("SYSERR: boot error - 0 records counted in %s/%s.", prefix.c_str(), INDEX_FILE);
-		exit(1);
+		fatal_log("SYSERR: boot error - 0 records counted in %s/%s.", prefix.c_str(), INDEX_FILE);
 	}
 
 	return rec_count;
@@ -161,8 +159,7 @@ int HelpIndexFile::process_file() {
 int HelpIndexFile::count_social_records() {
 	while (read_entry()) {
 		if (m_unexpected_eof) {
-			log("SYSERR: Unexpected end of help file.");
-			exit(1);
+			fatal_log("SYSERR: Unexpected end of help file.");
 		}
 	}
 
@@ -209,33 +206,6 @@ bool HelpIndexFile::read_entry() {
 	}
 
 	return false;
-}
-
-class SocialIndexFile : public HelpIndexFile {
- public:
-	/// TODO: get rid of references
-	SocialIndexFile(int &messages, int &keywords) : m_messages_ref(messages), m_keywords_ref(keywords) {}
-
-	static shared_ptr create(int &messages, int &keywords) {
-		return shared_ptr(new SocialIndexFile(messages,
-											  keywords));
-	}
-
- private:
-	virtual EBootType mode() const { return DB_BOOT_SOCIAL; }
-	virtual int process_file();
-
-	int &m_messages_ref;
-	int &m_keywords_ref;
-};
-
-int SocialIndexFile::process_file() {
-	const auto result = HelpIndexFile::process_file();
-
-	m_messages_ref = get_messages();
-	m_keywords_ref = get_keywords();
-
-	return result;
 }
 
 class HashSeparatedIndexFile : public FilesIndexFile {
@@ -309,7 +279,6 @@ IndexFile::shared_ptr IndexFileFactory::get_index(const EBootType mode) {
 
 		case DB_BOOT_HLP: return HelpIndexFile::create();
 
-		case DB_BOOT_SOCIAL: return SocialIndexFile::create(number_of_social_messages, number_of_social_commands);
 
 		default: return nullptr;
 	}

@@ -16,13 +16,21 @@ class CharData;    // to avoid inclusion of "char.hpp"
 
 namespace privilege {
 
-void Load();
 bool IsContainedInGodsList(const std::string &name, long unique);
 void LoadGodBoards();
 bool HasPrivilege(CharData *ch, const std::string &cmd_name, int cmd_number, int mode, bool check_level = true);
 bool CheckFlag(const CharData *ch, int flag);
 bool IsSpellPermit(const CharData *ch, ESpell spell_id);
 bool CheckSkills(const CharData *ch);
+
+// Tier predicates, driven by cfg/privilege.xml membership (privilege_db), not character level.
+[[nodiscard]] bool IsImmortal(const CharData *ch);
+[[nodiscard]] bool IsGod(const CharData *ch);
+[[nodiscard]] bool IsGrGod(const CharData *ch);
+[[nodiscard]] bool IsImpl(const CharData *ch);
+[[nodiscard]] bool IsOwner(const CharData *ch);  // issue.privilege-rework: replaces is_head
+// issue.privilege-rework: may `ch` edit the Vedun data set `what` (e.g. "spells")? FullAccess/owner -> any.
+[[nodiscard]] bool CanEditVedun(const CharData *ch, const std::string &what);
 
 extern const int kBoards;
 extern const int kUseSkills;

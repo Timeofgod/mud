@@ -54,10 +54,6 @@ using MobRnum = Rnum;
 using ZoneRnum = Rnum;
 using TrgRnum = Rnum;
 
-#if !defined(CIRCLE_WINDOWS) || defined(LCC_WIN32)    // Hm, sysdep.h?
-using byte = char;
-#endif
-
 const int kMinRemort = 0;
 const int kMaxRemort = 99;
 const int kMaxPlayerLevel = 30;
@@ -71,6 +67,7 @@ class ObjData;    // forward declaration to avoid inclusion of obj.hpp and any d
 class Trigger;
 
 const int8_t kNowhere = 0;        // nil reference for room-database
+const ZoneRnum kNoZone = -1;      // nil reference for zone-database
 const int8_t kNothing = -1;        // nil reference for objects
 const int8_t kNobody = -1;        // nil reference for mobiles
 
@@ -92,19 +89,22 @@ const int kLvlBuilder = 33;
 const int kLvlGod = 32;
 const int kLvlImmortal = 31;
 const int kLvlFreeze = kLvlGreatGod; // Level of the 'freeze' command //
-const uint8_t kMagicNumber = 0x06;    // Arbitrary number that won't be in a string //
 
 constexpr long long kOptUsec = 40000;    // 25 passes per second //
 constexpr long long kPassesPerSec = 1000000 / kOptUsec;
 constexpr long long kRealSec = kPassesPerSec;
-constexpr long long kPulseZone = (1*kRealSec);
+constexpr long long kPulseZone = 10;
 constexpr long long kPulseMobile = (10*kRealSec);
 constexpr long long kBattleRound = (2*kRealSec);
 const int kZonesReset = 1;    // number of zones to reset at one time //
 
 // Variables for the output buffering system //
 constexpr uint16_t kMaxSockBuf = 48 * 1024;	// Size of kernel's sock buf   //
-const uint16_t kMaxPromptLength = 256;		// Max length of prompt        //
+// Сколько байт отводится промпту. В бою он содержит состояние всей группы и цели -- по
+// "[имя:состояние]" на каждого, плюс цветовые последовательности по 7 байт. Группа из трёх
+// упирается в прежние 256 байт: строка обрезалась посреди слова, а под UTF-8 ещё и посреди
+// буквы, и игрок видел хвост из вопросительных знаков (issue #3761).
+const uint16_t kMaxPromptLength = 1024;		// Max length of prompt        //
 const uint8_t kGarbageSpace = 32;				// Space for **OVERFLOW** etc  //
 const uint16_t kSmallBufsize = 1024;			// Static output buffer size   //
 // Max amount of output that can be buffered //
@@ -132,10 +132,6 @@ const int kMaxNpcResist = 100;
 constexpr int kMinResistance = -kMaxNpcResist;
 const int kStrongMobLevel = 30;
 
-struct FollowerType {
-	CharData *follower = nullptr;
-	struct FollowerType *next = nullptr;
-};
 
 #endif // STRUCTS_STRUCTS_H_
 

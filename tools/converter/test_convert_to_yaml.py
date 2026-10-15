@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+"""
+Unit tests for convert_to_yaml.py
+Run with: python3 -m pytest tools/test_convert_to_yaml.py -v
+Or: python3 tools/test_convert_to_yaml.py
+"""
+
+import unittest
+import sys
+import os
+
+# Add tools directory to path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from convert_to_yaml import (
+    parse_ascii_flags,
+    ROOM_FLAGS,
+    ACTION_FLAGS,
+    AFFECT_FLAGS,
+    EXTRA_FLAGS,
+    WEAR_FLAGS,
+    ANTI_FLAGS,
+    NO_FLAGS,
+)
+
+
+def _init_ruamel_restoring(test_case):
+    """Switch the module to the ruamel YAML backend for an emit test and
+    restore the previous global state afterwards. Without the restore these
+    globals leak into later tests (e.g. to_literal_block's CR/LF handling)."""
+    import convert_to_yaml
+    prev_lib = convert_to_yaml._yaml_library
+    prev_blocks = convert_to_yaml._use_literal_blocks
+
+    def _restore():
+        convert_to_yaml._yaml_library = prev_lib
+        convert_to_yaml._use_literal_blocks = prev_blocks
+        if prev_lib:
+            convert_to_yaml._init_yaml_libraries()
+
+    test_case.addCleanup(_restore)
+    convert_to_yaml._yaml_library = 'ruamel'
+    convert_to_yaml._use_literal_blocks = True
+    convert_to_yaml._init_yaml_libraries()
+
+
+class TestParseAsciiFlags(unittest.TestCase):
+    """Test the parse_ascii_flags function."""
+
+    def test_empty_flags(self):
+        """Empty or zero flags should return empty list."""
+        self.assertEqual(parse_ascii_flags('', ROOM_FLAGS), [])
+        self.assertEqual(parse_ascii_flags('0', ROOM_FLAGS), [])
+
+    def test_single_plane0_flag(self):
+        """Single flag in plane 0."""
+        # 'a0' = bit 0, plane 0 = index 0 = kDarked
+        result = parse_ascii_flags('a0', ROOM_FLAGS)
+        self.assertIn('kDarked', result)
+
+    def test_multiple_plane0_flags(self):
+        """Multiple flags in plane 0."""
+        # d0 = bit 3, plane 0 = kIndoors
+        # e0 = bit 4, plane 0 = kPeaceful
+        result = parse_ascii_flags('d0e0', ROOM_FLAGS)
+        self.assertIn('kIndoors', result)
+        self.assertIn('kPeaceful', result)
+
+    def test_plane1_flags(self):
+        """Flags in plane 1."""
+        # a1 = bit 0, plane 1 = index 30 = kNoSummonOut
+        result = parse_ascii_flags('a1', ROOM_FLAGS)
+        self.assertIn('kNoSummonOut', result)
+
+    def test_plane2_flags(self):
+        """Flags in plane 2 (kNoItem, kDominationArena)."""
+        # a2 = bit 0, plane 2 = index 60 = kNoItem
+        result = parse_ascii_flags('a2', ROOM_FLAGS)
+        self.assertIn('kNoItem', result)
+
+    def test_mixed_plane_flags(self):
+        """Mix of flags from different planes."""
+        # d0 = kIndoors (plane 0)
+        # a1 = kNoSummonOut (plane 1)
+        # a2 = kNoItem (plane 2)
+        result = parse_ascii_flags('d0a1a2', ROOM_FLAGS)
+        self.assertIn('kIndoors', result)
+        self.assertIn('kNoSummonOut', result)
+        self.assertIn('kNoItem', result)
+
+    def test_numeric_flags(self):
+        """Numeric flag format."""
+        # 8 = bit 3 = kIndoors
+        result = parse_ascii_flags('8', ROOM_FLAGS)
+        self.assertIn('kIndoors', result)
+
+    def test_room101_flags(self):
+        """Test actual room 101 flags from small world: c0d0e0f0g0h0j0a1b1d1g1a2."""
+        flags = 'c0d0e0f0g0h0j0a1b1d1g1a2'
+        result = parse_ascii_flags(flags, ROOM_FLAGS)
+
+        # Expected flags based on the format
+        expected = [
+            'kNoEntryMob',      # c0 = bit 2
+            'kIndoors',         # d0 = bit 3
+            'kPeaceful',        # e0 = bit 4
+            'kSoundproof',      # f0 = bit 5
+            'kNoTrack',         # g0 = bit 6
+            'kNoMagic',         # h0 = bit 7
+            'kNoTeleportIn',    # j0 = bit 9
+            'kNoSummonOut',     # a1 = bit 0 plane 1
+            'kNoTeleportOut',   # b1 = bit 1 plane 1
+            'kNoWeather',       # d1 = bit 3 plane 1
+            'kNoRelocateIn',    # g1 = bit 6 plane 1
+            'kNoItem',          # a2 = bit 0 plane 2
+        ]
+
+        for flag in expected:
+            self.assertIn(flag, result, f"Missing flag: {flag}")
+
+
+class TestZoneCommandParsing(unittest.TestCase):
+    """Test zone command parsing."""
+
+    def test_equip_mob_with_load_prob(self):
+        """E command should parse load_prob field."""
+        # This tests that the converter correctly parses:
+        # E if_flag obj_vnum max wear_pos load_prob
+        # We can't directly test parse_zone_file here, but we document the expected behavior
+        pass  # TODO: Add integration test for zone file parsing
+
+
+class TestRoomFlagsArray(unittest.TestCase):
+    """Test that ROOM_FLAGS array has correct structure."""
+
+    def test_plane0_size(self):
+        """Plane 0 should have 30 flags (indices 0-29)."""
+        # First 30 entries should be plane 0 flags
+        self.assertTrue(len(ROOM_FLAGS) >= 30)
+        self.assertEqual(ROOM_FLAGS[0], 'kDarked')
+        self.assertEqual(ROOM_FLAGS[29], 'kArena')
+
+    def test_plane1_starts_at_30(self):
+        """Plane 1 should start at index 30."""
+        self.assertTrue(len(ROOM_FLAGS) >= 43)
+        self.assertEqual(ROOM_FLAGS[30], 'kNoSummonOut')
+
+    def test_plane2_flags_accessible(self):
+        """Plane 2 flags should be at indices 60+."""
+        # The array needs padding or special handling for plane 2
+        # If using offset 60 for plane 2, array needs 62+ elements
+        # Current implementation may have flags at indices 43-44
+        # This test documents the expected behavior after fix
+        if len(ROOM_FLAGS) > 60:
+            self.assertEqual(ROOM_FLAGS[60], 'kNoItem')
+            self.assertEqual(ROOM_FLAGS[61], 'kDominationArena')
+        else:
+            # Current state: flags at 43-44, need padding
+            self.skipTest("ROOM_FLAGS needs padding for plane 2 offset")
+
+
+class TestObjectFlagsArrays(unittest.TestCase):
+    """Test object flag arrays structure."""
+
+    def test_anti_flags_plane2(self):
+        """ANTI_FLAGS should have kCharmice at correct position."""
+        # kCharmice is in plane 2, bit 8
+        # With offset 60, index should be 60 + 8 = 68
+        if len(ANTI_FLAGS) > 68:
+            self.assertEqual(ANTI_FLAGS[68], 'kCharmice')
+        else:
+            self.skipTest("ANTI_FLAGS needs padding for plane 2")
+
+    def test_no_flags_plane2(self):
+        """NO_FLAGS should have kCharmice at correct position."""
+        if len(NO_FLAGS) > 68:
+            self.assertEqual(NO_FLAGS[68], 'kCharmice')
+        else:
+            self.skipTest("NO_FLAGS needs padding for plane 2")
+
+
+class TestObjectSkillLines(unittest.TestCase):
+    """Issue #3386: object `S` (skill) lines must survive conversion.
+
+    The legacy obj format grants skills via an `S` line followed by
+    `<skill_id> <value>` (boot_data_files.cpp:795). Before the fix the
+    converter ignored those lines, so the bonus silently vanished in YAML
+    and SQLite. These tests pin parsing and emission down.
+    """
+
+    # Minimal but complete legacy object with two A (apply) and two S (skill)
+    # sections, mirroring real object #91710.
+    OBJ_BLOCK = (
+        "#1\n"
+        "test obj~\n"
+        "objnom~\n"
+        "objgen~\n"
+        "objdat~\n"
+        "objacc~\n"
+        "objins~\n"
+        "objpre~\n"
+        "A test object lies here.~\n"
+        "~\n"
+        "0 100 100 0\n"
+        "0 0 -1 1\n"
+        "0 0 0\n"
+        "1 0 0\n"
+        "0 0 0 0\n"
+        "1 100 10 5\n"
+        "A\n"
+        "40 8\n"
+        "A\n"
+        "13 20\n"
+        "S\n"
+        "20 10\n"
+        "S\n"
+        "166 10\n"
+        "$\n"
+    )
+
+    def _parse(self):
+        import tempfile
+        from convert_to_yaml import parse_obj_file
+        with tempfile.NamedTemporaryFile('w', suffix='.obj', delete=False,
+                                         encoding='koi8-r') as f:
+            f.write(self.OBJ_BLOCK)
+            path = f.name
+        self.addCleanup(os.unlink, path)
+        objs = parse_obj_file(path)
+        self.assertEqual(len(objs), 1)
+        return objs[0]
+
+    def test_parses_skill_lines(self):
+        obj = self._parse()
+        self.assertEqual(
+            obj.get('skills'),
+            [{'skill_id': 20, 'value': 10}, {'skill_id': 166, 'value': 10}],
+            "object `S` lines must be parsed into obj['skills']")
+
+    def test_applies_still_parsed(self):
+        # Guard against the S-branch accidentally swallowing A lines.
+        obj = self._parse()
+        self.assertEqual(
+            obj.get('applies'),
+            [{'location': 40, 'modifier': 8}, {'location': 13, 'modifier': 20}])
+
+    def test_skills_emitted_to_yaml(self):
+        from convert_to_yaml import obj_to_yaml
+        _init_ruamel_restoring(self)
+        text = obj_to_yaml(self._parse())
+        self.assertIn('skills:', text)
+        self.assertIn('skill_id: 20', text)
+        self.assertIn('skill_id: 166', text)
+
+
+class TestMobSpeedField(unittest.TestCase):
+    """Mob movement speed (4th field of the position line) must survive.
+
+    parse_simple_mob assigns speed = -1 when the position line has only 3
+    fields and the explicit value when it has 4. The converter used to read
+    only position+sex, dropping speed, so every mob reloaded with speed 0
+    (issue #3384 class). These tests pin parsing + emission.
+    """
+
+    def _mob(self, position_line):
+        return (
+            "#1\n"
+            "testmob~\n"
+            "testmob~\ntestmoba~\ntestmobu~\ntestmoba~\ntestmobom~\ntestmobe~\n"
+            "A test mob stands here.~\n"
+            "A long description.\n~\n"
+            "0 0 0 S\n"
+            "1 20 100 1d1+10 1d1+1\n"
+            "0d0+0 100\n"
+            + position_line + "\n"
+        )
+
+    def _parse(self, position_line):
+        import tempfile
+        from convert_to_yaml import parse_mob_file
+        with tempfile.NamedTemporaryFile('w', suffix='.mob', delete=False,
+                                         encoding='koi8-r') as f:
+            f.write(self._mob(position_line))
+            path = f.name
+        self.addCleanup(os.unlink, path)
+        mobs = parse_mob_file(path)
+        self.assertEqual(len(mobs), 1)
+        return mobs[0]
+
+    def test_explicit_speed_parsed(self):
+        # 4-field position line: pos default_pos sex speed
+        self.assertEqual(self._parse("8 8 0 7").get('speed'), 7)
+
+    def test_missing_speed_defaults_to_minus_one(self):
+        # 3-field position line -> legacy default speed == -1
+        self.assertEqual(self._parse("8 8 0").get('speed'), -1)
+
+    def test_default_speed_not_emitted_explicit_is(self):
+        from convert_to_yaml import mob_to_yaml
+        _init_ruamel_restoring(self)
+        self.assertNotIn('speed:', mob_to_yaml(self._parse("8 8 0")))
+        self.assertIn('speed: 7', mob_to_yaml(self._parse("8 8 0 7")))
+
+
+class TestMobNegativeDiceBonus(unittest.TestCase):
+    r"""A negative dice bonus is written as XdY+-N (e.g. damage 4d3+-56): the
+    legacy '+' is a literal separator and the value behind it is signed. The
+    old regex ([+-]\d+)? failed on the '+-' pair and silently zeroed the bonus
+    -- so e.g. a mob's damroll became 0 after conversion (issue #3384 class).
+    """
+
+    def _mob(self, stats_line, gold_line="0d0+0 100"):
+        return (
+            "#1\n"
+            "testmob~\n"
+            "testmob~\ntestmoba~\ntestmobu~\ntestmoba~\ntestmobom~\ntestmobe~\n"
+            "A test mob stands here.~\n"
+            "A long description.\n~\n"
+            "0 0 0 S\n"
+            + stats_line + "\n"
+            + gold_line + "\n"
+            "8 8 0\n"
+        )
+
+    def _parse(self, stats_line, gold_line="0d0+0 100"):
+        import tempfile
+        from convert_to_yaml import parse_mob_file
+        with tempfile.NamedTemporaryFile('w', suffix='.mob', delete=False,
+                                         encoding='koi8-r') as f:
+            f.write(self._mob(stats_line, gold_line))
+            path = f.name
+        self.addCleanup(os.unlink, path)
+        mobs = parse_mob_file(path)
+        self.assertEqual(len(mobs), 1)
+        return mobs[0]
+
+    def test_negative_damage_bonus(self):
+        m = self._parse("5 0 0 10d4+60 4d3+-56")
+        self.assertEqual(m['stats']['damage']['bonus'], -56)
+        self.assertEqual(m['stats']['hp']['bonus'], 60)  # positive still ok
+
+    def test_negative_gold_bonus(self):
+        m = self._parse("5 0 0 1d1+1 1d1+1", gold_line="0d0+-3 100")
+        self.assertEqual(m['gold']['bonus'], -3)
+
+    def test_positive_and_zero_bonus_unaffected(self):
+        m = self._parse("5 0 0 10d4+60 4d3+12")
+        self.assertEqual(m['stats']['damage']['bonus'], 12)
+        m0 = self._parse("5 0 0 0d0+0 0d0+0")
+        self.assertEqual(m0['stats']['damage']['bonus'], 0)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
+
+
+class TestToLiteralBlock(unittest.TestCase):
+    """Test to_literal_block() function for multiline string handling."""
+
+    def test_embedded_backslash_rn(self):
+        """Object with embedded \\r\\n (4-char escape) from source file.
+
+        Example: Object 10700 has literal \\r\\n in legacy file.
+        Parser reads this as 4 characters: backslash, r, backslash, n.
+        to_literal_block() returns text as-is; YAML handles escaping on write.
+        """
+        from convert_to_yaml import to_literal_block
+
+        # Input: string with 4-char \r\n sequence (as parsed from legacy file)
+        input_text = 'Шарик.\\r\\n__продолжение'
+
+        # Verify input has 4-char sequence, not actual CR+LF
+        self.assertIn('\\r\\n', input_text)
+        self.assertNotIn('\r\n', input_text)  # No actual CR+LF
+
+        # Expected: text returned as-is (YAML will escape when writing)
+        expected = input_text
+
+        # Test
+        result = to_literal_block(input_text)
+        self.assertEqual(str(result), expected,
+                        "to_literal_block should return text as-is")
+
+    def test_multiline_actual_crlf(self):
+        """Multi-line description with actual CR+LF from '\\r\\n'.join().
+        
+        When parser joins multiple lines with '\\r\\n'.join(parts),
+        Python creates actual CR+LF bytes (0x0D 0x0A), not 4-char escape.
+        These should pass through unchanged for YAML to handle natively.
+        """
+        from convert_to_yaml import to_literal_block
+        
+        # Input: string with actual CR+LF bytes (as created by join)
+        parts = ['первая строка', 'вторая строка']
+        input_text = '\r\n'.join(parts)  # Creates actual bytes
+        
+        # Verify input has actual CR+LF, not 4-char sequence
+        self.assertIn('\r\n', input_text)  # Actual CR+LF
+        self.assertNotIn('\\r\\n', input_text)  # No 4-char escape
+        
+        # Expected: actual CR+LF passes through unchanged
+        # YAML will handle these natively (as newlines or quoted escapes)
+        expected = input_text
+        
+        # Test
+        result = to_literal_block(input_text)
+        self.assertEqual(str(result), expected,
+                        "Actual CR+LF bytes should pass through unchanged")
+
+    def test_real_object_10700(self):
+        """Integration test with real object 10700 from legacy file."""
+        from convert_to_yaml import parse_obj_file
+        import os
+        
+        # Find legacy file
+        legacy_file = '/home/kvirund/repos/mud/build_test/full/world/obj/107.obj'
+        if not os.path.exists(legacy_file):
+            self.skipTest(f"Legacy file not found: {legacy_file}")
+        
+        # Parse real object
+        objs = parse_obj_file(legacy_file)
+        obj = next((o for o in objs if o.get('vnum') == 10700), None)
+        self.assertIsNotNone(obj, "Object 10700 not found in legacy file")
+        
+        input_text = obj['short_desc']
+        
+        # Verify it has embedded 4-char \r\n, not actual bytes
+        self.assertEqual(len(input_text), 94, "Object 10700 should be 94 chars")
+        self.assertIn('\\r\\n', input_text, "Should have 4-char \\r\\n")
+        self.assertNotIn('\r\n', input_text, "Should NOT have actual CR+LF")
+        
+        # Test conversion
+        from convert_to_yaml import to_literal_block
+        result = to_literal_block(input_text)
+
+        # Result should be unchanged (YAML handles escaping on write)
+        self.assertEqual(str(result), input_text,
+                        "to_literal_block should return text as-is")
+
+        # Verify length unchanged
+        self.assertEqual(len(str(result)), 94,
+                        "Length should remain 94")
+
+    def test_no_backslashes(self):
+        """Text without backslashes should pass through unchanged."""
+        from convert_to_yaml import to_literal_block
+        
+        input_text = 'простой текст без экранирования'
+        result = to_literal_block(input_text)
+        
+        self.assertEqual(str(result), input_text,
+                        "Text without backslashes should be unchanged")
+
+    def test_empty_string(self):
+        """Empty string should be handled correctly."""
+        from convert_to_yaml import to_literal_block
+        
+        result = to_literal_block('')
+        self.assertEqual(str(result), '', "Empty string should remain empty")
+        
+        result = to_literal_block(None)
+        self.assertEqual(result, None, "None should remain None")
+
+

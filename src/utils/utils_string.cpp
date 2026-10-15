@@ -1,6 +1,12 @@
-//#include "utils_string.h"
+//#include <string_view>
+#include "utils_string.h"
+
+#include <cstring>
 
 #include "utils.h"
+#include "utils/native_text.h"
+#include "utils/utils_encoding.h"
+#include "gameplay/core/constants.h"
 
 namespace utils {
 template<typename T>
@@ -15,7 +21,28 @@ std::string remove_colors_template(T string, int &new_length) {
 		}
 		++pos;
 	}
-	return string;
+	return {};
+}
+
+std::size_t AnsiEscapeLength(const char *begin, const char *end) {
+	if (begin >= end || *begin != '\x1B') {
+		return 0;
+	}
+	if (begin + 1 >= end || begin[1] != '[') {
+		return 1;
+	}
+
+	for (const char *ptr = begin + 2; ptr < end; ++ptr) {
+		const auto symbol = static_cast<unsigned char>(*ptr);
+		if (0x40 <= symbol && symbol <= 0x7E) {
+			return static_cast<std::size_t>(ptr - begin) + 1;
+		}
+		if (symbol < 0x20 || 0x3F < symbol) {
+			break;
+		}
+	}
+
+	return 1;
 }
 
 std::string RemoveColors(char *string) {
@@ -23,8 +50,9 @@ std::string RemoveColors(char *string) {
 		int new_length = 0;
 		remove_colors_template<char *>(string, new_length);
 		string[new_length] = '\0';
+		return string;
 	}
-	return string;
+	return {};
 }
 
 std::string RemoveColors(std::string string) {
@@ -53,11 +81,7 @@ shared_string_ptr GetStringWithoutColors(const char *string) {
 }
 
 std::string GetStringWithoutColors(const std::string &string) {
-	std::string result = string;
-
-	RemoveColors(result);
-
-	return result;
+	return RemoveColors(string);
 }
 
 std::ostream &Padding::output(std::ostream &os) const {
@@ -112,15 +136,35 @@ void DelegatedStringWriter::clear() {
 	m_delegated_string_ = nullptr;
 }
 
+bool IsSamePrefix(const char *arg1, const char *arg2, std::size_t chars) {
+	if (arg1 == nullptr || arg2 == nullptr) {
+		return false;
+	}
+	for (std::size_t i = 0; i < chars; ++i) {
+		if (!*arg1 || !*arg2) {
+			return false;   // символы кончились раньше, чем набралось chars
+		}
+		if (!native_text::chars_equal_ci(arg1, arg2)) {
+			return false;
+		}
+		arg1 += native_text::char_bytes(arg1);
+		arg2 += native_text::char_bytes(arg2);
+	}
+	return true;
+}
+
 bool IsAbbr(const char *arg1, const char *arg2) {
 	if (!*arg1) {
 		return false;
 	}
 
-	for (; *arg1 && *arg2; arg1++, arg2++) {
-		if (LOWER(*arg1) != LOWER(*arg2)) {
+	// Посимвольно (issue #3681): побайтное сравнение под UTF-8 теряет регистронезависимость.
+	while (*arg1 && *arg2) {
+		if (!native_text::chars_equal_ci(arg1, arg2)) {
 			return false;
 		}
+		arg1 += native_text::char_bytes(arg1);
+		arg2 += native_text::char_bytes(arg2);
 	}
 
 	if (!*arg1) {
@@ -128,6 +172,49 @@ bool IsAbbr(const char *arg1, const char *arg2) {
 	} else {
 		return false;
 	}
+}
+
+bool IsEqual(const std::string &abbr, const std::string &words) {
+	// FixDot с обеих сторон: точка и подчёркивание -- такие же разделители слов, как пробел.
+	// Раньше их разбирали только в запросе, и вызывающим приходилось помнить про FixDot на
+	// стороне имени (пять мест в do_tabulate.cpp), иначе имя вроде "макс.жизнь" оставалось
+	// одним словом и не совпадало даже само с собой.
+	std::vector<std::string> words_list = utils::Split(utils::FixDot(words));
+	std::vector<std::string> abbr_list = utils::Split(utils::FixDot(abbr));
+	auto it = words_list.begin();
+
+	for (auto abr : abbr_list) {
+		if (it == words_list.end() || !utils::IsAbbr(abr.c_str(), (*it).c_str()))
+			return false;
+		++it;
+	}
+	return true;
+}
+
+
+bool IsEquivalent(const std::string &abbr, const std::string &words) {
+	// FixDot с обеих сторон: точка и подчёркивание -- такие же разделители слов, как пробел.
+	// Раньше их разбирали только в запросе, поэтому имя вроде "макс.жизнь" оставалось одним
+	// словом, и даже точное "макс.жизнь" с ним не совпадало.
+	std::vector<std::string> words_list = utils::Split(utils::FixDot(words));
+	std::vector<std::string> abbr_list = utils::Split(utils::FixDot(abbr));
+	auto it = words_list.begin();
+
+	for (const auto &abr : abbr_list) {
+		for (; it != words_list.end(); ++it) {
+			if (utils::IsAbbr(abr.c_str(), (*it).c_str())) {
+				break;
+			}
+		}
+		if (it == words_list.end()) {
+			return false;
+		}
+		// Совпавшее слово имени занято: следующее слово запроса ищем дальше по имени.
+		// Без этого шага одно слово имени закрывало сколько угодно слов запроса, и
+		// "утренняя.утренняя" считалось совпадением с "утренняя звезда".
+		++it;
+	}
+	return true;
 }
 
 std::string ReplaceSymbol(std::string s, const char ToSearch, const char Replacer) {
@@ -177,34 +264,60 @@ std::string FirstWordOnString(std::string s, std::string mask) {
 	return s;
 }
 
-// аналог one_argument для string
+// аналог one_argument для string (тот вдобавок понижает регистр -- см. ExtractFirstArgumentLower)
+// пропускает ведущие пробелы, возвращает первое слово, в remains остаток после пробела
+// безопасно вызывать как ExtractFirstArgument(str, str) - нет проблем с алиасингом
 std::string ExtractFirstArgument(const std::string &s, std::string &remains) {
-	std::string word;
+	// Разделители те же, что у a_isspace: раньше резали только по пробелу, и табуляция между
+	// аргументами склеивала два поля в одно -- в триггерах это вполне достижимо.
+	static constexpr std::string_view kSpaces = " \t\r\n\v\f";
 
-	size_t space_pos = s.find(" ");
-		if (space_pos != std::string::npos) {
-			word = s.substr(0, space_pos);
-			remains = s.substr(space_pos + 1);
-		}
+	const auto start = s.find_first_not_of(kSpaces);
+	if (start == std::string::npos) {
+		remains.clear();
+		return {};
+	}
+
+	const auto word_end = s.find_first_of(kSpaces, start);
+	if (word_end == std::string::npos) {
+		std::string word = s.substr(start);
+		remains.clear();
+		return word;
+	}
+
+	std::string word = s.substr(start, word_end - start);
+	// Остаток отдаём без ведущих пробелов: прежний substr(word_end + 1) пропускал ровно один, и
+	// каждый вызывающий дочищал остаток сам.
+	const auto rest_begin = s.find_first_not_of(kSpaces, word_end);
+	remains = (rest_begin == std::string::npos) ? std::string() : s.substr(rest_begin);
 	return word;
 }
 
+std::string ExtractFirstArgumentLower(const std::string &s, std::string &remains) {
+	std::string word = ExtractFirstArgument(s, remains);
+	native_text::to_lower(word);
+	return word;
+}
+
+std::string ExtractFirstArgumentLower(const std::string &s) {
+	std::string remains;
+	return ExtractFirstArgumentLower(s, remains);
+}
+
 std::string SubstToLow(std::string s) {
-	for (char &it: s) {
-		it = LOWER(it);
-	}
+	ConvertToLow(s);
 	return s;
 }
 
 void ConvertKtoW(std::string &text) {
 	for (char &it: text) {
-		it = KtoW(it);
+		it = codepages::KtoW(it);
 	}
 }
 
 void ConvertWtoK(std::string &text) {
 	for (char &it: text) {
-		it = WtoK(it);
+		it = codepages::WtoK(it);
 	}
 }
 
@@ -219,29 +332,22 @@ std::string SubstWtoK(std::string s) {
 }
 
 void ConvertToLow(std::string &text) {
-	for (char &it: text) {
-		it = LOWER(it);
-	}
+	native_text::to_lower(text);
 }
 
 void ConvertToLow(char *text) {
-	while (*text) {
-		*text = LOWER(*text);
-		text++;
-	}
+	native_text::to_lower(text);
 }
 
 std::string SubstStrToLow(std::string s) {
-	for (char &it: s) {
-		it = UPPER(it);
-	}
+	// NB: имя говорит "ToLow", а тело поднимает регистр. Расхождение предсуществующее,
+	// поведение сохранено намеренно -- меняется только байтовая семантика на символьную.
+	native_text::to_upper(s);
 	return s;
 }
 
 std::string SubstStrToUpper(std::string s) {
-	for (char &it: s) {
-		it = UPPER(it);
-	}
+	native_text::to_upper(s);
 	return s;
 }
 
@@ -249,6 +355,15 @@ void TrimLeft(std::string &s) {
 	s.erase(s.begin(), std::find_if(s.begin(), s.end(), [](unsigned char ch) {
 		return !std::isspace(ch);
 	}));
+}
+void TrimLeft(char *s) {
+	char* f = s;
+	while (*f && isspace((unsigned char)*f)) {
+		f++;
+	}
+	if (f != s) {
+		memmove(s, f, strlen(f) + 1);
+	}
 }
 
 void TrimRight(std::string &s) {
@@ -258,8 +373,8 @@ void TrimRight(std::string &s) {
 }
 
 void Trim(std::string &s) {
-	TrimLeft(s);
 	TrimRight(s);
+	TrimLeft(s);
 }
 
 void TrimRight(char* string) {
@@ -274,7 +389,9 @@ void TrimRight(char* string) {
 }
 
 void Trim(char *s) {
-	skip_spaces(&s);
+	if (!s || !*s)
+		return;
+	TrimLeft(s);
 	TrimRight(s);
 }
 
@@ -321,25 +438,21 @@ std::string FixDot(std::string s) {
 	return s;
 }
 
+// Сортировка идёт по ключу, а не по перекодированной на месте строке. Прежний трюк -- перегнать
+// список в Windows-1251 (там русские буквы стоят по алфавиту, в отличие от KOI8-R), отсортировать
+// и перегнать обратно -- под UTF-8 портил текст: побайтовая таблица KOI8-R -> Windows-1251 для
+// многобайтовой строки не значит ничего, и обратное преобразование уже не восстанавливало исходник
+// (issue #3681). native_text::sort_key даёт ровно тот же порядок, ничего не меняя в самих строках.
 void SortKoiString(std::vector<std::string> &str) {
-	for (auto &it : str) {
-		ConvertKtoW(it);
-	}
-	std::sort(str.begin(), str.end(), std::less<std::string>());
-	for (auto &it : str) {
-		ConvertWtoK(it);
-	}
+	std::sort(str.begin(), str.end(), [](const std::string &a, const std::string &b) {
+		return native_text::sort_key(a) < native_text::sort_key(b);
+	});
 }
 
-
 void SortKoiStringReverse(std::vector<std::string> &str) {
-	for (auto &it : str) {
-		ConvertKtoW(it);
-	}
-	std::sort(str.begin(), str.end(), std::greater<std::string>());
-	for (auto &it : str) {
-		ConvertWtoK(it);
-	}
+	std::sort(str.begin(), str.end(), [](const std::string &a, const std::string &b) {
+		return native_text::sort_key(a) > native_text::sort_key(b);
+	});
 }
 
 void ReplaceFirst(std::string &s, const std::string &toSearch, const std::string &replacer) {
@@ -427,14 +540,14 @@ const char *first_letter(const char *txt) {
 char *colorCAP(char *txt) {
 	char *letter = const_cast<char *>(first_letter(txt));
 	if (letter && *letter) {
-		*letter = UPPER(*letter);
+		native_text::capitalize_first(letter);
 	}
 	return txt;
 }
 
 std::string &colorCAP(std::string &txt) {
 	size_t pos = first_letter(txt.c_str()) - txt.c_str();
-	txt[pos] = UPPER(txt[pos]);
+	native_text::capitalize_first(&txt[pos]);
 	return txt;
 }
 
@@ -446,14 +559,14 @@ std::string &colorCAP(std::string &&txt) {
 char *colorLOW(char *txt) {
 	char *letter = const_cast<char *>(first_letter(txt));
 	if (letter && *letter) {
-		*letter = LOWER(*letter);
+		native_text::copy_lower_char(letter, letter);
 	}
 	return txt;
 }
 
 std::string &colorLOW(std::string &txt) {
 	size_t pos = first_letter(txt.c_str()) - txt.c_str();
-	txt[pos] = LOWER(txt[pos]);
+	native_text::copy_lower_char(&txt[pos], &txt[pos]);
 	return txt;
 }
 
@@ -463,17 +576,661 @@ std::string &colorLOW(std::string &&txt) {
 }
 
 char *CAP(char *txt) {
-	*txt = UPPER(*txt);
+	native_text::capitalize_first(txt);
 	return (txt);
 }
 
 std::string CAP(const std::string txt) {
 	std::string tmp_str = txt;
-	tmp_str[0] = UPPER(tmp_str[0]);
+	native_text::capitalize_first(tmp_str);
 	return (tmp_str);
 }
 
 
 } //namespace utils
+
+// Moved from utils.cpp
+void PruneCrlf(char *txt) {
+	size_t i = strlen(txt) - 1;
+	while (txt[i] == '\n' || txt[i] == '\r') {
+		txt[i--] = '\0';
+	}
+}
+
+const char *first_letter(const char *txt) {
+	if (txt) {
+		while (*txt && !a_isalpha(*txt)) {
+			if ('\x1B' == *txt) {
+				while (*txt && 'm' != *txt) {
+					++txt;
+				}
+				if (!*txt) {
+					return txt;
+				}
+			} else if ('&' == *txt) {
+				++txt;
+				if (!*txt) {
+					return txt;
+				}
+			}
+			++txt;
+		}
+	}
+	return txt;
+}
+
+// Moved from interpreter.cpp
+int is_number(const char *str) {
+	while (*str) {
+		if (!a_isdigit(*(str++))) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+char *delete_doubledollar(char *string) {
+	char *read, *write;
+	if ((write = strchr(string, '$')) == nullptr)
+		return (string);
+	read = write;
+	while (*read)
+		if ((*(write++) = *(read++)) == '$')
+			if (*read == '$')
+				read++;
+	*write = '\0';
+	return (string);
+}
+
+// Moved from utils.cpp
+// The str_cmp family folds case per *character*: under KOI8-R that is the original
+// byte-wise LOWER() loop kept verbatim below, under UTF-8 it is native_text's code-point fold
+// (issue #3681). The KOI8-R path is untouched so behaviour is bit-identical until the flip.
+int str_cmp(const char *arg1, const char *arg2) {
+	if (arg1 == nullptr || arg2 == nullptr) {
+		log("SYSERR: str_cmp() passed a nullptr pointer, %p or %p.", arg1, arg2);
+		return (0);
+	}
+	return native_text::compare_ci(arg1, arg2);
+}
+
+int str_cmp(const std::string &arg1, const char *arg2) {
+	if (arg2 == nullptr) {
+		log("SYSERR: str_cmp() passed a NULL pointer, %p.", arg2);
+		return (0);
+	}
+	return native_text::compare_ci(arg1, arg2);
+}
+
+int str_cmp(const char *arg1, const std::string &arg2) {
+	if (arg1 == nullptr) {
+		log("SYSERR: str_cmp() passed a NULL pointer, %p.", arg1);
+		return (0);
+	}
+	return native_text::compare_ci(arg1, arg2);
+}
+
+int str_cmp(const std::string &arg1, const std::string &arg2) {
+	return native_text::compare_ci(arg1, arg2);
+}
+
+
+void StringReplace(std::string &buffer, char s, const std::string &d) {
+	for (size_t index = 0; index = buffer.find(s, index), index != std::string::npos;) {
+		buffer.replace(index, 1, d);
+		index += d.length();
+	}
+}
+
+std::string &format_news_message(std::string &text) {
+	StringReplace(text, '\n', "\n   ");
+	utils::Trim(text);
+	text.insert(0, "   ");
+	text += '\n';
+	return text;
+}
+
+size_t strl_cpy(char *dst, const char *src, size_t siz) {
+	char *d = dst;
+	const char *s = src;
+	size_t n = siz;
+	if (n != 0) {
+		while (--n != 0) {
+			if ((*d++ = *s++) == '\0')
+				break;
+		}
+	}
+	if (n == 0) {
+		if (siz != 0)
+			*d = '\0';
+		while (*s++);
+	}
+	return (s - src - 1);
+}
+
+std::string PrintNumberByDigits(long long num, const char separator) {
+	const int digits_num{3};
+	bool negative{false};
+	if (num < 0) {
+		num = -num;
+		negative = true;
+	}
+	std::string buffer;
+	try {
+		buffer = std::to_string(num);
+	} catch (std::bad_alloc &) {
+		log("SYSERROR : string.at() (%s:%d)", __FILE__, __LINE__);
+		return "<Out Of Range>";
+	}
+	fmt::memory_buffer out;
+	if (negative) {
+		out.push_back('-');
+	}
+	if (digits_num >= static_cast<int>(buffer.size())) {
+		fmt::format_to(std::back_inserter(out), "{}", buffer);
+	} else {
+		auto modulo = buffer.size() % digits_num;
+		if (modulo != 0) {
+			fmt::format_to(std::back_inserter(out), "{}{}", buffer.substr(0, modulo), separator);
+		}
+		unsigned pos = modulo;
+		while (pos < buffer.size() - digits_num) {
+			fmt::format_to(std::back_inserter(out), "{}{}", buffer.substr(pos, digits_num), separator);
+			pos += digits_num;
+		}
+		fmt::format_to(std::back_inserter(out), "{}", buffer.substr(pos, digits_num));
+	}
+	return to_string(out);
+}
+
+std::string thousands_sep(long long n) {
+	bool negative = false;
+	if (n < 0) {
+		n = -n;
+		negative = true;
+	}
+	int size = 50;
+	int curr_pos = size;
+	const int comma = ',';
+	std::string buffer;
+	buffer.resize(size);
+	int i = 0;
+	try {
+		do {
+			if (i % 3 == 0 && i != 0) {
+				buffer.at(--curr_pos) = comma;
+			}
+			buffer.at(--curr_pos) = '0' + n % 10;
+			n /= 10;
+			i++;
+		} while (n != 0);
+		if (negative) {
+			buffer.at(--curr_pos) = '-';
+		}
+	}
+	catch (...) {
+		log("SYSERROR : string.at() (%s:%d)", __FILE__, __LINE__);
+		return "<OutOfRange>";
+	}
+	return buffer.substr(curr_pos);
+}
+
+void skip_dots(char **string) {
+	for (; **string && (strchr(" .", **string) != nullptr); (*string)++);
+}
+
+char *str_str(const char *cs, const char *ct) {
+	if (!cs || !ct) {
+		return nullptr;
+	}
+	// Сравниваем и шагаем ПО СИМВОЛАМ: под UTF-8 побайтовое приведение регистра для кириллицы
+	// неверно (таблица регистра -- байтовая, KOI8-R), и поиск подстроки то не находил совпадения,
+	// то находил ложные на границе байтов (issue #3681).
+	while (*cs) {
+		const char *t = ct;
+		while (*cs && !native_text::chars_equal_ci(cs, t)) {
+			cs += native_text::char_bytes(cs);
+		}
+		char *s = (char*)cs;
+		while (*t && *cs && native_text::chars_equal_ci(cs, t)) {
+			t += native_text::char_bytes(t);
+			cs += native_text::char_bytes(cs);
+		}
+		if (!*t) {
+			return s;
+		}
+	}
+	return nullptr;
+}
+
+void kill_ems(char *str) {
+	char *ptr1, *ptr2;
+	ptr1 = str;
+	ptr2 = str;
+	while (*ptr1) {
+		if ('\r' != *ptr1) {
+			*ptr2 = *ptr1;
+			++ptr2;
+		}
+		++ptr1;
+	}
+	*ptr2 = '\0';
+}
+
+void cut_one_word(std::string &str, std::string &word) {
+	if (str.empty()) {
+		word.clear();
+		return;
+	}
+	bool process = false;
+	unsigned begin = 0, end = 0;
+	// Word boundaries are looked for one whole character at a time (issue #3681); a byte-wise
+	// scan finds a "boundary" inside a multibyte letter and cuts the word in half.
+	for (unsigned i = 0; i < str.size(); i += native_text::char_bytes(str.c_str() + i)) {
+		if (!process && native_text::is_alnum_char(str.c_str() + i)) {
+			process = true;
+			begin = i;
+			continue;
+		}
+		if (process && !native_text::is_alnum_char(str.c_str() + i)) {
+			end = i;
+			break;
+		}
+	}
+	if (process) {
+		if (!end || end >= str.size()) {
+			word = str.substr(begin);
+			str.clear();
+		} else {
+			word = str.substr(begin, end - begin);
+			str.erase(0, end);
+		}
+		return;
+	}
+	str.clear();
+	word.clear();
+}
+
+void ReadEndString(std::ifstream &file) {
+	char c;
+	while (file.get(c)) {
+		if (c == '\n') {
+			return;
+		}
+	}
+}
+
+bool IsValidEmail(const char *address) {
+	int count = 0;
+	static std::string special_symbols("\r\n ()<>,;:\\\"[]|/&'`$");
+	std::string addr = address;
+	std::string::size_type dog_pos = 0, pos = 0;
+	if (addr.find_first_of(special_symbols) != std::string::npos) {
+		return false;
+	}
+	size_t size = addr.size();
+	for (size_t i = 0; i < size; i++) {
+		if (addr[i] <= ' ' || addr[i] >= 127) {
+			return false;
+		}
+	}
+	while ((pos = addr.find_first_of('@', pos)) != std::string::npos) {
+		dog_pos = pos;
+		++count;
+		++pos;
+	}
+	if (count != 1 || dog_pos == 0) {
+		return false;
+	}
+	if (size - dog_pos <= 3) {
+		return false;
+	}
+	if (addr[dog_pos + 1] == '.' || addr[size - 1] == '.' || addr.find('.', dog_pos) == std::string::npos) {
+		return false;
+	}
+	return true;
+}
+
+// Walks both strings one *character* at a time (issue #3681): the classification, the
+// case-insensitive match and every advance go through native_text, so a multibyte letter is one
+// unit instead of a lead byte plus trail bytes that the byte tables would read as punctuation.
+// Under KOI8-R every helper is the original byte operation and char_bytes() == 1, so the state
+// machine below -- including each `curstr = laststr` backtrack -- behaves exactly as before.
+bool MayMatchName(const char *str, const std::string &namelist) {
+	if (!str || namelist.empty()) {
+		return true;   // решать нечего -- пусть разбирается isname
+	}
+	// isname сопоставляет первую значащую букву запроса с началом слова в списке,
+	// поэтому сама эта буква обязана в списке встретиться. Регистр isname не
+	// различает, так что ищем обе формы.
+	const char *begin = str;
+	while (*begin && !native_text::is_alnum_char(begin)) {
+		begin += native_text::char_bytes(begin);
+	}
+	if (!*begin) {
+		return true;
+	}
+
+	char lower[8];
+	char upper[8];
+	const std::size_t lower_bytes = native_text::copy_lower_char(begin, lower);
+	const std::size_t upper_bytes = native_text::copy_upper_char(begin, upper);
+
+	return namelist.find(std::string_view(lower, lower_bytes)) != std::string::npos
+		|| namelist.find(std::string_view(upper, upper_bytes)) != std::string::npos;
+}
+
+bool isname(const char *str, const char *namelist) {
+	bool once_ok = false;
+	const char *curname, *curstr, *laststr;
+	if (!namelist || !*namelist || !str) {
+		return false;
+	}
+	for (curstr = str; !native_text::is_alnum_char(curstr); curstr += native_text::char_bytes(curstr)) {
+		if (!*curstr) {
+			return once_ok;
+		}
+	}
+	laststr = curstr;
+	curname = namelist;
+	for (;;) {
+		once_ok = false;
+		for (;; curstr += native_text::char_bytes(curstr), curname += native_text::char_bytes(curname)) {
+			if (!*curstr) {
+				return once_ok;
+			}
+			if (*curstr == '!') {
+				if (native_text::is_alnum_char(curname)) {
+					curstr = laststr;
+					break;
+				}
+			}
+			if (!native_text::is_alnum_char(curstr)) {
+				for (; !native_text::is_alnum_char(curstr); curstr += native_text::char_bytes(curstr)) {
+					if (!*curstr) {
+						return once_ok;
+					}
+				}
+				laststr = curstr;
+				break;
+			}
+			if (!*curname) {
+				return false;
+			}
+			if (!native_text::is_alnum_char(curname)) {
+				curstr = laststr;
+				break;
+			}
+			if (!native_text::chars_equal_ci(curstr, curname)) {
+				curstr = laststr;
+				break;
+			} else {
+				once_ok = true;
+			}
+		}
+		for (; native_text::is_alnum_char(curname); curname += native_text::char_bytes(curname));
+		for (; !native_text::is_alnum_char(curname); curname += native_text::char_bytes(curname)) {
+			if (!*curname) {
+				return false;
+			}
+		}
+	}
+}
+
+const char *one_word(const char *argument, char *first_arg) {
+	char *begin = first_arg;
+	skip_spaces(&argument);
+	first_arg = begin;
+	// Lowercase whole characters (issue #3681); the '"' and a_isspace() tests stay byte-based
+	// since they only run at a character boundary and both delimiters are ASCII.
+	if (*argument == '\"') {
+		argument++;
+		while (*argument && *argument != '\"') {
+			const size_t n = native_text::copy_lower_char(argument, first_arg);
+			first_arg += n;
+			argument += n;
+		}
+		argument++;
+	} else {
+		while (*argument && !a_isspace(*argument)) {
+			const size_t n = native_text::copy_lower_char(argument, first_arg);
+			first_arg += n;
+			argument += n;
+		}
+	}
+	*first_arg = '\0';
+	return argument;
+}
+
+// std::string overloads
+
+void PruneCrlf(std::string &txt) {
+	while (!txt.empty() && (txt.back() == '\n' || txt.back() == '\r')) {
+		txt.pop_back();
+	}
+}
+
+std::string first_letter(const std::string &txt) {
+	const char *result = first_letter(txt.c_str());
+	return result ? std::string(result) : std::string();
+}
+
+void delete_doubledollar(std::string &string) {
+	std::string::size_type pos = 0;
+	while ((pos = string.find("$$", pos)) != std::string::npos) {
+		string.erase(pos, 1);
+		++pos;
+	}
+}
+
+int is_number(const std::string &str) {
+	return is_number(str.c_str());
+}
+
+bool IsValidEmail(const std::string &address) {
+	return IsValidEmail(address.c_str());
+}
+
+void skip_dots(std::string &string) {
+	auto pos = string.find_first_not_of(" .");
+	if (pos != std::string::npos) {
+		string.erase(0, pos);
+	} else {
+		string.clear();
+	}
+}
+
+std::string::size_type str_str(const std::string &cs, const std::string &ct) {
+	if (cs.empty() || ct.empty()) {
+		return std::string::npos;
+	}
+	const char *result = str_str(cs.c_str(), ct.c_str());
+	if (!result) {
+		return std::string::npos;
+	}
+	return result - cs.c_str();
+}
+
+void kill_ems(std::string &str) {
+	str.erase(std::remove(str.begin(), str.end(), '\r'), str.end());
+}
+
+std::size_t utils::VisibleWidth(std::string_view text) {
+	std::size_t width = 0;
+	std::size_t pos = 0;
+	while (pos < text.size()) {
+		if (text[pos] == '&' && pos + 1 < text.size()) {
+			pos += 2;                      // наш цветокод: & и буква
+			continue;
+		}
+		if (text[pos] == '\x1B') {
+			++pos;
+			if (pos < text.size() && text[pos] == '[') {
+				++pos;
+				// тело CSI -- цифры и ';', завершает его буква (для цвета это 'm')
+				while (pos < text.size() && !std::isalpha(static_cast<unsigned char>(text[pos]))) {
+					++pos;
+				}
+			}
+			if (pos < text.size()) {
+				++pos;                     // завершающая буква (или одиночный ESC)
+			}
+			continue;
+		}
+		pos += native_text::char_bytes(text.data() + pos);
+		++width;
+	}
+	return width;
+}
+
+std::string utils::OutWordsList(const std::vector<std::string> &words, size_t max_length,
+		const std::string &separator, const std::string &prefix) {
+	// prefix печатается один раз и занимает место на первой строке, но не
+	// склеивается через separator (first остаётся true -- первое слово идёт
+	// сразу за префиксом без ", "). Видимую длину считаем без цветокодов.
+	std::string result = prefix;
+	// Ширина -- в символах, а не в байтах: в UTF-8 русская буква занимает два, и счёт по
+	// size() рвал бы строку вдвое раньше запрошенного (issue #3681).
+	size_t line_length = VisibleWidth(prefix);
+	const size_t separator_len = native_text::char_count(separator);
+	bool first = true;
+	// separator -- это и есть то, что стоит между словами на одной строке
+	// (", " для списка, " " для обычного переноса по словам). На переносе
+	// строки хвостовые пробелы у разделителя срезаем, чтобы не оставлять их
+	// перед \r\n (для "," получаем ",\r\n", для " " -- просто "\r\n").
+	std::string eol_separator = separator;
+	while (!eol_separator.empty() && eol_separator.back() == ' ') {
+		eol_separator.pop_back();
+	}
+
+	for (const auto &word : words) {
+		// ширину считаем по видимой длине -- цветокоды (&R, &n и т.п.) на экране
+		// места не занимают, иначе строки с цветом переносятся раньше времени
+		const size_t word_len = VisibleWidth(word);
+		if (!first) {
+			if (line_length + separator_len + word_len > max_length) {
+				result += eol_separator + "\r\n";
+				line_length = 0;
+			} else {
+				result += separator;
+				line_length += separator_len;
+			}
+		}
+		result += word;
+		line_length += word_len;
+		first = false;
+	}
+	return result;
+}
+
+std::string utils::OutWordsList(const std::string &words_str, size_t max_length,
+		const std::string &separator, const std::string &prefix) {
+	std::vector<std::string> words;
+	std::istringstream stream(words_str);
+	std::string word;
+	while (stream >> word) {
+		words.push_back(word);
+	}
+	return OutWordsList(words, max_length, separator, prefix);
+}
+
+std::string utils::WrapText(const std::string &text, size_t max_length) {
+	std::string result;
+	std::istringstream stream(text);
+	std::string line;
+	bool first = true;
+	// разбиваем по '\n', каждую строку переносим отдельно -- авторские
+	// переносы и пустые строки (абзацы) сохраняются
+	while (std::getline(stream, line)) {
+		if (!line.empty() && line.back() == '\r') {  // срезаем хвостовой '\r' от \r\n
+			line.pop_back();
+		}
+		if (!first) {
+			result += "\r\n";
+		}
+		first = false;
+		// Влезающую строку не трогаем: OutWordsList собирает её заново из слов и схлопывает
+		// подряд идущие пробелы, а короткие строки бывают выровнены именно ими. max_length == 0 --
+		// без переноса вовсе.
+		result += (max_length == 0 || VisibleWidth(line) <= max_length)
+				  ? line
+				  : OutWordsList(line, max_length, " ");
+	}
+	return result;
+}
+
+namespace utils {
+std::string sprintGender(int gender_value) {
+	int nr = 0;
+	while (gender_value && *genders[nr] != '\n') {
+		gender_value--;
+		nr++;
+	}
+	return (*genders[nr] != '\n') ? genders[nr] : "UNDEF";
+}
+
+} // namespace utils
+
+
+// ---- name/file sanitization + number formatting (moved from interpreter.cpp,
+//      issue.interpreter-cleaning Bucket 4) ----
+
+// замена в name русских символов на англ в нижнем регистре (для файлов)
+void CreateFileName(std::string &name) {
+	// Имя файла собирается по байтам KOI8-R -- ровно так, как собиралось до миграции. Иначе у
+	// уже существующего персонажа доска получит другое имя файла, и старая просто потеряется:
+	// под UTF-8 байтовый AtoL резал русскую букву пополам и оставлял её в имени как есть, отчего
+	// рядом со 105 старыми досками завелось 70 новых, с кириллицей в имени (issue #3681).
+	//
+	// Приводим строку к KOI8-R и дальше работаем прежним байтовым кодом: под KOI8-R to_koi8 --
+	// тождество, так что поведение там не меняется ни на байт.
+	name = native_text::to_koi8(name);
+	for (unsigned i = 0; i != name.length(); ++i)
+		name[i] = LOWER(codepages::AtoL(name[i]));
+}
+
+// вывод экспы аля диабла
+std::string ExpFormat(long long exp) {
+	std::string prefix;
+	if (exp < 0) {
+		exp = -exp;
+		prefix = "-";
+	}
+	if (exp < 1000000)
+		return (prefix + fmt::format("{}", exp));
+	else if (exp < 1000000000)
+		return (prefix + fmt::format("{}", exp / 1000) + " тыс");
+	else if (exp < 1000000000000LL)
+		return (prefix + fmt::format("{}", exp / 1000000) + " млн");
+	else
+		return (prefix + fmt::format("{}", exp / 1000000000LL) + " млрд");
+}
+
+// * Конвертация имени в нижний регистр + первый сивмол в верхний (для единообразного поиска в контейнерах)
+void name_convert(std::string &text) {
+	if (!text.empty()) {
+		utils::ConvertToLow(text);
+		// Первую букву поднимаем целиком, а не первый байт: под UTF-8 у русской буквы их два,
+		// и байтовый UPPER превращал имя в мусор -- "имя щщщщщ одобрить" не находило
+		// персонажа (issue #3681).
+		native_text::capitalize_first(text);
+	}
+}
+
+std::string ScreenRuler(std::size_t width) {
+	// Метка ставится так, чтобы её последняя цифра пришлась НА свою позицию: "5" на пятый
+	// знак, "80" на восьмидесятый. Раньше метка начиналась с позиции и хвост последней
+	// вылезал за край -- полоска в 80 знаков печаталась 81-м, и игрок с окном ровно в 80
+	// видел перенос и заключал, что у него 79.
+	std::string ruler(width, '.');
+	for (std::size_t mark = 5; mark <= width; mark += 5) {
+		const std::string label = std::to_string(mark);
+		if (label.size() > mark) {
+			continue;                       // метка не помещается от начала строки
+		}
+		ruler.replace(mark - label.size(), label.size(), label);
+	}
+	return ruler;
+}
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

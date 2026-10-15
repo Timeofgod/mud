@@ -1,14 +1,22 @@
 #include "backstab.h"
+#include "utils/logger.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/condition.h"
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/mechanics/mount.h"
 
+#include "skill_messages.h"
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/common.h"
 #include "gameplay/fight/fight_hit.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
 #include "protect.h"
 #include "engine/db/global_objects.h"
 #include "gameplay/magic/magic_utils.h"
 #include "gameplay/magic/magic.h"
 #include "gameplay/mechanics/damage.h"
+#include "gameplay/core/remort.h"
+#include "utils/utils_string.h"
 
 int GetBackstabMultiplier(int level);
 int CalcCritBackstabPercent(CharData *ch);
@@ -16,64 +24,64 @@ double CalcCritBackstabMultiplier(CharData *ch, CharData *victim);
 
 // делегат обработки команды заколоть
 void DoBackstab(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (ch->GetSkill(ESkill::kBackstab) < 1) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (GetSkill(ch, ESkill::kBackstab) < 1) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 
-	one_argument(argument, arg);
-	CharData *vict = get_char_vis(ch, arg, EFind::kCharInRoom);
+	const std::string target_name = utils::ExtractFirstArgumentLower(argument);
+	CharData *vict = target_resolver::FindCharInRoom(ch, target_name);
 	if (!vict) {
-		SendMsgToChar("Кого вы так сильно ненавидите, что хотите заколоть?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 
 	if (!may_kill_here(ch, vict, argument))
 		return;
-	if (!check_pkill(ch, vict, arg))
+	if (!check_pkill(ch, vict, target_name))
 		return;
 
 	do_backstab(ch, vict);
 }
 
 void do_backstab(CharData *ch, CharData *vict) {
-	if (ch->GetSkill(ESkill::kBackstab) < 1) {
+	if (GetSkill(ch, ESkill::kBackstab) < 1) {
 		log("ERROR: вызов стаба для персонажа %s (%d) без проверки умения", ch->get_name().c_str(), GET_MOB_VNUM(ch));
 		return;
 	}
 
-	if (ch->HasCooldown(ESkill::kBackstab)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kBackstab)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	};
 
-	if (ch->IsOnHorse()) {
-		SendMsgToChar("Верхом это сделать затруднительно.\r\n", ch);
+	if (mount::IsOnHorse(ch)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kCantWhileMounted) + "\r\n", ch);
 		return;
 	}
 
 	if (ch->GetPosition() < EPosition::kFight) {
-		SendMsgToChar("Вам стоит встать на ноги.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kGetOnFeet) + "\r\n", ch);
 		return;
 	}
 
 	if (vict == ch) {
-		SendMsgToChar("Вы, определенно, садомазохист!\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 
-	if (!GET_EQ(ch, EEquipPos::kWield) && (!ch->IsNpc() || IS_CHARMICE(ch))) {
-		SendMsgToChar("Требуется держать оружие в правой руке.\r\n", ch);
+	if (!GET_EQ(ch, EEquipPos::kWield) && (!ch->IsNpc() || IsCharmice(ch))) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kNeedWeapon) + "\r\n", ch);
 		return;
 	}
 
-	if ((!ch->IsNpc() || IS_CHARMICE(ch)) && GET_OBJ_VAL(GET_EQ(ch, EEquipPos::kWield), 3) != fight::type_pierce) {
-		SendMsgToChar("ЗаКОЛоть можно только КОЛющим оружием!\r\n", ch);
+  if ((!ch->IsNpc() || IsCharmice(ch)) && GET_OBJ_VAL(GET_EQ(ch, EEquipPos::kWield), 3) != to_underlying(fight::EDamageSource::kPierce)) {
+        SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kWrongWeapon) + "\r\n", ch);
 		return;
 	}
 
 	if (AFF_FLAGGED(ch, EAffect::kStopRight) || IsUnableToAct(ch)) {
-		SendMsgToChar("Вы временно не в состоянии сражаться.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBackstab, ESkillMsg::kCantFightNow) + "\r\n", ch);
 		return;
 	}
 
@@ -89,15 +97,18 @@ void do_backstab(CharData *ch, CharData *vict) {
 // Проверка на стаб в бою происходит до вызова этой функции
 void GoBackstab(CharData *ch, CharData *vict) {
 
-	if (ch->IsHorsePrevents())
+	if (mount::IsBlockedByHorse(ch))
 		return;
+//	if (vict->purged()) {
+//		return;
+//	}
 
 	vict = TryToFindProtector(vict, ch);
 
 	if (!pk_agro_action(ch, vict))
 		return;
 
-	if ((vict->IsFlagged(EMobFlag::kAware) && AWAKE(vict)) && !IS_GOD(ch)) {
+	if ((vict->IsFlagged(EMobFlag::kAware) && AWAKE(vict)) && !privilege::IsGod(ch)) {
 		act("Вы заметили, что $N попытал$u вас заколоть!", false, vict, nullptr, ch, kToChar);
 		act("$n заметил$g вашу попытку заколоть $s!", false, vict, nullptr, ch, kToVict);
 		act("$n заметил$g попытку $N1 заколоть $s!", false, vict, nullptr, ch, kToNotVict | kToArenaListen);
@@ -170,7 +181,7 @@ bool ProcessBackstab(CharData *ch, CharData *victim, HitData &hit_data) {
 	}
 	if (CanUseFeat(ch, EFeat::kShadowStrike)) {
 		hit_data.dam *=
-			GetBackstabMultiplier(GetRealLevel(ch)) * (1.0 + ch->GetSkill(ESkill::kNoParryHit) / 200.0);
+			GetBackstabMultiplier(GetRealLevel(ch)) * (1.0 + GetSkill(ch, ESkill::kNoParryHit) / 200.0);
 	} else if (CanUseFeat(ch, EFeat::kThieveStrike)) {
 		if (victim->GetEnemy()) {
 			hit_data.dam *= GetBackstabMultiplier(GetRealLevel(ch));
@@ -185,8 +196,8 @@ bool ProcessBackstab(CharData *ch, CharData *victim, HitData &hit_data) {
 		&& CanUseFeat(ch, EFeat::kShadowStrike)
 		&& !ROOM_FLAGGED(ch->in_room, ERoomFlag::kArena)
 		&& !(AFF_FLAGGED(victim, EAffect::kGodsShield) && !(victim->IsFlagged(EMobFlag::kProtect)))
-		&& (number(1, 100) <= 6 * ch->get_cond_penalty(P_HITROLL))
-		&& !victim->get_role(MOB_ROLE_BOSS)) {
+		&& (number(1, 100) <= 6 * condition::GetCondPenalty(ch, condition::kHitroll))
+		&& !victim->get_role(static_cast<unsigned>(EMobClass::kBoss))) {
 		victim->set_hit(1);
 		hit_data.dam = victim->get_hit() + fight::kLethalDmg;
 		SendMsgToChar(ch, "&GПрямо в сердце, насмерть!&n\r\n");
@@ -196,7 +207,7 @@ bool ProcessBackstab(CharData *ch, CharData *victim, HitData &hit_data) {
 	}
 
 	if (!ch->IsNpc()
-		&& (number(1, 100) < CalcCritBackstabPercent(ch) * ch->get_cond_penalty(P_HITROLL))
+		&& (number(1, 100) < CalcCritBackstabPercent(ch) * condition::GetCondPenalty(ch, condition::kHitroll))
 		&& (!CalcGeneralSaving(ch, victim, ESaving::kCritical, CalculateSkillRate(ch, ESkill::kBackstab, victim)))) {
 		hit_data.dam = static_cast<int>(hit_data.dam * CalcCritBackstabMultiplier(ch, victim));
 		if ((hit_data.dam > 0)
@@ -210,11 +221,11 @@ bool ProcessBackstab(CharData *ch, CharData *victim, HitData &hit_data) {
 	hit_data.dam = ApplyResist(victim, EResist::kVitality, hit_data.dam);
 	// режем стаб
 	if (CanUseFeat(ch, EFeat::kShadowStrike) && !ch->IsNpc()) {
-		hit_data.dam = std::min(8000 + GetRealRemort(ch) * 20 * GetRealLevel(ch), hit_data.dam);
+		hit_data.dam = std::min(8000 + remort::GetRealRemort(ch) * 20 * GetRealLevel(ch), hit_data.dam);
 	}
 
-	ch->send_to_TC(false, true, false, "&CДамага стаба равна = %d&n\r\n", hit_data.dam);
-	victim->send_to_TC(false, true, false, "&RДамага стаба  равна = %d&n\r\n", hit_data.dam);
+	SendToTC(ch, false, true, false, "&CДамага стаба равна = %d&n\r\n", hit_data.dam);
+	SendToTC(victim, false, true, false, "&RДамага стаба  равна = %d&n\r\n", hit_data.dam);
 	hit_data.ProcessExtradamage(ch, victim);
 	return true;
 }
@@ -239,16 +250,21 @@ int GetBackstabMultiplier(int level) {
 }
 
 /**
-* Процент прохождения крит.стаба = скилл/11 + (декса-20)/(декса/30) для вовровского удара,
+* Процент прохождения крит.стаба = скилл/11 + (декса-20)/(декса/30) для воровского удара,
 * для остального в учет только ловку
 * при 74х мортах максимальный скилл заколоть будет около 500. декса 90 ессно - получается 75% критстабов.
 * попробуем скилл/15 + (декса - 20) / (декса/20) - получается около 50% критстабов.
-* TO DO.. еще удачу есть план добавить в расчет шанса критстаба
+* маленькие проценты от удачи, максимум 5% если сильно повезёт при 500 удачи.
 */
 int CalcCritBackstabPercent(CharData *ch) {
-	double percent = ((GetRealDex(ch) -20) / (GetRealDex(ch) / 20.0));
+	int luck = std::max(ch->calc_morale(), 0);
+
+	double percent = std::min(number(0, luck), 500) * 0.01;
+
 	if (CanUseFeat(ch, EFeat::kThieveStrike)) {
-		percent += (ch->GetSkill(ESkill::kBackstab) / 15.0);
+		percent += ((GetRealDex(ch) - 20) / (GetRealDex(ch) * 0.05)) + (GetSkill(ch, ESkill::kBackstab) * 0.066);
+	} else {
+		percent += (GetRealDex(ch) - 20) / (GetRealDex(ch) * 0.033);
 	}
 	return static_cast<int>(percent);
 }
@@ -261,18 +277,18 @@ double CalcCritBackstabMultiplier(CharData *ch, CharData *victim) {
 	double bs_coeff = 1.0;
 	if (victim->IsNpc()) {
 		if (CanUseFeat(ch, EFeat::kThieveStrike)) {
-			bs_coeff *= ch->GetSkill(ESkill::kBackstab) / 15.0;
+			bs_coeff *= GetSkill(ch, ESkill::kBackstab) * 0.066;
 		} else {
-			bs_coeff *= ch->GetSkill(ESkill::kBackstab) / 25.0;
+			bs_coeff *= GetSkill(ch, ESkill::kBackstab) * 0.04;
 		}
-		if (CanUseFeat(ch, EFeat::kShadowStrike) && (ch->GetSkill(ESkill::kNoParryHit))) {
-			bs_coeff *= (1 + (ch->GetSkill(ESkill::kNoParryHit) * 0.00125));
+		if (CanUseFeat(ch, EFeat::kShadowStrike) && (GetSkill(ch, ESkill::kNoParryHit))) {
+			bs_coeff *= (1 + (GetSkill(ch, ESkill::kNoParryHit) * 0.0025));
 		}
 	} else if (CanUseFeat(ch, EFeat::kThieveStrike)) {
 		if (victim->GetEnemy()) {
-			bs_coeff *= (1.0 + (ch->GetSkill(ESkill::kBackstab) * 0.00225));
+			bs_coeff *= (1.0 + (GetSkill(ch, ESkill::kBackstab) * 0.00225));
 		} else {
-			bs_coeff *= (1.0 + (ch->GetSkill(ESkill::kBackstab) * 0.00350));
+			bs_coeff *= (1.0 + (GetSkill(ch, ESkill::kBackstab) * 0.00350));
 		}
 	}
 

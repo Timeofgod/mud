@@ -1,0 +1,93 @@
+# Combined-стек: игровой сервер (circle с admin_api+otel+yaml) + web-админка.
+#
+# Телеметрия: циркуль запускается с host-сетью, поэтому localhost:<порт> из
+# configuration.xml мира бьёт в локальный приёмник ЭТОГО сервера. На agent-хостах
+# это стандартный 4318 (конфиг мира уже верен). На gateway-хосте 4318 занят
+# внешним TLS-приёмником, а локальный plaintext — на 4319: там задайте
+# OTEL_LOCAL_PORT=4319, и entrypoint перепишет порт. Один и тот же compose
+# работает на любом сервере; порт-исключение задаётся одной переменной хоста.
+#
+# Подготовка:
+#   - распакуйте мир в каталог (внутри cfg/, world/, text/ ...);
+#   - задайте MUD_WORLD_DIR (обязательно);
+#   - на gateway-хосте задайте OTEL_LOCAL_PORT=4319 (см. про телеметрию выше).
+#
+# Запуск (контекст сборки circle — корень репозитория):
+#   MUD_WORLD_DIR=/home/you/worlds/w/lib \
+#     docker compose -f tools/docker/docker-compose.full.yml up -d
+#
+# Web-админка по умолчанию слушает только localhost. Чтобы открыть наружу:
+#   WEB_ADMIN_BIND=0.0.0.0 ... up -d   (учтите: это публикует админку в Интернет)
+#
+# Логи:
+#   docker compose -f tools/docker/docker-compose.full.yml logs -f web-admin
+#   docker compose -f tools/docker/docker-compose.full.yml logs -f circle
+
+services:
+  circle:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        WITH_OTEL: "true"
+        WITH_ADMIN_API: "true"
+        WITH_YAML: "true"
+        WITH_SQLITE: "${WITH_SQLITE:-false}"
+    image: mud-circle
+    container_name: mud-circle
+    # circle бежит под владельцем смонтированного мира (не root, см. entrypoint).
+    # init/tini — чистый проброс SIGTERM и reaping (иначе circle как PID 1).
+    init: true
+    # Host-сеть: игровой порт сразу на интерфейсах хоста (наружу, в Интернет), а
+    # localhost:<порт> из конфига достаёт локальный OTEL-коллектор напрямую.
+    network_mode: host
+    volumes:
+      # Мир монтируется целиком (rw): циркуль создаёт здесь run/admin_api.sock и
+      # пишет сейвы. Это же — общий канал к web-админке (она читает сокет отсюда).
+      - "${MUD_WORLD_DIR:?set MUD_WORLD_DIR to the host world directory}:/world"
+    environment:
+      WORLD_DIR: /world
+      MUD_PORT: "${MUD_PORT:-4000}"
+      FORCE_CONFIG: "${FORCE_CONFIG:-1}"
+      # Порт локального OTLP-приёмника на ЭТОМ хосте. Пусто (по умолчанию) — порт
+      # берётся из конфига мира (на agent-хостах это стандартный 4318). На
+      # gateway-хосте задайте OTEL_LOCAL_PORT=4319 (там 4318 занят внешним
+      # TLS-приёмником, локальный plaintext — на 4319), entrypoint перепишет порт.
+      OTEL_LOCAL_PORT: "${OTEL_LOCAL_PORT:-}"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  web-admin:
+    build:
+      context: ../web_admin
+      dockerfile: Dockerfile
+    image: mud-web-admin
+    container_name: mud-web-admin
+    depends_on:
+      - circle
+    # circle теперь бежит под владельцем мира (не root), но root всё равно достучится
+    # до сокета независимо от его владельца — поэтому админку держим под root.
+    user: "0:0"
+    ports:
+      # admin API по умолчанию только на localhost; WEB_ADMIN_BIND=0.0.0.0 откроет
+      # наружу (в Интернет — ставьте reverse-proxy/аутентификацию осознанно).
+      - "${WEB_ADMIN_BIND:-127.0.0.1}:${WEB_ADMIN_PORT:-12001}:5000"
+    volumes:
+      # Тот же каталог мира (read-only) — внутри run/admin_api.sock. Монтируем
+      # каталог, а не файл: при рестарте циркуля сокет пересоздаётся, и dir-mount
+      # сразу видит новый inode.
+      - "${MUD_WORLD_DIR}:/world:ro"
+    environment:
+      MUD_SOCKET: /world/run/admin_api.sock
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-}"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

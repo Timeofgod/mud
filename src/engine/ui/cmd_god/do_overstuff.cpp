@@ -6,6 +6,8 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
 #include "gameplay/clans/house.h"
 
@@ -14,8 +16,7 @@ const int overstuff_threshold{8};
 void DoPageClanOverstuff(CharData *ch, char *, int, int) {
 	std::map<std::string, int> objects;
 	for (const auto & clan : Clan::ClanList) {
-		for (ObjData *chest = world[GetRoomRnum(clan->get_chest_room())]->contents; chest;
-			 chest = chest->get_next_content()) {
+		for (auto chest : world[GetRoomRnum(clan->get_chest_room())]->contents) {
 			if (Clan::is_clan_chest(chest)) {
 				for (ObjData *temp = chest->get_contains(); temp; temp = temp->get_next_content()) {
 					if (temp->get_auto_mort_req() > overstuff_threshold) {
@@ -31,8 +32,7 @@ void DoPageClanOverstuff(CharData *ch, char *, int, int) {
 	}
 
 	for (auto & object : objects) {
-		sprintf(buf, "Дружина: %s, количество объектов: %d\r\n", object.first.c_str(), object.second);
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format("Дружина: {}, количество объектов: {}\r\n", object.first, object.second), ch);
 	}
 }
 

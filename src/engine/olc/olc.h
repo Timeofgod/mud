@@ -11,6 +11,8 @@
 #ifndef _OLC_H_
 #define _OLC_H_
 
+#include <cstdint>
+
 #include "engine/db/db.h"
 #include "engine/structs/structs.h"
 
@@ -39,7 +41,7 @@
 
 #define NUM_MOB_FLAGS        18
 #define NUM_AFF_FLAGS        22
-#define NUM_ATTACK_TYPES    20
+#define NUM_ATTACK_TYPES    17  // weapon attack types EDamageSource kHit..kSting
 
 #define NUM_ITEM_TYPES        36
 #define NUM_ITEM_FLAGS        30
@@ -64,10 +66,12 @@ inline constexpr int kScmdOlcSaveinfo{5};
 
 // * Utilities exported from olc.c.
 void strip_string(char *);
-void cleanup_olc(DescriptorData *d, byte cleanup_type);
+// Строковая форма: та же чистка от '\r', но без буфера у вызывающего (#3814).
+std::string strip_string(std::string text);
+void cleanup_olc(DescriptorData *d, int cleanup_type);
 void disp_planes_values(DescriptorData *d, const char *names[], short num_column);
-void olc_add_to_save_list(int zone, byte type);
-void olc_remove_from_save_list(int zone, byte type);
+void olc_add_to_save_list(int zone, int type);
+void olc_remove_from_save_list(int zone, int type);
 
 // * OLC structures.
 
@@ -97,7 +101,7 @@ struct olc_data {
 	RoomData *room;
 	ObjData *obj;
 	ZoneData *zone;
-	ExtraDescription::shared_ptr desc;
+	int desc{-1};   // индекс редактируемого экстра-описания в векторе сущности (-1 = нет)
 
 	MakeRecept *mrec;
 
@@ -109,6 +113,8 @@ struct olc_data {
 	int script_mode;
 	int trigger_position;
 	int item_type;
+	std::uint64_t lua_format_request_id;
+	bool lua_format_save_on_completion;
 	ObjData::triggers_list_t script;
 	char *storage;        // for holding commands etc..
 };
@@ -153,14 +159,14 @@ extern struct olc_save_info *olc_save_list;
 #define GET_OLC_ZONE(c)    ((c)->player_specials->saved.olc_zone)
 
 // * Cleanup types.
-#define CLEANUP_ALL        (byte)    1    // Free the whole lot.
-#define CLEANUP_STRUCTS    (byte)    2    // Don't free strings.
+#define CLEANUP_ALL        1    // Free the whole lot.
+#define CLEANUP_STRUCTS    2    // Don't free strings.
 
 // * Add/Remove save list types.
-#define OLC_SAVE_ROOM        (byte)    0
-#define OLC_SAVE_OBJ        (byte)    1
-#define OLC_SAVE_ZONE        (byte)    2
-#define OLC_SAVE_MOB        (byte)    3
+#define OLC_SAVE_ROOM        0
+#define OLC_SAVE_OBJ        1
+#define OLC_SAVE_ZONE        2
+#define OLC_SAVE_MOB        3
 
 // * Submodes of OEDIT connectedness.
 #define OEDIT_MAIN_MENU                 1
@@ -215,6 +221,20 @@ extern struct olc_save_info *olc_save_list;
 #define OEDIT_CLONE                        50
 #define OEDIT_CLONE_WITH_TRIGGERS            51
 #define OEDIT_CLONE_WITHOUT_TRIGGERS            52
+#define OEDIT_POTION_SKILL                      53
+#define OEDIT_POTION_STAT                       54
+// issue.magic-items: scroll/wand/staff extended-value editor (kSpellItem* keys).
+#define OEDIT_SPELLITEM_VALUES                  55
+#define OEDIT_SPELLITEM_SPELL1                  56
+#define OEDIT_SPELLITEM_SPELL2                  57
+#define OEDIT_SPELLITEM_SPELL3                  58
+#define OEDIT_SPELLITEM_SKILL                   59
+#define OEDIT_SPELLITEM_STAT                    60
+#define OEDIT_SPELLITEM_MAXCHARGES              61
+#define OEDIT_SPELLITEM_CURCHARGES              62
+#define OEDIT_DRINKCON_CAPACITY                 63
+#define OEDIT_DRINKCON_CURRENT                  64
+#define OEDIT_DRINKCON_TYPE                     65
 
 // * Submodes of REDIT connectedness.
 #define REDIT_MAIN_MENU        1

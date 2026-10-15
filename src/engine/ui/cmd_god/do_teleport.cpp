@@ -7,34 +7,38 @@
 */
 
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "gameplay/mechanics/mount.h"
+#include "engine/core/char_handler.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/mechanics/sight.h"
 
 void DoTeleport(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	CharData *victim;
 	RoomRnum target;
 
-	two_arguments(argument, buf, buf2);
+	char name[kMaxInputLength];
+	char room_arg[kMaxInputLength];
+	two_arguments(argument, name, room_arg);
 
-	if (!*buf)
+	if (!*name)
 		SendMsgToChar("Кого вы хотите переместить?\r\n", ch);
-	else if (!(victim = get_char_vis(ch, buf, EFind::kCharInWorld)))
-		SendMsgToChar(NOPERSON, ch);
+	else if (!(victim = target_resolver::FindCharInWorld(ch, name)))
+		SendMsgToChar(CommonMsg(ECommonMsg::kNoPerson) + "\r\n", ch);
 	else if (victim == ch)
 		SendMsgToChar("Используйте 'прыжок' для собственного перемещения.\r\n", ch);
 	else if (GetRealLevel(victim) >= GetRealLevel(ch) && !ch->IsFlagged(EPrf::kCoderinfo))
 		SendMsgToChar("Попробуйте придумать что-то другое.\r\n", ch);
-	else if (!*buf2)
+	else if (!*room_arg)
 		act("Куда вы хотите $S переместить?", false, ch, nullptr, victim, kToChar);
-	else if ((target = FindRoomRnum(ch, buf2, 0)) != kNowhere) {
-		SendMsgToChar(OK, ch);
+	else if ((target = FindRoomRnum(ch, room_arg, 0)) != kNowhere) {
+		SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 		act("$n растворил$u в клубах дыма.", false, victim, nullptr, nullptr, kToRoom);
 		RemoveCharFromRoom(victim);
 		PlaceCharToRoom(victim, target);
-		victim->dismount();
+		mount::Dismount(victim);
 		act("$n появил$u, окутанн$w розовым туманом.", false, victim, nullptr, nullptr, kToRoom);
 		act("$n переместил$g вас!", false, ch, nullptr, (char *) victim, kToVict);
-		look_at_room(victim, 0);
+		sight::look_at_room(victim, 0);
 	}
 }
 

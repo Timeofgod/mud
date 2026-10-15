@@ -1,10 +1,12 @@
 #include "world_characters.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/entities/char_data.h"
+#include "engine/scripting/lua/lua_script_engine.h"
 #include "gameplay/ai/mobact.h"
 #include "global_objects.h"
 #include "gameplay/ai/mob_memory.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 extern std::list<combat_list_element> combat_list;
 
@@ -52,6 +54,10 @@ void Characters::push_front(const CharData::shared_ptr &character) {
 	}
 	character->subscribe_for_rnum_changes(m_rnum_change_observer);
 
+	if (!character->IsNpc()) {
+		m_players.insert(character.get());    // #3414: все игроки в игре
+	}
+
 	if (character->purged()) {
 		/*
 		* Anton Gorev (2017/10/29): It is possible is character quit the game without
@@ -94,11 +100,15 @@ void Characters::foreach_on_filtered_copy(const foreach_f function, const predic
 }
 
 void Characters::AddToExtractedList(CharData *ch) {
+	if (ch) { log("[charlife] AddToExtractedList %s #%d room %d", GET_NAME(ch), static_cast<int>(ch->IsNpc() ? mob_index[ch->get_rnum()].vnum : -1), GET_ROOM_VNUM(ch->in_room)); }
+	lua_scripting::LuaScriptEngine::CancelWaitsForOwner(ch);
 	if (ch->IsNpc()) {
-//		ch->script->set_purged(true);
 		mobs_by_vnum_remove(ch, mob_index[(ch)->get_rnum()].vnum);
 	}
-	log("add mob to extracted list %s %d", GET_NAME(ch), GET_MOB_VNUM(ch));
+	ch->set_purged(true);
+	DropEquipment(ch, false);
+	DropInventory(ch, false);
+	RemoveCharFromRoom(ch);
 	m_extracted_list.insert(ch);
 }
 
@@ -106,8 +116,8 @@ void Characters::PurgeExtractedList() {
 	if (!m_extracted_list.empty()) {
 		auto extracted_list_copy = m_extracted_list;  // чистится в Characters::remove
 
-		log("Start mob PurgeExtractedList");
 		for (auto &it : extracted_list_copy) {
+			it->set_purged(false);  // игрок может остаться в игре
 			ExtractCharFromWorld(it, false);
 		}
 		if (!m_extracted_list.empty()) {
@@ -144,17 +154,28 @@ void Characters::remove(CharData *character) {
 		const auto vnum = mob_index[character->get_rnum()].vnum;
 		mobs_by_vnum_remove(character, vnum);
 	}
-	if (m_extracted_list.contains(character)) {
-		m_extracted_list.erase(character);
+	if (character->IsNpc()) {
+		auto it_erase = affected_mobs.find(character);
+		if (it_erase != affected_mobs.end()) {
+			affected_mobs.erase(it_erase);
+		}
 	}
-	if (chardata_wait_list.contains(character)) {
+	auto elist = m_extracted_list.find(character);
+	if (elist != m_extracted_list.end()){
+		m_extracted_list.erase(elist);
+	}
+	auto wlist = chardata_wait_list.find(character);
+	if (wlist != chardata_wait_list.end()) {
 		character->zero_wait();
-		chardata_wait_list.erase(character);
+		chardata_wait_list.erase(wlist);
 	}
-	if (chardata_cooldown_list.contains(character)) {
-		character->ZeroCooldowns();
-		chardata_cooldown_list.erase(character);
+	auto clist = chardata_cooldown_list.find(character);
+	if (clist != chardata_cooldown_list.end()) {
+		character->Skills().ZeroCooldowns();
+		chardata_cooldown_list.erase(clist);
 	}
+	m_active.erase(character);     // #3414: убрать из активного набора
+	m_players.erase(character);    // #3414: убрать из списка игроков
 	m_list.erase(index_i->second);
 	m_character_raw_ptr_to_character_ptr.erase(index_i);
 	auto tmp_it = std::find_if(combat_list.begin(), combat_list.end(), [character] (auto it) {return (it.ch == character); });
@@ -166,6 +187,7 @@ void Characters::remove(CharData *character) {
 }
 
 void Characters::purge() {
+	log("Characters::purge() start, purge_list size=%zu", m_purge_list.size());
 	m_purge_set.clear();
 	for (const auto &character : m_purge_list) {
 		if (character->IsNpc()) {

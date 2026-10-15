@@ -10,7 +10,16 @@
 #define BYLINS_SRC_ENGINE_UI_CMD_GOD_DO_SET_ALL_H_
 
 #include <memory>
+#include <string>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#ifdef __MINGW32__
 #include <sys/time.h>
+#endif
+#else
+#include <sys/time.h>
+#endif
 #include <map>
 
 struct setall_inspect_request {
@@ -25,11 +34,18 @@ struct setall_inspect_request {
   int pos; // позиция в таблице
   struct timeval start;        //время когда запустили запрос для отладки
   std::string out;        //буфер в который накапливается вывод
+
+  ~setall_inspect_request() {
+	free(mail);
+	free(pwd);
+	free(newmail);
+	free(reason);
+  }
 };
 
 class CharData;
 using SetAllInspReqPtr = std::shared_ptr<setall_inspect_request>;
-using SetAllInspReqListType = std::map<int, SetAllInspReqPtr>;
+using SetAllInspReqListType = std::map<long, SetAllInspReqPtr>;
 extern SetAllInspReqListType &setall_inspect_list;
 void setall_inspect();
 void do_setall(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/);

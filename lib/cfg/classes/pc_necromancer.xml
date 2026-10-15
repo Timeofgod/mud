@@ -1,9 +1,6 @@
-<?xml version="1.0" encoding="koi8-r"?>
+<?xml version="1.0" encoding="utf-8"?>
 <class id="kNecromancer">
-    <name abbr="Чр">
-        <singular nom="чернокнижник" gen="чернокнижника" dat="чернокнижнику" acc="чернокнижника" ins="чернокнижником" pre="чернокнижнике"/>
-        <plural nom="чернокнижники" gen="чернокнижников" dat="чернокнижникам" acc="чернокнижников" ins="чернокнижниками" pre="чернокнижниках"/>
-    </name>
+    <experience_table id="kMageTable"/>
     <stats>
         <base_stats>
             <stat id="kStr"	gen_min="9"		gen_max="15"	auto="14"	cap="50"/>
@@ -74,10 +71,13 @@
         <spell id="kEarthquake"			level="26"	remort="0"	circle="8"	mem="0"		cast="0.0"/>
         <spell id="kEnergyDrain"		level="26"	remort="0"	circle="8"	mem="0"		cast="0.0"/>
         <spell id="kMindless"			level="29"	remort="0"	circle="8"	mem="0"		cast="0.0"/>
+        <spell id="kAnimateSkeleton"		level="26"	remort="0"	circle="8"	mem="0"		cast="0.0"/>
         <spell id="kStunning"			level="29"	remort="6"	circle="9"	mem="0"		cast="0.0"/>
         <spell id="kEviless"			level="29"	remort="0"	circle="9"	mem="0"		cast="0.0"/>
        <spell id="kDeadlyFog"			level="27"	remort="2"	circle="9"	mem="0"		cast="0.0"/>
         <spell id="kMassFear"			level="26"	remort="0"	circle="8"	mem="0"		cast="0.0"/>
+        <!-- issue.new-unaffect-spells: skill-based class/room dispels -->
+        <spell id="kSuppress"	level="12"	remort="0"	circle="4"	mem="0"	cast="0.0"/>
     </spells>
     <feats remorts_for_slot="6">
         <feat id="kMagicUser"			level="1"	remort="0"	slot="0"	inborn="1"/>
@@ -102,5 +102,53 @@
 	<feat id="kTactician"			level="1"	remort="0"	slot="4"	inborn="0"/>
         <feat id="kMultipleCast"		level="1"	remort="0"	slot="4"	inborn="0"/>
         <feat id="kWarriorSpirit"		level="1"	remort="0"	slot="5"	inborn="0"/>
+        <feat id="kBoneCommander"		level="1"	remort="0"	slot="6"	inborn="0"/>
     </feats>
+    <ingredient_magic>
+		<recipe id="AxePorridge"	level="1"	remort="0"/>
+		<recipe id="SoaringBrew"	level="7"	remort="0"/>
+		<recipe id="BedbugInfusion"	level="20"	remort="0"/>
+		<recipe id="WardingPotion"	level="3"	remort="0"/>
+		<recipe id="AloeInfusion"	level="3"	remort="0"/>
+		<recipe id="AconiteDecoction"	level="18"	remort="0"/>
+		<recipe id="PlantainDecoction"	level="3"	remort="0"/>
+		<recipe id="ChagaInfusion"	level="1"	remort="0"/>
+		<recipe id="MurkyBrew"	level="1"	remort="0"/>
+		<recipe id="RavensEyeInfusion"	level="1"	remort="0"/>
+		<recipe id="BurnetRootDecoction"	level="1"	remort="0"/>
+		<recipe id="SuryaDrink"	level="28"	remort="5"/>
+		<recipe id="OldTestamentRotgut"	level="24"	remort="0"/>
+		<recipe id="BearBloodInfusion"	level="5"	remort="0"/>
+		<recipe id="OwlSightInfusion"	level="1"	remort="0"/>
+		<recipe id="WaterStriderInfusion"	level="10"	remort="0"/>
+		<recipe id="OnionInfusion"	level="15"	remort="0"/>
+		<recipe id="BlackTincture"	level="18"	remort="0"/>
+		<recipe id="OakBarkDecoction"	level="15"	remort="0"/>
+		<recipe id="GreenFroglingTincture"	level="3"	remort="0"/>
+		<recipe id="SwellingInfusion"	level="20"	remort="0"/>
+		<recipe id="ElecampaneDecoction"	level="1"	remort="0"/>
+		<recipe id="MeatBroth"	level="1"	remort="0"/>
+		<recipe id="FishHeadInfusion"	level="5"	remort="0"/>
+		<recipe id="SnakeAgilityPotion"	level="12"	remort="0"/>
+		<recipe id="WolfHearingPotion"	level="12"	remort="0"/>
+		<recipe id="DissolutionPotion"	level="20"	remort="0"/>
+		<recipe id="LongRoadPotion"	level="5"	remort="0"/>
+		<recipe id="IcyInfusion"	level="25"	remort="4"/>
+		<recipe id="SmallBugInfusion"	level="22"	remort="0"/>
+		<recipe id="FlintDecoction"	level="16"	remort="0"/>
+		<recipe id="ColdTincture"	level="22"	remort="0"/>
+		<recipe id="MouseInfusion"	level="12"	remort="0"/>
+		<recipe id="TalkativenessDecoction"	level="15"	remort="0"/>
+		<recipe id="SmokyPotion"	level="25"	remort="2"/>
+		<recipe id="ImmobilityPotion"	level="24"	remort="4"/>
+		<recipe id="StupefyingBrew"	level="22"	remort="0"/>
+		<recipe id="CausticTincture"	level="20"	remort="0"/>
+		<recipe id="StaleInfusion"	level="15"	remort="0"/>
+		<recipe id="StickyPotion"	level="18"	remort="0"/>
+		<recipe id="HeadyTincture"	level="10"	remort="0"/>
+		<recipe id="CatFurInfusion"	level="20"	remort="2"/>
+		<recipe id="BoilingPotion"	level="22"	remort="2"/>
+		<recipe id="BitterTincture"	level="25"	remort="2"/>
+		<recipe id="RatTailTincture"	level="25"	remort="2"/>
+    </ingredient_magic>
 </class>

@@ -1,12 +1,20 @@
 #include "relocate.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/mount.h"
 
 #include "engine/entities/char_data.h"
 #include "gameplay/clans/house.h"
 #include "engine/ui/color.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "gameplay/abilities/timed_abilities.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/fight/pk.h"
 #include "gameplay/mechanics/sight.h"
 #include "gameplay/mechanics/groups.h"
+#include "gameplay/magic/magic_utils.h"          // IsRoomBlocked (issue.no-teleport-out)
+#include "engine/db/global_objects.h"            // MUD::Spell
+#include "gameplay/core/remort.h"
+#include "utils/utils_string.h"
 
 extern void CheckAutoNosummon(CharData *ch);
 
@@ -20,7 +28,7 @@ void do_relocate(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 	if (IsTimedByFeat(ch, EFeat::kRelocate)
 #ifdef TEST_BUILD
-		&& !IS_IMMORTAL(ch)
+		&& !privilege::IsImmortal(ch)
 #endif
 		) {
 		SendMsgToChar("Невозможно использовать это так часто.\r\n", ch);
@@ -28,16 +36,16 @@ void do_relocate(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	}
 
 	RoomRnum to_room, fnd_room;
-	one_argument(argument, arg);
-	if (!*arg) {
+	const std::string target_name = utils::ExtractFirstArgumentLower(argument);
+	if (target_name.empty()) {
 		SendMsgToChar("Переместиться на кого?", ch);
 		return;
 	}
 
-	CharData *victim = get_player_vis(ch, arg, EFind::kCharInWorld);
+	CharData *victim = target_resolver::FindPlayerVis(ch, target_name);
 
 	if (!victim) {
-		SendMsgToChar(NOPERSON, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kNoPerson) + "\r\n", ch);
 		return;
 	}
 
@@ -51,15 +59,19 @@ void do_relocate(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		return;
 	}
 
-	if (!IS_GOD(ch)) {
-		if (ROOM_FLAGGED(ch->in_room, ERoomFlag::kNoTeleportOut)) {
-			SendMsgToChar("Попытка перемещения не удалась.\r\n", ch);
-			return;
-		}
-		if (AFF_FLAGGED(ch, EAffect::kNoTeleport)) {
-			SendMsgToChar("Попытка перемещения не удалась.\r\n", ch);
-			return;
-		}
+	// Room-flag gating reuses kRelocate spell's <blocking><room_flags> (single source of
+	// truth: edit spells.xml to retune both the cast and this feat). issue.no-teleport-out
+	// dropped the inline ROOM_FLAGGED(kNoTeleportOut) check; the same XML config now also
+	// extends kNoMagic blocking to the feat (previously code didn't gate on kNoMagic).
+	if (!privilege::IsGod(ch)
+		&& IsRoomBlocked(world[ch->in_room],
+						 MUD::Spell(ESpell::kRelocate).actions.GetBlocking())) {
+		SendMsgToChar("Попытка перемещения не удалась.\r\n", ch);
+		return;
+	}
+	if (!privilege::IsGod(ch) && AFF_FLAGGED(ch, EAffect::kNoTeleport)) {
+		SendMsgToChar("Попытка перемещения не удалась.\r\n", ch);
+		return;
 	}
 
 	to_room = victim->in_room;
@@ -74,19 +86,18 @@ void do_relocate(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	else
 		fnd_room = to_room;
 
-	if (fnd_room != to_room && !IS_GOD(ch)) {
+	if (fnd_room != to_room && !privilege::IsGod(ch)) {
 		SendMsgToChar("Попытка перемещения не удалась.\r\n", ch);
 		return;
 	}
 
-	if (!IS_GOD(ch) &&
+	if (!privilege::IsGod(ch) &&
 		(SECT(fnd_room) == ESector::kSecret ||
 			ROOM_FLAGGED(fnd_room, ERoomFlag::kDeathTrap) ||
 			ROOM_FLAGGED(fnd_room, ERoomFlag::kSlowDeathTrap) ||
 			ROOM_FLAGGED(fnd_room, ERoomFlag::kTunnel) ||
 			ROOM_FLAGGED(fnd_room, ERoomFlag::kNoRelocateIn) ||
-			ROOM_FLAGGED(fnd_room, ERoomFlag::kIceTrap) || (ROOM_FLAGGED(fnd_room, ERoomFlag::kGodsRoom) && !IS_IMMORTAL(
-			ch)))) {
+			ROOM_FLAGGED(fnd_room, ERoomFlag::kIceTrap) || (ROOM_FLAGGED(fnd_room, ERoomFlag::kGodsRoom) && !privilege::IsImmortal(ch)))) {
 		SendMsgToChar("Попытка перемещения не удалась.\r\n", ch);
 		return;
 	}
@@ -97,26 +108,26 @@ void do_relocate(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	SendMsgToChar("Лазурные сполохи пронеслись перед вашими глазами.\r\n", ch);
 	RemoveCharFromRoom(ch);
 	PlaceCharToRoom(ch, fnd_room);
-	ch->dismount();
+	mount::Dismount(ch);
 	act("$n медленно появил$u откуда-то.", true, ch, nullptr, nullptr, kToRoom);
-	if (!(victim->IsFlagged(EPrf::KSummonable) || group::same_group(ch, victim) || IS_IMMORTAL(ch)
+	if (!(victim->IsFlagged(EPrf::KSummonable) || group::same_group(ch, victim) || privilege::IsImmortal(ch)
 		|| ROOM_FLAGGED(fnd_room, ERoomFlag::kArena))) {
 		SendMsgToChar(ch, "%sВаш поступок был расценен как потенциально агрессивный.%s\r\n",
 					  kColorBoldRed, kColorBoldBlk);
 		pkPortal(ch);
-		timed.time = 18 - MIN(GetRealRemort(ch), 15);
-		SetWaitState(ch, 3 * kBattleRound);
+		timed.time = 18 - MIN(remort::GetRealRemort(ch), 15);
+		SetBattleLag(ch, 3);
 		Affect<EApply> af;
-		af.duration = CalcDuration(ch, 3, 0, 0, 0, 0);
-		af.bitvector = to_underlying(EAffect::kNoTeleport);
-		af.battleflag = kAfPulsedec;
+		af.duration = CalcDuration(ch, ch, ESkill::kUndefined, 3, 0, 0, 0);
+		af.affect_type = EAffect::kNoTeleport;
+		af.battleflag = {kAfPulsedec};
 		affect_to_char(ch, af);
 	} else {
 		timed.time = 2;
-		SetWaitState(ch, kBattleRound);
+		SetBattleLag(ch, 1);
 	}
 	ImposeTimedFeat(ch, &timed);
-	look_at_room(ch, 0);
+	sight::look_at_room(ch, 0);
 	CheckAutoNosummon(victim);
 	greet_mtrigger(ch, -1);
 	greet_otrigger(ch, -1);

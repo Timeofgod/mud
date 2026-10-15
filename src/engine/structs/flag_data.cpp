@@ -32,10 +32,6 @@ int ext_search_block(const char *arg, const char *const *const list, int exact) 
 			}
 		}
 	} else {
-		size_t l = strlen(arg);
-		if (!l) {
-			l = 1;    // Avoid "" to match the first available string
-		}
 		for (i = j = 0, o = 1; j != 1; i++) {
 			if (**(list + i) == '\n') {
 				o = 1;
@@ -50,7 +46,7 @@ int ext_search_block(const char *arg, const char *const *const list, int exact) 
 						break;
 				}
 			} else {
-				if (!strn_cmp(arg, *(list + i), l)) {
+				if (utils::IsAbbr(arg, *(list + i))) {
 					return j | o;
 				} else {
 					o <<= 1;
@@ -95,154 +91,20 @@ void asciiflag_conv(const char *flag, void *to) {
 	}
 }
 
-void FlagData::from_string(const char *flag) {
-	Bitvector is_number = 1;
-	int i;
-
-	for (const char *p = flag; *p; p += i + 1) {
-		i = 0;
-		if (islower(*p)) {
-			size_t block = 0;
-			if (*(p + 1) >= '0' && *(p + 1) <= '9') {
-				block = (int) *(p + 1) - '0';
-				i = 1;
-			}
-			m_flags[block] |= (0x3FFFFFFF & (1 << (*p - 'a')));
-		} else if (isupper(*p)) {
-			size_t block = 0;
-			if (*(p + 1) >= '0' && *(p + 1) <= '9') {
-				block = (int) *(p + 1) - '0';
-				i = 1;
-			}
-			m_flags[block] |= (0x3FFFFFFF & (1 << (26 + (*p - 'A'))));
-		}
-
-		if (!isdigit(*p)) {
-			is_number = 0;
-		}
-	}
-
-	if (is_number) {
-		is_number = atol(flag);
-		const size_t block = is_number >> 30;
-		m_flags[block] = is_number & 0x3FFFFFFF;
-	}
-}
-
-void FlagData::tascii(int num_planes, char *ascii) const {
-	bool found = false;
-
-	for (int i = 0; i < num_planes; i++) {
-		for (int c = 0; c < 30; c++) {
-			if (m_flags[i] & (1 << c)) {
-				found = true;
-				sprintf(ascii + strlen(ascii), "%c%d", c < 26 ? c + 'a' : c - 26 + 'A', i);
-			}
-		}
-	}
-
-	strcat(ascii, found ? " " : "0 ");
-}
-
-
-bool FlagData::sprintbits(const char *names[], char *result, const char *div, const int print_flag) const {
-	bool have_flags = false;
-	char buffer[kMaxStringLength];
-	*result = '\0';
-
-	for (int i = 0; i < 4; i++) {
-		if (sprintbitwd(m_flags[i] | (i << 30), names, buffer, div, print_flag)) {
-			if ('\0'
-				!= *result)    // We don't need to calculate length of result. We just want to know if it is not empty.
-			{
-				strcat(result, div);
-			}
-			strcat(result, buffer);
-			have_flags = true;
-		}
-	}
-
-	if ('\0' == *result) {
-		strcat(result, nothing_string);
-	}
-
-	return have_flags;
-}
-
-void FlagData::gm_flag(const char *subfield, const char *const *const list, char *res) {
-	strcpy(res, "0");
-
-	if ('\0' == *subfield) {
-		return;
-	}
-
-	if (*subfield == '-') {
-		const int flag = ext_search_block(subfield + 1, list, false);
-		if (flag) {
-			unset(flag);
-			if (plane_not_empty(flag))    // looks like an error: we should check flag, but not whole plane
-			{
-				strcpy(res, "");
-			}
-		}
-	} else if (*subfield == '+') {
-		const int flag = ext_search_block(subfield + 1, list, false);
-		if (flag) {
-			set(flag);
-			if (plane_not_empty(flag))    // looks like an error: we should check flag, but not whole plane
-			{
-				strcpy(res, "");
-			}
-		}
-	} else {
-		const int flag = ext_search_block(subfield, list, false);
-		if (flag && get(flag)) {
-			strcpy(res, "1");
-		} else
-			strcpy(res, "0");
-
-	}
-}
-
-// заколебали эти флаги... сравниваем num и все поля в flags
-bool CompareBits(const FlagData &flags, const char *names[], int affect) {
-	int i;
-	for (i = 0; i < 4; i++) {
-		int nr = 0;
-		int fail = i;
-		Bitvector bitvector = flags.get_plane(i);
-
-		while (fail) {
-			if (*names[nr] == '\n')
-				fail--;
-			nr++;
-		}
-
-		for (; bitvector; bitvector >>= 1) {
-			if (IS_SET(bitvector, 1))
-				if (*names[nr] != '\n')
-					if (nr == affect)
-						return true;
-			if (*names[nr] != '\n')
-				nr++;
-		}
-	}
-	return false;
-}
-
-void tascii(const Bitvector *pointer, int num_planes, char *ascii) {
+void tascii(const Bitvector *pointer, int num_planes, char *ascii, size_t ascii_size) {
 	bool found = false;
 
 	for (int i = 0; i < num_planes; i++) {
 		for (int c = 0; c < 30; c++) {
 			if (pointer[i] & (1 << c)) {
 				found = true;
-				sprintf(ascii + strlen(ascii), "%c%d", c < 26 ? c + 'a' : c - 26 + 'A', i);
+				size_t ascii_len = strlen(ascii);
+				snprintf(ascii + ascii_len, ascii_size - ascii_len, "%c%d", c < 26 ? c + 'a' : c - 26 + 'A', i);
 			}
 		}
 	}
 
-	strcat(ascii, found ? " " : "0 ");
+	strncat(ascii, found ? " " : "0 ", ascii_size - strlen(ascii) - 1);
 }
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

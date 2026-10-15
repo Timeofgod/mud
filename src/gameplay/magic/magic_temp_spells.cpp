@@ -1,4 +1,7 @@
+#include <fmt/format.h>
+
 #include "magic_temp_spells.h"
+#include "administration/privilege.h"
 
 #include "engine/db/world_characters.h"
 #include "engine/ui/color.h"
@@ -36,7 +39,7 @@ void update_times() {
 	time_t now = time(nullptr);
 	for (const auto &ch : character_list) {
 		if (ch->IsNpc()
-			|| IS_IMMORTAL(ch)) {
+			|| privilege::IsImmortal(ch.get())) {
 			continue;
 		}
 
@@ -70,10 +73,8 @@ void update_char_times(CharData *ch, time_t now) {
 				//Удаляем из заученных
 				GET_SPELL_MEM(ch, it->first) = 0;
 
-				sprintf(buf,
-						"Вы забыли заклинание \"%s%s%s\".\r\n",
-						kColorBoldMag, MUD::Spell(it->first).GetCName(), kColorNrm);
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Вы забыли заклинание \"{}{}{}\".\r\n",
+										  kColorBoldMag, MUD::Spell(it->first).GetCName(), kColorNrm), ch);
 			}
 
 			it = ch->temp_spells.erase(it);

@@ -3,47 +3,33 @@
 * 2018 (c) bodrich
 */
 #include "accounts.h"
+#include "utils/native_text.h"
 #include "password.h"
 #include "engine/entities/zone.h"
 #include <sstream>
-std::unordered_map<std::string, std::shared_ptr<Account>> accounts;
+#include "engine/db/player_index.h"
 
 #if defined(NOCRYPT)
 #define CRYPT(a,b) ((char *) (a))
 #else
+#if defined(__unix__) || defined(__unix) || defined(__APPLE__)
+#include <sys/param.h>
+#endif
+#ifdef BSD
+#include <unistd.h>
+#else
+#include <crypt.h>
+#endif
 #define CRYPT(a, b) ((char *) crypt((a),(b)))
 #endif
 
+std::unordered_map<std::string, std::shared_ptr<Account>> accounts;
 std::shared_ptr<Account> Account::get_account(const std::string &email) {
 	if (accounts.contains(email)) {
 		return accounts[email];
 	}
 	return nullptr;
 }
-int Account::zero_hryvn(CharData *ch, int val) {
-	const int zone_lvl = zone_table[world[ch->in_room]->zone_rn].mob_level;
-	for (auto &plr : this->players_list) {
-		std::string name = GetNameByUnique(plr);
-		if (name.empty()) {
-			continue;
-		}
-
-		const auto &player = player_table[GetPtableByUnique(plr)];
-		if (zone_lvl <= 12 && (player.level + player.remorts / 5 >= 20)) {
-			if (ch->IsFlagged(EPrf::kTester)) {
-				SendMsgToChar(ch,
-							  "У чара %s в расчете %d гривен, тут будет 0, левел %d морты %d обнуляем!!!\r\n",
-							  player.name(),
-							  val,
-							  player.level,
-							  player.remorts);
-			}
-			val = 0;
-		}
-	}
-	return val;
-}
-
 void Account::complete_quest(int id) {
 	for (auto &x : this->dquests) {
 		if (x.id == id) {
@@ -77,7 +63,7 @@ void Account::show_players(CharData *ch) {
 	ss << "Данные аккаунта: " << this->email << "\r\n";
 	for (auto &x : this->players_list) {
 		std::string name = GetNameByUnique(x);
-		name[0] = UPPER(name[0]);
+		native_text::capitalize_first(name);
 		ss << count << ") " << name << "\r\n";
 		count++;
 	}
@@ -93,31 +79,50 @@ void Account::list_players(DescriptorData *d) {
 	for (auto &x : this->players_list) {
 		std::string name = GetNameByUnique(x);
 		iosystem::write_to_output((std::to_string(count) + ") ").c_str(), d);
-		name[0] = UPPER(name[0]);
+		native_text::capitalize_first(name);
 		iosystem::write_to_output(name.c_str(), d);
 		iosystem::write_to_output("\r\n", d);
 		count++;
 	}
-	iosystem::write_to_output(MENU, d);
+	ShowMainMenu(d);
 }
 
 void Account::save_to_file() {
+	// issue #4014: сперва собираем содержимое в памяти и сверяем с тем, что уже лежит в файле.
+	// save_to_file() зовётся на каждом сейве персонажа, а запись файла на бою стоила 20-35 мс
+	// (см. save_char prof: account=...) -- в секции idle это был почти весь её расход. Данные
+	// аккаунта меняются редко, так что в большинстве сейвов писать нечего.
+	std::ostringstream text;
+	for (const auto &x : this->dquests) {
+		text << "DaiQ: " << x.id << " " << x.count << " " << x.time << "\n";
+	}
+	for (const auto &x : this->history_logins) {
+		text << "hl: " << x.first << " " << x.second.count << " " << x.second.last_login << "\n";
+	}
+	for (const auto &x : this->players_list) {
+		text << "p: " << x << "\n";
+	}
+	text << "Pwd: " << this->hash_password << "\n";
+	text << "ll: " << this->last_login << "\n";
+	for (const auto &[id, amounts] : this->account_currencies_.data()) {
+		if (amounts.hand != 0 || amounts.bank != 0) {
+			text << "Cur: " << id << " " << amounts.hand << " " << amounts.bank << "\n";
+		}
+	}
+
+	std::string content = text.str();
+	if (content == this->last_saved_text_) {
+		return;   // содержимое то же -- файл не трогаем
+	}
+
 	std::ofstream out;
 	out.open(LIB_ACCOUNTS + this->email);
-	if (out.is_open()) {
-		for (const auto &x : this->dquests) {
-			out << "DaiQ: " << x.id << " " << x.count << " " << x.time << "\n";
-		}
-		for (const auto &x : this->history_logins) {
-			out << "hl: " << x.first << " " << x.second.count << " " << x.second.last_login << "\n";
-		}
-		for (const auto &x : this->players_list) {
-			out << "p: " << x << "\n";
-		}
-		out << "Pwd: " << this->hash_password << "\n";
-		out << "ll: " << this->last_login << "\n";
+	if (!out.is_open()) {
+		return;   // не записали -- и запомненным считать нечего, попробуем в следующий раз
 	}
+	out << content;
 	out.close();
+	this->last_saved_text_ = std::move(content);
 }
 
 void Account::read_from_file() {
@@ -134,6 +139,10 @@ void Account::read_from_file() {
 				tmp_quest.count = atoi(tmp[2].c_str());
 				tmp_quest.time = atoi(tmp[3].c_str());
 				this->dquests.push_back(tmp_quest);
+			}
+			if (line.starts_with("Cur: ") && tmp.size() >= 4) {
+				this->account_currencies_.SetHand(tmp[1], atol(tmp[2].c_str()));
+				this->account_currencies_.SetBank(tmp[1], atol(tmp[3].c_str()));
 			}
 /*			if (line.starts_with("hl: ")) {
 				utils::Split(tmp, line);
@@ -227,7 +236,11 @@ void Account::set_password(const std::string &password) {
 }
 
 bool Account::compare_password(const std::string &password) {
-	return CompareParam(this->hash_password, CRYPT(password.c_str(), this->hash_password.c_str()), true);
+	// Тот же приём, что в Password::compare_password: хэши посчитаны по кои-восьмым байтам,
+	// поэтому пароль приводим к той же форме перед crypt. Это формат сохранённых хэшей,
+	// а не кодировка диска.
+	return CompareParam(this->hash_password,
+						CRYPT(native_text::to_koi8(password).c_str(), this->hash_password.c_str()), true);
 }
 
 bool Account::quest_is_available(int id) {

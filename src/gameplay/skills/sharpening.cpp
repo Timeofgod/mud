@@ -1,27 +1,36 @@
 #include "engine/entities/char_data.h"
+#include "engine/core/target_resolver.h"
+#include "administration/privilege.h"
+#include "skill_messages.h"
 #include "engine/db/obj_prototypes.h"
 #include "engine/db/global_objects.h"
 #include "engine/core/utils_char_obj.inl"
 #include "gameplay/mechanics/stable_objs.h"
+#include "gameplay/core/remort.h"
+#include "utils/utils_string.h"
+
+#include <fmt/format.h>
 
 void DoSharpening(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	ObjData *obj;
 	int weight, add_hr, add_dr, prob, percent, min_mod, max_mod, i;
 	bool oldstate;
-	if (!ch->GetSkill(ESkill::kSharpening)) {
-		SendMsgToChar("Вы не умеете этого.", ch);
+	if (!GetSkill(ch, ESkill::kSharpening)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSharpening, ESkillMsg::kDontKnowSkill), ch);
 		return;
 	}
 
-	one_argument(argument, arg);
+	const std::string obj_name = utils::ExtractFirstArgumentLower(argument);
 
-	if (!*arg) {
-		SendMsgToChar("Что вы хотите заточить?\r\n", ch);
+	// Раньше здесь не было return, и на пустой аргумент игрок получал сразу два сообщения:
+	// "укажите цель" и следом "У вас нет ''" (#3807).
+	if (obj_name.empty()) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSharpening, ESkillMsg::kNoTarget) + "\r\n", ch);
+		return;
 	}
 
-	if (!(obj = get_obj_in_list_vis(ch, arg, ch->carrying))) {
-		snprintf(buf, kMaxInputLength, "У вас нет \'%s\'.\r\n", arg);
-		SendMsgToChar(buf, ch);
+	if (!(obj = get_obj_in_list_vis(ch, obj_name, ch->carrying))) {
+		SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", obj_name), ch);
 		return;
 	};
 
@@ -79,8 +88,9 @@ void DoSharpening(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			weight = +1;
 			break;
 
-		default: sprintf(buf, "К сожалению, %s сделан из неподходящего материала.\r\n", OBJN(obj, ch, ECase::kNom));
-			SendMsgToChar(buf, ch);
+		default:
+			SendMsgToChar(fmt::format("К сожалению, {} сделан из неподходящего материала.\r\n",
+									  OBJN(obj, ch, grammar::ECase::kNom)), ch);
 			return;
 	}
 	bool change_weight = true;
@@ -106,11 +116,11 @@ void DoSharpening(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		return;
 	}
 	//При 200% заточки шмотка будет точиться на 4-5 хитролов и 4-5 дамролов
-	min_mod = ch->GetMorphSkill(ESkill::kSharpening) / 50;
+	min_mod = GetSkillBonus(ch, ESkill::kSharpening) / 50;
 	//С мортами все меньший уровень требуется для макс. заточки
-	max_mod = std::clamp((GetRealLevel(ch) + 5 + GetRealRemort(ch)/4)/6, 1, 5);
+	max_mod = std::clamp((GetRealLevel(ch) + 5 + remort::GetRealRemort(ch)/4)/6, 1, 5);
 	oldstate = stable_objs::IsTimerUnlimited(obj); // запомним какая шмотка была до заточки
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		add_dr = add_hr = 10;
 	} else {
 		add_dr = add_hr = (max_mod <= min_mod) ? min_mod : number(min_mod, max_mod);

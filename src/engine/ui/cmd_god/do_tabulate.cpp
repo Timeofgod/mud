@@ -5,74 +5,112 @@
 #include "engine/entities/char_data.h"
 #include "gameplay/magic/magic_utils.h"
 #include "engine/ui/modify.h"
+#include "engine/ui/objects_filter.h"
 #include "engine/db/obj_prototypes.h"
 #include "engine/olc/olc.h"
 #include "engine/db/global_objects.h"
+#include "utils/logger.h"
 #include "utils/utils_string.h"
+#include "utils/utils_time.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 int TabulateMobsByName(char *searchname, CharData *ch);
 int TabulateObjsByAliases(char *searchname, CharData *ch);
 int TabulateObjsByFlagName(char *searchname, CharData *ch);
+int TabulateObjsByFilter(char *argument, CharData *ch);
 int TabulateRoomsByName(char *searchname, CharData *ch);
 int TabulateTrigsByObjLoad(char *searchname, CharData *ch);
 int TabulateMobsByDeadLoad(char *vnum, CharData *ch);
 
-void DoTabulate(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	half_chop(argument, buf, buf2);
+// Поиск по фильтру (vnum f ...) совпадает с сокращением "f" слова "filter",
+// поэтому проверяется до "flag" -- иначе одиночное "f" ушло бы во флаги.
+static bool IsFilterKey(const char *str) {
+	return utils::IsAbbr(str, "filter") || !str_cmp(str, "фильтр");
+}
 
-	if (!*buf || !*buf2
-		|| (!utils::IsAbbr(buf, "mob")
-			&& !utils::IsAbbr(buf, "obj")
-			&& !utils::IsAbbr(buf, "room")
-			&& !utils::IsAbbr(buf, "flag")
-			&& !utils::IsAbbr(buf, "существо")
-			&& !utils::IsAbbr(buf, "предмет")
-			&& !utils::IsAbbr(buf, "флаг")
-			&& !utils::IsAbbr(buf, "комната")
-			&& !utils::IsAbbr(buf, "trig")
-			&& !utils::IsAbbr(buf, "триггер")
-			&& !utils::IsAbbr(buf, "load"))) {
-		SendMsgToChar("Usage: vnum { obj | mob | flag | room | trig | load} <name>\r\n", ch);
+void DoTabulate(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
+	char what[kMaxInputLength], name[kMaxInputLength];
+	half_chop(argument, what, name);
+
+	if (!*what || !*name
+		|| (!utils::IsAbbr(what, "mob")
+			&& !utils::IsAbbr(what, "obj")
+			&& !utils::IsAbbr(what, "room")
+			&& !utils::IsAbbr(what, "flag")
+			&& !IsFilterKey(what)
+			&& !utils::IsAbbr(what, "существо")
+			&& !utils::IsAbbr(what, "предмет")
+			&& !utils::IsAbbr(what, "флаг")
+			&& !utils::IsAbbr(what, "комната")
+			&& !utils::IsAbbr(what, "trig")
+			&& !utils::IsAbbr(what, "триггер")
+			&& !utils::IsAbbr(what, "load"))) {
+		SendMsgToChar("Usage: vnum { obj | mob | flag | f | room | trig | load} <name>\r\n"
+					  "  f <фильтр> -- поиск предметов по фильтру (как в хранилище клана),\r\n"
+					  "                например: vnum f Адлительность\r\n", ch);
 		return;
 	}
 
-	if ((utils::IsAbbr(buf, "mob")) || (utils::IsAbbr(buf, "существо"))) {
-		if (!TabulateMobsByName(buf2, ch)) {
+	if ((utils::IsAbbr(what, "mob")) || (utils::IsAbbr(what, "существо"))) {
+		if (!TabulateMobsByName(name, ch)) {
 			SendMsgToChar("Нет существа с таким именем.\r\n", ch);
 		}
-	}
-
-	if ((utils::IsAbbr(buf, "obj")) || (utils::IsAbbr(buf, "предмет"))) {
-		if (!TabulateObjsByAliases(buf2, ch)) {
+	} else if ((utils::IsAbbr(what, "obj")) || (utils::IsAbbr(what, "предмет"))) {
+		if (!TabulateObjsByAliases(name, ch)) {
 			SendMsgToChar("Нет предмета с таким названием.\r\n", ch);
 		}
-	}
-
-	if ((utils::IsAbbr(buf, "flag")) || (utils::IsAbbr(buf, "флаг"))) {
-		if (!TabulateObjsByFlagName(buf2, ch)) {
+	} else if (IsFilterKey(what)) {
+		TabulateObjsByFilter(name, ch);
+	} else if ((utils::IsAbbr(what, "flag")) || (utils::IsAbbr(what, "флаг"))) {
+		if (!TabulateObjsByFlagName(name, ch)) {
 			SendMsgToChar("Нет объектов с таким флагом.\r\n", ch);
 		}
-	}
-
-	if ((utils::IsAbbr(buf, "room")) || (utils::IsAbbr(buf, "комната"))) {
-		if (!TabulateRoomsByName(buf2, ch)) {
+	} else if ((utils::IsAbbr(what, "room")) || (utils::IsAbbr(what, "комната"))) {
+		if (!TabulateRoomsByName(name, ch)) {
 			SendMsgToChar("Нет объектов с таким флагом.\r\n", ch);
 		}
-	}
-
-	if (utils::IsAbbr(buf, "trig") || utils::IsAbbr(buf, "триггер")) {
-		if (!TabulateTrigsByObjLoad(buf2, ch)) {
+	} else if (utils::IsAbbr(what, "trig") || utils::IsAbbr(what, "триггер")) {
+		if (!TabulateTrigsByObjLoad(name, ch)) {
 			SendMsgToChar("Нет триггеров, загружающих такой объект.\r\n", ch);
 		}
-	}
-
-	if (utils::IsAbbr(buf, "load") || utils::IsAbbr(buf, "загрузка")) {
-		if (!TabulateMobsByDeadLoad(buf2, ch)) {
+	} else if (utils::IsAbbr(what, "load") || utils::IsAbbr(what, "загрузка")) {
+		if (!TabulateMobsByDeadLoad(name, ch)) {
 			SendMsgToChar("Нет мобов, загружаюющих такой объект по списку dead load.\r\n", ch);
 		}
 	}
+}
+
+// Поиск прототипов предметов через ParseFilter (те же фильтры, что в хранилище
+// клана и на базаре). Последней строкой печатает время поиска.
+int TabulateObjsByFilter(char *argument, CharData *ch) {
+	ParseFilter filter(ParseFilter::CLAN);
+	if (!filter.parse_filter(ch, filter, argument)) {
+		// parse_filter сам сообщил об ошибке или показал справку по фильтрам.
+		return 0;
+	}
+
+	utils::CExecutionTimer timer;
+	int found = 0;
+	std::string out;
+	char line[kMaxStringLength];
+	for (const auto &i : obj_proto) {
+		// ch не передаём: у прототипов нет наносимых меток (custom label).
+		if (filter.check(i.get(), nullptr)) {
+			strcpy(line, fmt::format("{:3}. [{:7}] {:<50} {}\r\n",
+					 ++found, i->get_vnum(),
+					 utils::RemoveColors(i->get_short_description()),
+					 filter.show_obj_aff(i.get())).c_str());
+			out += line;
+		}
+	}
+	if (found == 0) {
+		out += "Ничего не найдено.\r\n";
+	}
+	out += fmt::format("Просмотрено прототипов: {}, найдено: {}, время поиска: {:.3f} мс.\r\n",
+					   obj_proto.size(), found, timer.delta().count() * 1000.0);
+	page_string(ch->desc, out);
+	return found;
 }
 
 int TabulateMobsByName(char *searchname, CharData *ch) {
@@ -80,9 +118,9 @@ int TabulateMobsByName(char *searchname, CharData *ch) {
 
 	for (nr = 0; nr <= top_of_mobt; nr++) {
 		if (isname(searchname, mob_proto[nr].GetCharAliases())) {
-			sprintf(buf, "%3d. [%5d] %-30s (%s)\r\n", ++found, mob_index[nr].vnum, mob_proto[nr].get_npc_name().c_str(),
-					npc_race_types[mob_proto[nr].player_data.Race - ENpcRace::kBasic]);
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("{:3}. [{:5}] {:<30} ({})\r\n", ++found, mob_index[nr].vnum,
+									  mob_proto[nr].get_npc_name(),
+									  npc_race_types[mob_proto[nr].player_data.Race - ENpcRace::kBasic]), ch);
 		}
 	}
 	return (found);
@@ -94,10 +132,8 @@ int TabulateObjsByAliases(char *searchname, CharData *ch) {
 	for (const auto &nr : obj_proto) {
 		if (isname(searchname, nr->get_aliases())) {
 			++found;
-			sprintf(buf, "%3d. [%5d] %s\r\n",
-					found, nr->get_vnum(),
-					nr->get_short_description().c_str());
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("{:3}. [{:7}] {}\r\n",
+									  found, nr->get_vnum(), nr->get_short_description()), ch);
 		}
 	}
 	return (found);
@@ -115,7 +151,7 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 			plane_offset = 0;
 			continue;
 		}
-		if (utils::IsAbbr(searchname, extra_bits[counter])) {
+		if (utils::IsEqual(searchname, extra_bits[counter])) {
 			f = true;
 			break;
 		}
@@ -124,18 +160,15 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 	if (f) {
 		for (const auto &i : obj_proto) {
 			if (i->has_flag(plane, 1 << plane_offset)) {
-				snprintf(buf, kMaxStringLength, "%3d. [%7d] %60s : %s\r\n",
-						 ++found, i->get_vnum(),
-						 utils::RemoveColors(i->get_short_description()).c_str(),
-						 extra_bits[counter]);
-				out += buf;
+				out += fmt::format("{:3d}. [{:7d}] {:>60} : {}\r\n",
+								   ++found, i->get_vnum(), utils::RemoveColors(i->get_short_description()).c_str(), extra_bits[counter]);
 			}
 		}
 	}
 // --------------------- apply_types
 	f = false;
 	for (counter = 0; *apply_types[counter] != '\n'; counter++) {
-		if (utils::IsAbbr(searchname, apply_types[counter])) {
+		if (utils::IsEqual(searchname, apply_types[counter])) {
 			f = true;
 			break;
 		}
@@ -144,11 +177,8 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 		for (const auto &i : obj_proto) {
 			for (plane = 0; plane < kMaxObjAffect; plane++) {
 				if (i->get_affected(plane).location == static_cast<EApply>(counter)) {
-					snprintf(buf, kMaxStringLength, "%3d. [%7d] %60s : %s, значение: %d\r\n",
-							 ++found, i->get_vnum(),
-							 utils::RemoveColors(i->get_short_description()).c_str(),
-							 apply_types[counter], i->get_affected(plane).modifier);
-					out += buf;
+					out += fmt::format("{:3d}. [{:7d}] {:>60} : {}, значение: {}\r\n",
+									   ++found, i->get_vnum(), utils::RemoveColors(i->get_short_description()).c_str(), apply_types[counter], i->get_affected(plane).modifier);
 					continue;
 				}
 			}
@@ -157,12 +187,12 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 // --------------------- weapon affects
 	f = false;
 	for (counter = 0, plane = 0, plane_offset = 0; plane < NUM_PLANES; counter++) {
-		if (*weapon_affects[counter] == '\n') {
+		if (*equipment_affects[counter] == '\n') {
 			plane++;
 			plane_offset = 0;
 			continue;
 		}
-		if (utils::IsAbbr(searchname, weapon_affects[counter])) {
+		if (utils::IsEqual(searchname, equipment_affects[counter])) {
 			f = true;
 			break;
 		}
@@ -171,11 +201,8 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 	if (f) {
 		for (const auto &i : obj_proto) {
 			if (i->get_affect_flags().get_flag(plane, 1 << plane_offset)) {
-				snprintf(buf, kMaxStringLength, "%3d. [%7d] %60s : %s\r\n",
-						 ++found, i->get_vnum(),
-						 utils::RemoveColors(i->get_short_description()).c_str(),
-						 weapon_affects[counter]);
-				out += buf;
+				out += fmt::format("{:3d}. [{:7d}] {:>60} : {}\r\n",
+								   ++found, i->get_vnum(), utils::RemoveColors(i->get_short_description()).c_str(), equipment_affects[counter]);
 			}
 		}
 	}
@@ -187,7 +214,7 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 			plane_offset = 0;
 			continue;
 		}
-		if (utils::IsAbbr(searchname, anti_bits[counter])) {
+		if (utils::IsEqual(searchname, anti_bits[counter])) {
 			f = true;
 			break;
 		}
@@ -196,11 +223,8 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 	if (f) {
 		for (const auto &i : obj_proto) {
 			if (i->get_affect_flags().get_flag(plane, 1 << plane_offset)) {
-				snprintf(buf, kMaxStringLength, "%3d. [%7d] %60s : запрещен для: %s\r\n",
-						 ++found, i->get_vnum(),
-						 utils::RemoveColors(i->get_short_description()).c_str(),
-						 anti_bits[counter]);
-				out += buf;
+				out += fmt::format("{:3d}. [{:7d}] {:>60} : запрещен для: {}\r\n",
+								   ++found, i->get_vnum(), utils::RemoveColors(i->get_short_description()).c_str(), anti_bits[counter]);
 			}
 		}
 	}
@@ -212,7 +236,7 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 			plane_offset = 0;
 			continue;
 		}
-		if (utils::IsAbbr(searchname, no_bits[counter])) {
+		if (utils::IsEqual(searchname, no_bits[counter])) {
 			f = true;
 			break;
 		}
@@ -221,11 +245,8 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 	if (f) {
 		for (const auto &i : obj_proto) {
 			if (i->get_affect_flags().get_flag(plane, 1 << plane_offset)) {
-				snprintf(buf, kMaxStringLength, "%3d. [%7d] %60s : неудобен для: %s\r\n",
-						 ++found, i->get_vnum(),
-						 utils::RemoveColors(i->get_short_description()).c_str(),
-						 no_bits[counter]);
-				out += buf;
+				out += fmt::format("{:3d}. [{:7d}] {:>60} : неудобен для: {}\r\n",
+								   ++found, i->get_vnum(), utils::RemoveColors(i->get_short_description()).c_str(), no_bits[counter]);
 			}
 		}
 	}
@@ -243,11 +264,8 @@ int TabulateObjsByFlagName(char *searchname, CharData *ch) {
 			if (i->has_skills()) {
 				auto it = i->get_skills().find(skill_id);
 				if (it != i->get_skills().end()) {
-					snprintf(buf, kMaxStringLength, "%3d. [%7d] %60s : %s, значение: %d\r\n",
-							 ++found, i->get_vnum(),
-							 utils::RemoveColors(i->get_short_description()).c_str(),
-							 MUD::Skill(skill_id).GetName(), it->second);
-					out += buf;
+					out += fmt::format("{:3d}. [{:7d}] {:>60} : {}, значение: {}\r\n",
+									   ++found, i->get_vnum(), utils::RemoveColors(i->get_short_description()).c_str(), MUD::Skill(skill_id).GetName(), it->second);
 				}
 			}
 		}
@@ -283,6 +301,16 @@ int TabulateTrigsByObjLoad(char *searchname, CharData *ch) {
 	int found = 0;
 	for (const auto &t : trigger->second) {
 		TrgRnum rnum = GetTriggerRnum(t);
+		if (rnum < 0) {
+			// Инвариант: триггеры из trig_index никогда не удаляются, так что
+			// внум из obj2triggers обязан существовать. Если сюда попали --
+			// индекс разошелся с trig_index (напр., в OLC добавили удаление
+			// триггера, не почистив obj2triggers). Читать trig_index[rnum]
+			// нельзя, продолжаем -- но это ошибка, а не штатная ситуация.
+			log("SYSERR: obj2triggers references trigger #%d with no rnum "
+				"(index out of sync with trig_index)", t);
+			continue;
+		}
 		SendMsgToChar(fmt::format("{:<3}. [{:>5}] {}\r\n",
 								  ++found, trig_index[rnum]->vnum, trig_index[rnum]->proto->get_name()), ch);
 	}

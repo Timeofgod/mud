@@ -1,4 +1,7 @@
 #include "do_flee.h"
+#include "gameplay/core/experience.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/mount.h"
 
 #include "engine/core/char_movement.h"
 #include "engine/entities/char_data.h"
@@ -10,7 +13,7 @@ void ReduceExpAfterFlee(CharData *ch, CharData *victim, RoomRnum room) {
 	}
 
 	const auto loss = std::max(1, victim->get_real_max_hit() - victim->get_hit()) * GetRealLevel(victim);
-	EndowExpToChar(ch, -loss);
+	experience::EndowExpToChar(ch, -loss);
 }
 
 // ********************* FLEE PROCEDURE
@@ -19,8 +22,8 @@ void GoFlee(CharData *ch) {
 		return;
 	}
 
-	if (AFF_FLAGGED(ch, EAffect::kNoFlee) ||
-		AFF_FLAGGED(ch, EAffect::kCombatLuck) ||
+	if (AFF_FLAGGED(ch, EAffect::kNoFlee) || ch->add_abils.bind_add > 0 ||
+//		AFF_FLAGGED(ch, EAffect::kCombatLuck) ||
 		ch->IsFlagged(EPrf::kIronWind)) {
 		SendMsgToChar("Невидимые оковы мешают вам сбежать.\r\n", ch);
 		return;
@@ -31,12 +34,12 @@ void GoFlee(CharData *ch) {
 		return;
 	}
 
-	if (!IS_IMMORTAL(ch)) {
-		SetWaitState(ch, kBattleRound);
+	if (!privilege::IsImmortal(ch)) {
+		SetBattleLag(ch, 1);
 	}
 
-	if (ch->IsOnHorse() && (ch->get_horse()->GetPosition() < EPosition::kFight ||
-		AFF_FLAGGED(ch->get_horse(), EAffect::kHold))) {
+	if (mount::IsOnHorse(ch) && (mount::GetHorse(ch)->GetPosition() < EPosition::kFight ||
+		AFF_FLAGGED(mount::GetHorse(ch), EAffect::kHold))) {
 		SendMsgToChar("Ваш скакун не в состоянии вынести вас из боя!\r\n", ch);
 		return;
 	}
@@ -48,8 +51,8 @@ void GoFlee(CharData *ch) {
 
 		act("$n запаниковал$g и попытал$u сбежать!", true, ch, nullptr, nullptr, kToRoom | kToArenaListen);
 		if (PerformSimpleMove(ch, direction, true, nullptr, EMoveType::kFlee)) {
-			if (ch->IsOnHorse()) {
-				act("Верн$W $N вынес$Q вас из боя.", false, ch, nullptr, ch->get_horse(), kToChar);
+			if (mount::IsOnHorse(ch)) {
+				act("Верн$W $N вынес$Q вас из боя.", false, ch, nullptr, mount::GetHorse(ch), kToChar);
 			} else {
 				SendMsgToChar("Вы быстро убежали с поля битвы.\r\n", ch);
 			}
@@ -73,8 +76,8 @@ void GoDirectFlee(CharData *ch, int direction) {
 		return;
 	}
 
-	if (AFF_FLAGGED(ch, EAffect::kNoFlee) ||
-		AFF_FLAGGED(ch, EAffect::kCombatLuck) ||
+	if (AFF_FLAGGED(ch, EAffect::kNoFlee) || ch->add_abils.bind_add > 0 ||
+//		AFF_FLAGGED(ch, EAffect::kCombatLuck) ||
 		ch->IsFlagged(EPrf::kIronWind)) {
 		SendMsgToChar("Невидимые оковы мешают вам сбежать.\r\n", ch);
 		return;
@@ -98,8 +101,8 @@ void GoDirectFlee(CharData *ch, int direction) {
 				ReduceExpAfterFlee(ch, was_fighting, was_in);
 			}
 
-			if (!IS_IMMORTAL(ch)) {
-				SetWaitState(ch, 1 * kBattleRound);
+			if (!privilege::IsImmortal(ch)) {
+				SetBattleLag(ch, 1);
 			}
 			return;
 		}
@@ -114,9 +117,10 @@ void DoFlee(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		return;
 	}
 	if (CanUseFeat(ch, EFeat::kCalmness) || GET_GOD_FLAG(ch, EGf::kGodsLike)) {
-		one_argument(argument, arg);
-		if ((direction = search_block(arg, dirs, false)) >= 0 ||
-			(direction = search_block(arg, dirs_rus, false)) >= 0) {
+		char dir_arg[kMaxInputLength];
+		one_argument(argument, dir_arg);
+		if ((direction = search_block(dir_arg, dirs, false)) >= 0 ||
+			(direction = search_block(dir_arg, dirs_rus, false)) >= 0) {
 			GoDirectFlee(ch, direction);
 			return;
 		}

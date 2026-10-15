@@ -3,11 +3,15 @@
 // Part of Bylins http://www.mud.ru
 
 #include "obj_data.h"
+#include "utils/grammar/declensions.h"
+#include "gameplay/mechanics/minions.h"
 
 #include "engine/db/obj_save.h"
 #include "engine/db/world_objects.h"
-#include "utils/parse.h"
-#include "engine/core/handler.h"
+#include "utils/utils_parse.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "engine/entities/char_data.h"
 #include "engine/ui/color.h"
 #include "gameplay/mechanics/celebrates.h"
 #include "gameplay/fight/pk.h"
@@ -17,10 +21,11 @@
 #include "engine/db/obj_prototypes.h"
 #include "gameplay/mechanics/stable_objs.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include <cmath>
 #include <memory>
+#include "engine/db/player_index.h"
 
 //#include <sstream>
 
@@ -83,15 +88,11 @@ void ObjData::zero_init() {
 }
 
 void ObjData::detach_ex_description() {
-	const auto old_description = get_ex_description();
-	const auto new_description = std::make_shared<ExtraDescription>();
-	if (nullptr != old_description->keyword) {
-		new_description->keyword = str_dup(old_description->keyword);
+	// vector экстра-описаний уже приватный у объекта; сохраняем прежнее
+	// поведение -- оставляем только первое описание (бывшую голову).
+	if (ex_descriptions().size() > 1) {
+		ex_descriptions().resize(1);
 	}
-	if (nullptr != old_description->keyword) {
-		new_description->description = str_dup(old_description->description);
-	}
-	set_ex_description(new_description);
 }
 
 // * См. Character::purge()
@@ -113,7 +114,7 @@ void ObjData::set_serial_num(int num) {
 
 const std::string ObjData::activate_obj(const activation &__act) {
 	if (get_rnum() >= 0) {
-		SetWeaponAffectFlags(__act.get_affects());
+		SetEquipmentAffectFlags(__act.get_affects());
 		for (int i = 0; i < kMaxObjAffect; i++) {
 			set_affected(i, __act.get_affected_i(i));
 		}
@@ -152,7 +153,7 @@ const std::string ObjData::activate_obj(const activation &__act) {
 
 const std::string ObjData::deactivate_obj(const activation &__act) {
 	if (get_rnum() >= 0) {
-		SetWeaponAffectFlags(obj_proto[get_rnum()]->get_affect_flags());
+		SetEquipmentAffectFlags(obj_proto[get_rnum()]->get_affect_flags());
 		for (int i = 0; i < kMaxObjAffect; i++) {
 			set_affected(i, obj_proto[get_rnum()]->get_affected(i));
 		}
@@ -225,7 +226,7 @@ void CObjectPrototype::toggle_val_bit(const size_t index, const Bitvector bit) {
 }
 
 void CObjectPrototype::toggle_wear_flag(const Bitvector flag) {
-	TOGGLE_BIT(m_wear_flags, flag);
+	m_wear_flags.toggle(static_cast<EWearFlag>(flag));
 }
 
 void CObjectPrototype::set_skill(ESkill skill_num, int percent) {
@@ -272,7 +273,7 @@ void CObjectPrototype::zero_init() {
 	m_description.clear();
 	m_short_description.clear();
 	m_action_description.clear();
-	m_ex_description.reset();
+	m_ex_description.clear();
 	m_proto_script->clear();
 	m_dgscript_field.clear();
 	m_max_in_world = 0;
@@ -301,7 +302,9 @@ void CObjectPrototype::set_vnum(const ObjVnum vnum) {
 }
 
 void CObjectPrototype::tag_ex_description(const char *tag) {
-	m_ex_description->description = str_add(m_ex_description->description, tag);
+	if (!m_ex_description.empty()) {
+		m_ex_description.front().description += tag;
+	}
 }
 
 CObjectPrototype &CObjectPrototype::operator=(const CObjectPrototype &from) {
@@ -328,7 +331,7 @@ void CObjectPrototype::MakeShallowCopy(const CObjectPrototype &from) {
 		m_max_in_world = from.m_max_in_world;
 		m_vals = from.m_vals;
 		m_values = from.m_values;
-		m_extract_list = from.m_extract_list;
+		m_in_extracted_list = from.m_in_extracted_list;
 		m_destroyer = from.m_destroyer;
 		m_spell = from.m_spell;
 		m_level = from.m_level;
@@ -368,11 +371,11 @@ int CObjectPrototype::get_skill(ESkill skill_num) const {
 }
 
 bool CObjectPrototype::has_wear_flag(const EWearFlag part) const {
-	return IS_SET(m_wear_flags, to_underlying(part));
+	return m_wear_flags.get(part);
 }
 
 bool CObjectPrototype::get_wear_mask(const wear_flags_t part) const {
-	return IS_SET(m_wear_flags, part);
+	return (m_wear_flags.get_plane(0) & part) != 0;
 }
 
 // * @warning Предполагается, что __out_skills.empty() == true.
@@ -486,7 +489,7 @@ void ObjData::unset_enchant() {
 		}
 	}
 	// Возврат эфектов
-	SetWeaponAffectFlags(obj_proto[get_rnum()]->get_affect_flags());
+	SetEquipmentAffectFlags(obj_proto[get_rnum()]->get_affect_flags());
 	// поскольку все обнулилось можно втыкать слоты для ковки
 	if (obj_proto.at(get_rnum()).get()->has_flag(EObjFlag::kHasThreeSlots)) {
 		set_extra_flag(EObjFlag::kHasThreeSlots);
@@ -496,7 +499,9 @@ void ObjData::unset_enchant() {
 		set_extra_flag(EObjFlag::kHasOneSlot);
 	}
 	unset_extraflag(EObjFlag::kMagic);
-	unset_extraflag(EObjFlag::kTransformed);
+	// issue #3618: kTransformed здесь НЕ снимаем. Снятие зачарования возвращает к прототипу только
+	// его часть, а на вещи могли остаться другие изменения -- благословение, отрава, подгонка по
+	// мерке. Сняв флаг, мы разрешали olc перезаписать вещь прототипом целиком и потерять их.
 }
 
 bool ObjData::clone_olc_object_from_prototype(const ObjVnum vnum) {
@@ -533,8 +538,8 @@ void ObjData::copy_name_from(const CObjectPrototype *src) {
 	set_description(!src->get_description().empty() ? src->get_description().c_str() : "неопределено");
 
 	//Копируем имя по падежам
-	for (i = ECase::kFirstCase; i <= ECase::kLastCase; i++) {
-		auto name_case = static_cast<ECase>(i);
+	for (i = grammar::ECase::kFirstCase; i <= grammar::ECase::kLastCase; i++) {
+		auto name_case = static_cast<grammar::ECase>(i);
 		set_PName(name_case, src->get_PName(name_case));
 	}
 }
@@ -551,23 +556,8 @@ void ObjData::copy_from(const CObjectPrototype *src) {
 																: "неопределено");
 	set_description(!src->get_description().empty() ? src->get_description().c_str() : "неопределено");
 
-	// Дополнительные описания, если есть
-	{
-		ExtraDescription::shared_ptr nd;
-		auto *pddd = &nd;
-		auto sdd = src->get_ex_description();
-		while (sdd) {
-			pddd->reset(new ExtraDescription());
-			(*pddd)->keyword = str_dup(sdd->keyword);
-			(*pddd)->description = str_dup(sdd->description);
-			pddd = &(*pddd)->next;
-			sdd = sdd->next;
-		}
-
-		if (nd) {
-			set_ex_description(nd);
-		}
-	}
+	// Дополнительные описания, если есть (vector копируется по значению)
+	ex_descriptions() = src->get_ex_description();
 }
 
 void ObjData::swap(ObjData &object, bool swap_trig) {
@@ -619,12 +609,98 @@ void ObjData::swap(ObjData &object, bool swap_trig) {
 }
 
 void ObjData::set_tag(const char *tag) {
-	if (!get_ex_description()) {
-		set_ex_description(get_aliases().c_str(), tag);
+	if (get_ex_description().empty()) {
+		set_ex_description(get_aliases(), tag);
 	} else {
 		// По уму тут надо бы стереть старое описапние если оно не с прототипа
 		detach_ex_description();
 		tag_ex_description(tag);
+	}
+}
+
+void ObjData::set_timer(int timer) {
+	CObjectPrototype::set_timer(timer);
+	world_objects.decay_manager().on_timer_changed(this);
+}
+
+int ObjData::get_timer() const {
+	if (!world_objects.decay_manager().contains(this)) {
+		return CObjectPrototype::get_timer();
+	}
+	auto deadline = world_objects.decay_manager().get_deadline(this);
+	if (deadline == UINT64_MAX) {
+		return CObjectPrototype::UNLIMITED_TIMER;
+	}
+	auto now = world_objects.decay_manager().current_mud_hour();
+	if (deadline <= now) {
+		return 0;
+	}
+	return static_cast<int>(deadline - now);
+}
+
+// issue.equipment-affects-improve (Phase 3): a dispel suppresses an item-materialized equipment affect
+// on the source item; the item counts the suppression down here and re-materializes the affect on its
+// wearer when it expires (auto-return).
+void MaterializeEquipmentAffect(CharData *ch, ObjData *obj, EAffect affect_type, bool announce);
+void EmitAffectImpose(CharData *affected, CharData *other, EAffect affect_type, bool failed);
+void affect_total(CharData *ch);   // set-affect auto-return recompute
+
+void ObjData::process_periodic_effects() {
+	// issue.obj-suppressor-affect: snapshot equipment-affect suppressions before ticking; obj_affects::Tick
+	// counts down + erases expired kSuppressed obj-affects like any other, so the ones that vanish this tick
+	// are the ones whose timer just ran out -- auto-return them on the wearer.
+	std::vector<EAffect> suppressed_before;
+	for (const auto &pr : obj_affects::SuppressedEquipAffects(this)) {
+		suppressed_before.push_back(pr.first);
+	}
+	if (has_obj_affects()) {
+		obj_affects::Tick(this, 1);
+	}
+	if (m_worn_by && !suppressed_before.empty()) {
+		std::vector<EAffect> returned;
+		for (const EAffect aff : suppressed_before) {
+			if (!obj_affects::IsEquipAffectSuppressed(this, aff)) {
+				returned.push_back(aff);   // its suppression timer expired this tick
+			}
+		}
+		if (!returned.empty()) {
+			for (const EAffect aff : returned) {
+				MaterializeEquipmentAffect(m_worn_by, this, aff);   // item-own affect (no-op for a set affect)
+			}
+			// Set affects have no single owner: re-run the set reconcile so a now-unsuppressed set affect
+			// re-materializes (it stays down while still suppressed on another worn set piece).
+			m_worn_by->obj_bonus().update(m_worn_by);
+			affect_total(m_worn_by);
+		}
+	}
+}
+
+// issue.affect-suppression-dispell: manual counterpart of the timer auto-return above -- lift ONE
+// suppression on demand (weave-restoration success). Erase the kSuppressed and, if the item is worn and
+// the affect is no longer suppressed (e.g. not still held down on another worn set piece), re-materialize
+// the equipment affect on the wearer.
+void ObjData::release_suppression(EAffect aff) {
+	if (!obj_affects::IsEquipAffectSuppressed(this, aff)) {
+		return;
+	}
+	// Was the affect already active on the wearer (from another source)? If so its restoration is
+	// visually a no-op and must not announce. (Captured BEFORE removal/re-materialization.)
+	bool was_active = false;
+	if (m_worn_by) {
+		for (const auto &a : m_worn_by->affected) {
+			if (a && a->affect_type == aff) { was_active = true; break; }
+		}
+	}
+	obj_affects::RemoveSuppression(this, aff);
+	if (m_worn_by && !obj_affects::IsEquipAffectSuppressed(this, aff)) {
+		// Materialize SILENTLY (the cast pipeline's internal re-equips are already silent), then announce
+		// the affect's return exactly once here -- so weave restoration shows one impose line, not zero/two.
+		MaterializeEquipmentAffect(m_worn_by, this, aff, /*announce=*/false);
+		m_worn_by->obj_bonus().update(m_worn_by);
+		affect_total(m_worn_by);
+		if (!was_active) {
+			EmitAffectImpose(m_worn_by, nullptr, aff, false);
+		}
 	}
 }
 
@@ -638,6 +714,7 @@ void ObjData::attach_triggers(const triggers_list_t &trigs) {
 			}
 		}
 	}
+	world_objects.update_obj_indices(this);
 }
 
 /**
@@ -645,10 +722,12 @@ void ObjData::attach_triggers(const triggers_list_t &trigs) {
 * Помимо таймера самой шмотки снимается таймер ее временного обкаста.
 * \param time по дефолту 1.
 */
-void ObjData::dec_timer(int time, bool ignore_utimer, bool exchange) {
-	*buf2 = '\0';
-	if (!m_timed_spell.empty()) {
-		m_timed_spell.dec_timer(this, time);
+void ObjData::dec_timer(int time, bool ignore_utimer, bool /*exchange*/) {
+	if (has_obj_affects()) {
+		// issue.obj-suppressor-affect: dec_timer's obj-affect tick is the OFFLINE catch-up on rent-load
+		// (time = rented mud-hours). Suppressions pause offline ("N hours of play"), so exclude them here;
+		// the online periodic tick (process_periodic_effects) counts them down during actual play.
+		obj_affects::Tick(this, time, /*tick_suppressions=*/false);
 	}
 	if (!ignore_utimer && stable_objs::IsTimerUnlimited(this)) {
 		return;
@@ -660,7 +739,7 @@ void ObjData::dec_timer(int time, bool ignore_utimer, bool exchange) {
 		|| this->get_type() == EObjType::kWorm
 		|| this->get_type() == EObjType::kWeapon)) {
 		buffer << "У предмета [" << GET_OBJ_VNUM(this)
-			   << "] имя: " << this->get_PName(ECase::kNom).c_str() << ", id: " << get_id() << ", таймер > 100к равен: "
+			   << "] имя: " << this->get_PName(grammar::ECase::kNom).c_str() << ", id: " << get_id() << ", таймер > 100к равен: "
 			   << get_timer();
 		if (get_in_room() != kNowhere) {
 			buffer << ", находится в комнате vnum: " << world[get_in_room()]->vnum;
@@ -673,21 +752,13 @@ void ObjData::dec_timer(int time, bool ignore_utimer, bool exchange) {
 				   << "] в комнате: ["
 				   << world[get_worn_by()->in_room]->vnum << "]";
 		} else if (get_in_obj()) {
-			buffer << ", находится в сумке: " << get_in_obj()->get_PName(ECase::kNom) << " в комнате: ["
+			buffer << ", находится в сумке: " << get_in_obj()->get_PName(grammar::ECase::kNom) << " в комнате: ["
 				   << world[get_in_obj()->get_in_room()]->vnum << "]";
 		}
 		mudlog(buffer.str(), BRF, kLvlGod, SYSLOG, true);
 	}
 	if (time > 0) {
 		set_timer(get_timer() - time);
-	}
-	if (!exchange) {
-		if (((this->get_type() == EObjType::kLiquidContainer)
-			|| (this->get_type() == EObjType::kFood))
-			&& GET_OBJ_VAL(this, 3) > 1) //таймер у жижек и еды
-		{
-			dec_val(3);
-		}
 	}
 }
 
@@ -724,13 +795,13 @@ void CObjectPrototype::set_rnum(const ObjRnum _) {
 }
 
 void CObjectPrototype::set_extracted_list(bool _) {
-		m_extract_list = _;
+		m_in_extracted_list = _;
 }
 
-std::string CObjectPrototype::item_count_message(int num, ECase name_case) {
+std::string CObjectPrototype::item_count_message(int num, grammar::ECase name_case) {
 	if (num <= 0
-		|| name_case < ECase::kFirstCase
-		|| name_case > ECase::kLastCase
+		|| name_case < grammar::ECase::kFirstCase
+		|| name_case > grammar::ECase::kLastCase
 		|| get_PName(name_case).empty()) {
 		log("SYSERROR : num=%d, pad=%d, pname=%s (%s:%d)", num, name_case, get_PName(name_case).c_str(), __FILE__, __LINE__);
 
@@ -740,7 +811,7 @@ std::string CObjectPrototype::item_count_message(int num, ECase name_case) {
 	std::stringstream out;
 	out << get_PName(name_case);
 	if (num > 1) {
-		out << " (x " << num << " " << GetDeclensionInNumber(num, EWhat::kThingA) << ")";
+		out << " (x " << num << " " << grammar::GetDeclensionInNumber(num, grammar::EWhat::kThingA) << ")";
 	}
 	return out.str();
 }
@@ -792,28 +863,16 @@ std::pair<bool, int> ObjData::get_activator() const {
 	return m_activator;
 }
 
-void ObjData::add_timed_spell(const ESpell spell_id, const int time) {
-	if (spell_id < ESpell::kFirst) {
-		log("SYSERROR: func: %s, spell = %d, time = %d", __func__, to_underlying(spell_id), time);
-		return;
-	}
-	m_timed_spell.add(this, spell_id, time);
-}
-
-void ObjData::del_timed_spell(const ESpell spell_id, const bool message) {
-	m_timed_spell.del(this, spell_id, message);
-}
-
-void CObjectPrototype::set_ex_description(const char *keyword, const char *description) {
-	ExtraDescription::shared_ptr d(new ExtraDescription());
-	d->keyword = strdup(keyword);
-	d->description = strdup(description);
-	m_ex_description = d;
+void CObjectPrototype::set_ex_description(const std::string &keyword, const std::string &description) {
+	ExtraDescription d;
+	d.keyword = keyword;
+	d.description = description;
+	m_ex_description.assign(1, std::move(d));
 }
 
 void set_obj_aff(ObjData *itemobj, const EAffect bitv) {
-	for (const auto &i : weapon_affect) {
-		if (i.aff_bitvector == static_cast<Bitvector>(bitv)) {
+	for (const auto &i : equipment_affect) {
+		if (i.aff_affect == bitv) {
 			SET_OBJ_AFF(itemobj, to_underlying(i.aff_pos));
 		}
 	}
@@ -925,7 +984,7 @@ bool is_mob_item(const CObjectPrototype *obj) {
 		&& obj->has_no_flag(ENoFlag::kMagus)
 		&& obj->has_no_flag(ENoFlag::kConjurer)
 		&& obj->has_no_flag(ENoFlag::kCharmer)
-		&& obj->has_no_flag(ENoFlag::kWIzard)
+		&& obj->has_no_flag(ENoFlag::kWizard)
 		&& obj->has_no_flag(ENoFlag::kNecromancer)
 		&& obj->has_no_flag(ENoFlag::kCharmice)) {
 		return true;
@@ -967,7 +1026,7 @@ bool is_mob_item(const CObjectPrototype *obj) {
 
 void init_ilvl(CObjectPrototype *obj) {
 	if (is_mob_item(obj)
-		|| obj->has_flag(EObjFlag::KSetItem)
+		|| obj->has_flag(EObjFlag::kSetItem)
 		|| obj->get_minimum_remorts() > 0) {
 		obj->set_ilevel(0);
 		return;
@@ -1010,12 +1069,12 @@ ObjData *create_purse(CharData *ch, int/* gold*/) {
 	obj->set_aliases("тугой кошелек");
 	obj->set_short_description("тугой кошелек");
 	obj->set_description("Кем-то оброненный тугой кошелек лежит здесь.");
-	obj->set_PName(ECase::kNom, "тугой кошелек");
-	obj->set_PName(ECase::kGen, "тугого кошелька");
-	obj->set_PName(ECase::kDat, "тугому кошельку");
-	obj->set_PName(ECase::kAcc, "тугой кошелек");
-	obj->set_PName(ECase::kIns, "тугим кошельком");
-	obj->set_PName(ECase::kPre, "тугом кошельке");
+	obj->set_PName(grammar::ECase::kNom, "тугой кошелек");
+	obj->set_PName(grammar::ECase::kGen, "тугого кошелька");
+	obj->set_PName(grammar::ECase::kDat, "тугому кошельку");
+	obj->set_PName(grammar::ECase::kAcc, "тугой кошелек");
+	obj->set_PName(grammar::ECase::kIns, "тугим кошельком");
+	obj->set_PName(grammar::ECase::kPre, "тугом кошельке");
 
 	char buf_[kMaxInputLength];
 	snprintf(buf_, sizeof(buf_),
@@ -1023,7 +1082,7 @@ ObjData *create_purse(CharData *ch, int/* gold*/) {
 			 "Владелец: %s\r\n"
 			 "В случае потери просьба вернуть за вознаграждение.\r\n"
 			 "--------------------------------------------------\r\n", ch->get_name().c_str());
-	obj->set_ex_description(obj->get_PName(ECase::kNom).c_str(), buf_);
+	obj->set_ex_description(obj->get_PName(grammar::ECase::kNom).c_str(), buf_);
 
 	obj->set_type(EObjType::kContainer);
 	obj->set_wear_flags(to_underlying(EWearFlag::kTake));
@@ -1183,24 +1242,56 @@ void ObjVal::init_from_zone(const char *str) {
 
 bool is_valid_drinkcon(const ObjVal::EValueKey key) {
 	switch (key) {
-		case ObjVal::EValueKey::POTION_SPELL1_NUM:
-		case ObjVal::EValueKey::POTION_SPELL1_LVL:
-		case ObjVal::EValueKey::POTION_SPELL2_NUM:
-		case ObjVal::EValueKey::POTION_SPELL2_LVL:
-		case ObjVal::EValueKey::POTION_SPELL3_NUM:
-		case ObjVal::EValueKey::POTION_SPELL3_LVL:
-		case ObjVal::EValueKey::POTION_PROTO_VNUM: return true;
+		case ObjVal::EValueKey::kSpell1Num:
+		case ObjVal::EValueKey::kPotionSpell1Lvl:
+		case ObjVal::EValueKey::kSpell2Num:
+		case ObjVal::EValueKey::kPotionSpell2Lvl:
+		case ObjVal::EValueKey::kSpell3Num:
+		case ObjVal::EValueKey::kPotionSpell3Lvl:
+		case ObjVal::EValueKey::kPotionProtoVnum:
+		case ObjVal::EValueKey::kPotionPotency:
+		case ObjVal::EValueKey::kPotionBrewRoll:
+		case ObjVal::EValueKey::kMakerSkill:
+		case ObjVal::EValueKey::kMakerStat:
+		case ObjVal::EValueKey::kLiquidTimer:
+		case ObjVal::EValueKey::kLiquidCapacity:
+		case ObjVal::EValueKey::kLiquidCurrent:
+		case ObjVal::EValueKey::kLiquidType:
+		case ObjVal::EValueKey::kLiquidPoison: return true;
+		default: return false;   // issue.magic-items: kSpellItem* keys are not drinkcon keys
 	}
-	return false;
+}
+
+// issue.magic-items: keys a scroll/wand/staff may legally carry (the kSpellItem* shared payload).
+bool is_valid_spell_item(const ObjVal::EValueKey key) {
+	switch (key) {
+		case ObjVal::EValueKey::kSpell1Num:
+		case ObjVal::EValueKey::kSpell2Num:
+		case ObjVal::EValueKey::kSpell3Num:
+		case ObjVal::EValueKey::kMakerSkill:
+		case ObjVal::EValueKey::kMakerStat:
+		case ObjVal::EValueKey::kMaxCharges:
+		case ObjVal::EValueKey::kCurCharges: return true;
+		default: return false;
+	}
 }
 
 void ObjVal::remove_incorrect_keys(int type) {
 	for (auto i = m_values.begin(); i != m_values.end(); /* empty */) {
 		bool erased = false;
 		switch (type) {
+			case EObjType::kPotion:
 			case EObjType::kLiquidContainer:
 			case EObjType::kFountain:
 				if (!is_valid_drinkcon(i->first)) {
+					i = m_values.erase(i);
+					erased = true;
+				}
+				break;
+			case EObjType::kScroll:
+			case EObjType::kWand:
+			case EObjType::kStaff:
+				if (!is_valid_spell_item(i->first)) {
 					i = m_values.erase(i);
 					erased = true;
 				}
@@ -1214,40 +1305,32 @@ void ObjVal::remove_incorrect_keys(int type) {
 	}
 }
 
-std::string print_obj_affects(const obj_affected_type &affect) {
-	sprinttype(affect.location, apply_types, buf2);
-	if (buf2[0] == '*')
-		memmove(buf2, buf2 + 1, strlen(buf2) - 1);
+namespace {
+// &w, не &n: тот же паттерн "&c<тип аффекта>&w&c ухудшает/улучшает..." что в obj_enchant.cpp/
+// identify.cpp -- мэппер-чувствительный вывод аффектов, задетый регрессией из PR #3897.
+std::string FormatObjAffect(const obj_affected_type &affect, const char *indent) {
+	std::string type_name = GetTypeName(affect.location, apply_types);
+	if (!type_name.empty() && type_name[0] == '*') {
+		type_name.erase(0, 1);
+	}
 	bool negative = IsNegativeApply(affect.location);
 	if (!negative && affect.modifier < 0) {
 		negative = true;
 	} else if (negative && affect.modifier < 0) {
 		negative = false;
 	}
+	return fmt::format("{}&c{}&w&c{}{}&w\r\n",
+					   indent, type_name,
+					   (negative ? " ухудшает на " : " улучшает на "), abs(affect.modifier));
+}
+}  // namespace
 
-	snprintf(buf, kMaxStringLength, "%s%s%s%s%s%d%s\r\n",
-			 kColorCyn, buf2, kColorNrm,
-			 kColorCyn, (negative ? " ухудшает на " : " улучшает на "),
-			 abs(affect.modifier), kColorNrm);
-
-	return std::string(buf);
+std::string print_obj_affects(const obj_affected_type &affect) {
+	return FormatObjAffect(affect, "");
 }
 
 void print_obj_affects(CharData *ch, const obj_affected_type &affect) {
-	sprinttype(affect.location, apply_types, buf2);
-	if (buf2[0] == '*')
-		memmove(buf2, buf2 + 1, strlen(buf2) - 1);
-	bool negative = IsNegativeApply(affect.location);
-	if (!negative && affect.modifier < 0) {
-		negative = true;
-	} else if (negative && affect.modifier < 0) {
-		negative = false;
-	}
-	snprintf(buf, kMaxStringLength, "   %s%s%s%s%s%d%s\r\n",
-			 kColorCyn, buf2, kColorNrm,
-			 kColorCyn,
-			 negative ? " ухудшает на " : " улучшает на ", abs(affect.modifier), kColorNrm);
-	SendMsgToChar(buf, ch);
+	SendMsgToChar(FormatObjAffect(affect, "   "), ch);
 }
 
 namespace SetSystem {
@@ -1309,7 +1392,7 @@ void delete_item(const std::size_t pt_num, int vnum) {
 		for (std::vector<SaveTimeInfo>::iterator i = player_table[pt_num].timer->time.begin(),
 				 iend = player_table[pt_num].timer->time.end(); i != iend; ++i) {
 			if (i->vnum == vnum) {
-				log("[TO] Player %s : set-item %d deleted", player_table[pt_num].name(), i->vnum);
+				log("[TO] Player %s : set-item %d deleted", player_table[pt_num].name().c_str(), i->vnum);
 				i->timer = -1;
 				int rnum = GetObjRnum(i->vnum);
 				if (rnum >= 0) {
@@ -1321,7 +1404,7 @@ void delete_item(const std::size_t pt_num, int vnum) {
 	}
 	if (need_save) {
 		if (!Crash_write_timer(pt_num)) {
-			log("SYSERROR: [TO] Error writing timer file for %s", player_table[pt_num].name());
+			log("SYSERROR: [TO] Error writing timer file for %s", player_table[pt_num].name().c_str());
 		}
 		return;
 	}
@@ -1362,7 +1445,7 @@ void check_rented() {
 */
 bool is_big_set(const CObjectPrototype *obj, bool is_mini) {
 	unsigned int sets_items = is_mini ? MINI_SET_ITEMS : BIG_SET_ITEMS;
-	if (!obj->has_flag(EObjFlag::KSetItem)) {
+	if (!obj->has_flag(EObjFlag::kSetItem)) {
 		return false;
 	}
 	for (id_to_set_info_map::const_iterator i = ObjData::set_table.begin(),
@@ -1431,8 +1514,7 @@ bool is_norent_set(int vnum, std::vector<int> objs) {
 // * Поиск в хране из списка vnum_list.
 bool house_find_set_item(CharData *ch, const std::set<int> &vnum_list) {
 	// храны у нас через задницу сделаны
-	for (ObjData *chest = world[GetRoomRnum(CLAN(ch)->get_chest_room())]->contents; chest;
-		 chest = chest->get_next_content()) {
+	for (auto chest : world[GetRoomRnum(CLAN(ch)->get_chest_room())]->contents) {
 		if (Clan::is_clan_chest(chest)) {
 			for (ObjData *temp = chest->get_contains(); temp; temp = temp->get_next_content()) {
 				if (vnum_list.find(obj_sets::normalize_vnum(temp->get_vnum())) != vnum_list.end()) {
@@ -1450,7 +1532,7 @@ bool house_find_set_item(CharData *ch, const std::set<int> &vnum_list) {
 * Перс. хран, рента.
 */
 bool is_norent_set(CharData *ch, ObjData *obj, bool clan_chest) {
-	if (!obj->has_flag(EObjFlag::KSetItem)) {
+	if (!obj->has_flag(EObjFlag::kSetItem)) {
 		return false;
 	}
 
@@ -1472,20 +1554,20 @@ bool is_norent_set(CharData *ch, ObjData *obj, bool clan_chest) {
 	}
 
 	// чармисы
-	if (ch->followers) {
-		for (struct FollowerType *k = ch->followers; k; k = k->next) {
-			if (!IS_CHARMICE(k->follower)
-				|| !k->follower->has_master()) {
+	if (!ch->followers.empty()) {
+		for (auto *k : ch->followers) {
+			if (!IsCharmice(k)
+				|| !k->has_master()) {
 				continue;
 			}
 
 			for (int j = 0; j < EEquipPos::kNumEquipPos; j++) {
-				if (find_set_item(GET_EQ(k->follower, j))) {
+				if (find_set_item(GET_EQ(k, j))) {
 					return false;
 				}
 			}
 
-			if (find_set_item(k->follower->carrying)) {
+			if (find_set_item(k->carrying)) {
 				return false;
 			}
 		}
@@ -1520,7 +1602,7 @@ double CalcRemortRequirements(const CObjectPrototype *obj) {
 	const int AFF_CLOUDLY_MOD = 10;
 
 	double result{0.0};
-	if (ObjSystem::is_mob_item(obj) || obj->has_flag(EObjFlag::KSetItem)) {
+	if (ObjSystem::is_mob_item(obj) || obj->has_flag(EObjFlag::kSetItem)) {
 		return result;
 	}
 
@@ -1580,10 +1662,10 @@ double CalcRemortRequirements(const CObjectPrototype *obj) {
 			total_weight -= pow(weight, -SQRT_MOD);
 		}
 	}
-	// аффекты AFF_x через weapon_affect
-	for (const auto &m : weapon_affect) {
-		if (obj->GetEWeaponAffect(m.aff_pos)) {
-			auto obj_affects = static_cast<EAffect>(m.aff_bitvector);
+	// аффекты AFF_x через equipment_affect
+	for (const auto &m : equipment_affect) {
+		if (obj->GetEEquipmentAffect(m.aff_pos)) {
+			auto obj_affects = m.aff_affect;
 			if (obj_affects == EAffect::kAirShield ||
 				obj_affects == EAffect::kFireShield ||
 				obj_affects == EAffect::kIceShield) {
@@ -1605,4 +1687,14 @@ double CalcRemortRequirements(const CObjectPrototype *obj) {
 	}
 }
 
+bool ObjData::is_unrentable() {
+	if (has_flag(EObjFlag::kNorent)
+		|| get_rent_off() < 0
+		|| has_flag(EObjFlag::kRepopDecay)
+		|| has_flag(EObjFlag::kZonedecay)
+		|| get_type() == EObjType::kKey) {
+		return true;
+	}
+	return false;
+}
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

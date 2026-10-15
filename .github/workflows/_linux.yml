@@ -1,0 +1,185 @@
+name: Linux
+
+on:
+  workflow_call:
+
+jobs:
+  matrix:
+    name: GCC / ${{ matrix.config.name }}
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          # YAML is the default format now, so this "base" build pins
+          # -Dyaml=disabled to keep a pure-legacy configuration in the matrix.
+          - name: "Base (legacy)"
+            meson_flags: "-Dbuild_profile=release -Dyaml=disabled"
+            packages: ""
+
+          - name: "YAML"
+            meson_flags: "-Dbuild_profile=release -Dyaml=system"
+            packages: "libyaml-cpp-dev"
+
+          # -Dyaml=disabled so SQLite is the active world format (HAVE_YAML
+          # would otherwise take precedence at runtime).
+          - name: "SQLite"
+            meson_flags: "-Dbuild_profile=release -Dsqlite=system -Dyaml=disabled"
+            packages: "libsqlite3-dev"
+
+          - name: "Base + Admin API + OTEL"
+            meson_flags: "-Dbuild_profile=release -Dadmin_api=true -Dotel=system"
+            packages: "cmake"
+            with_otel: true
+
+          - name: "YAML + Admin API + OTEL"
+            meson_flags: "-Dbuild_profile=release -Dyaml=system -Dadmin_api=true -Dotel=system"
+            packages: "cmake libyaml-cpp-dev"
+            with_otel: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install base dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          add-universe: 'true'
+          extra-packages: ${{ matrix.config.packages }}
+
+      - name: Install opentelemetry-cpp runtime dependencies
+        if: matrix.config.with_otel
+        run: sudo apt-get install -y libprotobuf-dev
+
+      - name: Cache opentelemetry-cpp
+        if: matrix.config.with_otel
+        id: cache-otel
+        uses: actions/cache@v4
+        with:
+          path: /opt/opentelemetry-cpp
+          key: otel-cpp-1.25.0-ubuntu-x64
+
+      - name: Build opentelemetry-cpp
+        if: matrix.config.with_otel && steps.cache-otel.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get install -y libgrpc++-dev protobuf-compiler-grpc || true
+          wget -q https://github.com/open-telemetry/opentelemetry-cpp/archive/refs/tags/v1.25.0.tar.gz
+          tar xzf v1.25.0.tar.gz
+          cmake -S opentelemetry-cpp-1.25.0 -B otel-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/opt/opentelemetry-cpp \
+            -DWITH_OTLP_HTTP=ON \
+            -DWITH_OTLP_GRPC=OFF \
+            -DBUILD_TESTING=OFF \
+            -DWITH_BENCHMARK=OFF \
+            -DWITH_EXAMPLES=OFF
+          cmake --build otel-build -j$(nproc)
+          sudo cmake --install otel-build
+
+      - name: Set otel pkg-config path
+        if: matrix.config.with_otel
+        run: echo "PKG_CONFIG_PATH=/opt/opentelemetry-cpp/lib/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+
+      - name: Configure meson
+        run: |
+          meson setup build --wipe ${{ matrix.config.meson_flags }} -Dunity_size=45
+
+      - name: Build
+        run: meson compile -C build tests
+
+      - name: Run tests
+        run: meson test -C build
+
+  gcc15:
+    name: GCC 15 / Base
+    runs-on: ubuntu-latest
+    container:
+      image: debian:sid
+      options: --user root
+
+    steps:
+      - name: Install Git
+        run: |
+          apt-get update && apt-get install -y git ca-certificates
+          git config --global --add safe.directory '*'
+
+      - uses: actions/checkout@v4
+
+      - name: Install GCC 15 and build dependencies
+        uses: ./.github/actions/install-linux-deps
+        with:
+          use-sudo: 'false'
+          extra-packages: "gcc-15 g++-15 binutils binutils-gold"
+
+      - name: Show GCC 15 version
+        run: gcc-15 --version && g++-15 --version
+
+      - name: Configure meson
+        env:
+          CC: gcc-15
+          CXX: g++-15
+        run: meson setup build --wipe -Dbuild_profile=release -Dunity_size=45
+
+      - name: Build
+        run: meson compile -C build tests
+
+      - name: Run tests
+        run: meson test -C build
+
+  coverage:
+    name: GCC / Coverage
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/world-load-refactoring' || github.ref == 'refs/heads/master' || github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            ninja-build meson pkg-config \
+            libssl-dev libcurl4-gnutls-dev libexpat1-dev \
+            gettext libgtest-dev gcovr
+
+      - name: Configure meson
+        run: meson setup build --wipe -Dbuild_profile=debug -Db_coverage=true -Dunity_size=45
+
+      - name: Build and run tests
+        run: |
+          meson compile -C build tests
+          meson test -C build
+
+      - name: Generate coverage reports
+        run: ninja -C build coverage 2>&1 | tee /tmp/coverage_out.txt
+
+      - name: Post coverage summary
+        run: |
+          echo "## Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E '^(lines|functions|branches):' /tmp/coverage_out.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          files: build/meson-logs/coverage.xml
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+      - name: Generate ReportGenerator HTML
+        uses: danielpalme/ReportGenerator-GitHub-Action@5.5.9
+        with:
+          reports: build/meson-logs/coverage.xml
+          targetdir: build/meson-logs/coverage-html
+          reporttypes: 'Html;HtmlSummary;Badges'
+          sourcedirs: ${{ github.workspace }}
+          title: 'bylins-mud coverage'
+          tag: '${{ github.run_number }}_${{ github.run_id }}'
+          toolpath: 'reportgeneratortool'
+
+      - name: Upload HTML report as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html
+          path: build/meson-logs/coverage-html/
+          retention-days: 30

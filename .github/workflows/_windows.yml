@@ -1,0 +1,233 @@
+name: Windows
+
+on:
+  workflow_call:
+
+jobs:
+  msvc:
+    name: MSVC / Base
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-msvc-${{ hashFiles('.github/workflows/_windows.yml') }}
+          restore-keys: vcpkg-msvc-
+
+      - name: Install dependencies with vcpkg
+        run: vcpkg install openssl:x64-windows curl:x64-windows expat:x64-windows gtest:x64-windows
+
+      - name: Install Meson and Ninja
+        run: pip install meson ninja
+
+      - name: Set vcpkg PKG_CONFIG_PATH
+        run: echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+
+      - name: Configure meson
+        run: meson setup build --wipe -Dbuild_profile=release -Dunity_size=45
+
+      - name: Build
+        run: meson compile -C build tests
+
+      - name: Run tests
+        run: meson test -C build
+
+  clang:
+    name: Clang / Base
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\vcpkg\installed
+            C:\vcpkg\packages
+          key: vcpkg-clang-${{ hashFiles('.github/workflows/_windows.yml') }}
+          restore-keys: vcpkg-clang-
+
+      - name: Install dependencies with vcpkg
+        run: vcpkg install openssl:x64-windows curl:x64-windows expat:x64-windows gtest:x64-windows
+
+      - name: Install Meson and Ninja
+        run: pip install meson ninja
+
+      - name: Set vcpkg PKG_CONFIG_PATH
+        run: echo "PKG_CONFIG_PATH=C:\vcpkg\installed\x64-windows\lib\pkgconfig" >> $env:GITHUB_ENV
+
+      - name: Configure meson
+        env:
+          CC: clang-cl
+          CXX: clang-cl
+        run: meson setup build --wipe -Dbuild_profile=release -Dunity_size=45
+
+      - name: Build
+        run: meson compile -C build tests
+
+      - name: Run tests
+        run: meson test -C build
+
+  mingw:
+    name: MinGW / Base
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: >-
+            git
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-openssl
+            mingw-w64-x86_64-curl
+            mingw-w64-x86_64-expat
+            mingw-w64-x86_64-gtest
+
+      - name: Configure meson
+        shell: msys2 {0}
+        env:
+          LDFLAGS: -static-libgcc -static-libstdc++ -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
+        run: meson setup build --wipe -Dbuild_profile=release -Dunity_size=45
+
+      - name: Build
+        shell: msys2 {0}
+        run: meson compile -C build tests
+
+      - name: Run tests
+        shell: msys2 {0}
+        run: meson test -C build
+
+  cygwin:
+    name: Cygwin / GCC / ${{ matrix.config.name }}
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: "Base"
+            meson_flags: "-Dbuild_profile=release -Dgtest=system"
+            with_yaml: false
+            cache_key: "cygwin-gtest-1.14.0"
+
+          - name: "YAML"
+            meson_flags: "-Dbuild_profile=release -Dgtest=system -Dyaml=system"
+            with_yaml: true
+            cache_key: "cygwin-gtest-1.14.0-yaml"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cygwin/cygwin-install-action@v6
+        with:
+          packages: >-
+            gcc-g++ gcc-core make cmake ninja
+            python3 python3-pip
+            libssl-devel libcurl-devel libexpat1-devel
+            libcrypt-devel gettext-devel unzip git wget pkg-config libyaml-cpp-dev
+
+      - uses: cygwin/cygwin-install-action@v6
+        if: matrix.config.with_yaml
+        with:
+          packages: libyaml-cpp-dev
+
+      - name: Install Meson
+        shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+        run: pip3 install meson
+
+      - name: Cache Cygwin libraries
+        id: cache-cygwin-libs
+        uses: actions/cache@v4
+        with:
+          path: C:\cygwin\usr\local
+          key: ${{ matrix.config.cache_key }}
+
+      - name: Build and install googletest
+        if: steps.cache-cygwin-libs.outputs.cache-hit != 'true'
+        shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+        run: |
+          cd /tmp
+          wget https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+          tar xzf v1.14.0.tar.gz
+          cd googletest-1.14.0 && mkdir build && cd build
+          cmake -DCMAKE_BUILD_TYPE=Release .. && make -j$(nproc) && make install
+
+      - name: Configure meson
+        shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+        env:
+          PKG_CONFIG_PATH: "/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:/usr/local/share/pkgconfig"
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          meson setup build --wipe ${{ matrix.config.meson_flags }} -Dunity_size=45
+
+      - name: Build
+        shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+        run: cd "$GITHUB_WORKSPACE" && meson compile -C build tests
+
+      - name: Run tests
+        shell: C:\cygwin\bin\bash.exe --login --norc -eo pipefail -o igncr '{0}'
+        run: cd "$GITHUB_WORKSPACE" && meson test -C build
+
+  wsl:
+    name: WSL / GCC / ${{ matrix.config.name }}
+    runs-on: windows-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - name: "Base"
+            meson_flags: "-Dbuild_profile=release"
+            extra_packages: ""
+
+          - name: "YAML"
+            meson_flags: "-Dbuild_profile=release -Dyaml=system"
+            extra_packages: "libyaml-cpp-dev"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: Vampire/setup-wsl@v3
+        with:
+          distribution: Ubuntu-24.04
+
+      - name: Install dependencies
+        shell: wsl-bash {0}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential make libssl-dev libcurl4-gnutls-dev \
+            libexpat1-dev gettext unzip gdb \
+            libgtest-dev zlib1g-dev libcrypt-dev \
+            ninja-build meson pkg-config \
+            ${{ matrix.config.extra_packages }}
+
+      - name: Configure meson
+        shell: wsl-bash {0}
+        run: meson setup build --wipe ${{ matrix.config.meson_flags }} -Dunity_size=45
+
+      - name: Build
+        shell: wsl-bash {0}
+        run: meson compile -C build tests
+
+      - name: Run tests
+        shell: wsl-bash {0}
+        run: meson test -C build

@@ -1,46 +1,65 @@
 #include "protect.h"
+#include "skill_messages.h"
 
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/fight.h"
 #include "gameplay/fight/common.h"
 #include "gameplay/fight/fight_hit.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
+#include "engine/core/target_resolver.h"
 #include "engine/db/global_objects.h"
+#include "utils/grammar/gender.h"
+#include "utils/utils_string.h"
+
+// Stop covering one's protectee, announcing it to both parties. The message is a
+// protect-skill concern; CharData::remove_protecting() is a silent data primitive
+// (also called from death/extract/dtor paths, where these messages must not fire).
+static void StopProtecting(CharData *ch) {
+	auto *vict = ch->get_protecting();
+	if (!vict) {
+		return;
+	}
+	SendMsgToChar(ch, "Вы перестали прикрывать %s.\r\n", GET_PAD(vict, 3));
+	SendMsgToChar(vict, "%s перестал%s прикрывать вас.\r\n", GET_NAME(ch), grammar::SexEnding(ch->get_sex(), 1));
+	ch->remove_protecting();
+}
 
 // ************** PROTECT PROCEDURES
 void go_protect(CharData *ch, CharData *vict) {
 	if (IsUnableToAct(ch)) {
-		SendMsgToChar("Вы временно не в состоянии сражаться.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kProtect, ESkillMsg::kCantFightNow) + "\r\n", ch);
 		return;
+	}
+	if (ch->get_protecting() && ch->get_protecting() != vict) {
+		StopProtecting(ch);
 	}
 	ch->set_protecting(vict);
 	act("Вы попытаетесь прикрыть $N3 от нападения.", false, ch, 0, vict, kToChar);
 }
 
 void do_protect(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	one_argument(argument, arg);
-	if (!*arg) {
+	const std::string target_name = utils::ExtractFirstArgumentLower(argument);
+	if (target_name.empty()) {
 		if (ch->get_protecting()) {
-			ch->remove_protecting();
-			SendMsgToChar("Вы перестали прикрывать своего товарища.\r\n", ch);
+			StopProtecting(ch);
 		} else {
 			SendMsgToChar("Вы никого не прикрываете.\r\n", ch);
 		}
 		return;
 	}
 
-	if (ch->IsNpc() || !ch->GetSkill(ESkill::kProtect)) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (ch->IsNpc() || !GetSkill(ch, ESkill::kProtect)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kProtect, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
-	if (ch->HasCooldown(ESkill::kProtect)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kProtect)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kProtect, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	};
 
-	CharData *vict = get_char_vis(ch, arg, EFind::kCharInRoom);
+	CharData *vict = target_resolver::FindCharInRoom(ch, target_name);
 	if (!vict) {
-		SendMsgToChar("И кто так сильно мил вашему сердцу?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kProtect, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	};
 
@@ -50,7 +69,7 @@ void do_protect(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	}
 
 	if (ch->GetEnemy() == vict) {
-		SendMsgToChar("Вы явно пацифист, или мазохист.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kProtect, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 
@@ -104,14 +123,13 @@ CharData *TryToFindProtector(CharData *victim, CharData *ch) {
 					false, vict, 0, victim, kToChar);
 				act("$N пытается напасть на вас! Лучше бы вам отойти.", false, victim, 0, vict, kToChar);
 				vict->remove_protecting();
-				SetWaitState(vict, kBattleRound);
+				SetBattleLag(vict, 1);
 				Affect<EApply> af;
-				af.type = ESpell::kBattle;
-				af.bitvector = to_underlying(EAffect::kStopFight);
+				af.affect_type = EAffect::kStopFight;
 				af.location = EApply::kNone;
 				af.modifier = 0;
-				af.duration = CalcDuration(vict, 1, 0, 0, 0, 0);
-				af.battleflag = kAfBattledec | kAfPulsedec;
+				af.duration = CalcDuration(vict, vict, ESkill::kUndefined, 1, 0, 0, 0);
+				af.battleflag = {kAfBattledec, kAfPulsedec};
 				ImposeAffect(vict, af, true, false, true, false);
 				return victim;
 			}
@@ -127,7 +145,7 @@ CharData *TryToFindProtector(CharData *victim, CharData *ch) {
 			percent = number(1, MUD::Skill(ESkill::kProtect).difficulty);
 			prob = CalcCurrentSkill(vict, ESkill::kProtect, victim);
 			prob = prob * 8 / 10;
-			if (vict->HasCooldown(ESkill::kProtect)) {
+			if (vict->Skills().HasActiveCooldown(ESkill::kProtect)) {
 				prob /= 2;
 			};
 			if (GET_GOD_FLAG(vict, EGf::kGodscurse)) {

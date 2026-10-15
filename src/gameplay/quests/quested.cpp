@@ -3,21 +3,27 @@
 // Part of Bylins http://www.mud.ru
 
 #include "quested.h"
+#include "administration/privilege.h"
+
+#include "utils/buffered_file_writer.h"
 
 #include "engine/entities/char_data.h"
+#include "utils/native_text.h"
 
 void smash_tilde(char *str);
 
 // * Добавление выполненного квеста номер/строка данных (kMaxTrglineLength символов).
 
 void Quested::add(CharData *ch, int vnum, char *text) {
-	if (!ch->IsNpc() && !IS_IMMORTAL(ch)) {
+	if (!ch->IsNpc() && !privilege::IsImmortal(ch)) {
 		smash_tilde(text);
 		skip_spaces(&text);
 		std::string text_node = *text ? text : "";
 
+		// Предел байтовый (это бюджет буфера триггерной строки), но рубить символ
+		// пополам нельзя -- truncate_offset отступает до границы (issue #3681).
 		if (text_node.size() > kMaxTrglineLength) {
-			text_node = text_node.substr(0, kMaxTrglineLength);
+			text_node = text_node.substr(0, native_text::truncate_offset(text_node, kMaxTrglineLength));
 		}
 		quested_[vnum] = text_node;
 	}
@@ -63,9 +69,9 @@ std::string Quested::print() const {
 	return text.str();
 }
 
-void Quested::save(FILE *saved) const {
+void Quested::save(BufferedFileWriter &saved) const {
 	for (QuestedType::const_iterator it = quested_.begin(); it != quested_.end(); ++it) {
-		fprintf(saved, "Qst : %d %s~\n", it->first, it->second.c_str());
+		saved.printf("Qst : %d %s~\n", it->first, it->second.c_str());
 	}
 }
 

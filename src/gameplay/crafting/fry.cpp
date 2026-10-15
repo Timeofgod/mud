@@ -1,13 +1,18 @@
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
 #include "engine/db/world_objects.h"
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "gameplay/mechanics/inventory.h"
 #include "gameplay/mechanics/meat_maker.h"
 #include "engine/core/utils_char_obj.inl"
 
 void do_fry(CharData *ch, char *argument, int/* cmd*/, int /*subcmd*/) {
 	ObjData *meet;
-	one_argument(argument, arg);
-	if (!*arg) {
+	char name[kMaxInputLength];
+	one_argument(argument, name);
+	if (!*name) {
 		SendMsgToChar("Что вы собрались поджарить?\r\n", ch);
 		return;
 	}
@@ -15,9 +20,8 @@ void do_fry(CharData *ch, char *argument, int/* cmd*/, int /*subcmd*/) {
 		SendMsgToChar("Не стоит отвлекаться в бою.\r\n", ch);
 		return;
 	}
-	if (!(meet = get_obj_in_list_vis(ch, arg, ch->carrying))) {
-		snprintf(buf, kMaxStringLength, "У вас нет '%s'.\r\n", arg);
-		SendMsgToChar(buf, ch);
+	if (!(meet = get_obj_in_list_vis(ch, name, ch->carrying))) {
+		SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", name), ch);
 		return;
 	}
 	if (!world[ch->in_room]->fires) {
@@ -32,7 +36,7 @@ void do_fry(CharData *ch, char *argument, int/* cmd*/, int /*subcmd*/) {
 	const auto meet_vnum = GET_OBJ_VNUM(meet);
 	if (!meat_mapping.has(meet_vnum)) // не нашлось в массиве
 	{
-		SendMsgToChar(ch, "%s не подходит для жарки.\r\n", meet->get_PName(ECase::kNom).c_str());
+		SendMsgToChar(ch, "%s не подходит для жарки.\r\n", meet->get_PName(grammar::ECase::kNom).c_str());
 		return;
 	}
 
@@ -43,7 +47,7 @@ void do_fry(CharData *ch, char *argument, int/* cmd*/, int /*subcmd*/) {
 	if (tobj) {
 		can_carry_obj(ch, tobj.get());
 		ExtractObjFromWorld(meet);
-		SetWaitState(ch, 1 * kBattleRound);
+		SetBattleLag(ch, 1);
 	} else {
 		mudlog("Невозможно загрузить жаренное мясо в do_fry!", NRM, kLvlGreatGod, ERRLOG, true);
 	}

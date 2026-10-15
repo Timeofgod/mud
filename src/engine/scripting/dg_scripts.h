@@ -12,6 +12,7 @@
 #ifndef DG_SCRIPTS_H_
 #define DG_SCRIPTS_H_
 
+#include <unordered_set>
 #include "gameplay/skills/skills.h"
 #include "engine/structs/structs.h"
 #include "utils/logger.h"
@@ -21,6 +22,7 @@
 #include "utils/logger.h"
 
 #include <compare>
+#include <utility>
 
 struct RoomData;    // forward declaration to avoid inclusion of room.hpp and any dependencies of that header.
 
@@ -29,6 +31,11 @@ struct RoomData;    // forward declaration to avoid inclusion of room.hpp and an
 const int MOB_TRIGGER = 0;
 const int OBJ_TRIGGER = 1;
 const int WLD_TRIGGER = 2;
+
+enum class TriggerScriptLanguage {
+	Dg,
+	Lua
+};
 
 extern const char *attach_name[];
 const int DG_NO_TRIG = 256;    // don't check act trigger   //
@@ -130,7 +137,12 @@ struct wait_event_data {
 	Trigger *trigger;
 	void *go;
 	int type;
+	bool from_current = false;  // возобновить с текущей строки (TRIG_FROM_LINE), а не со следующей
 };
+
+// Повесить на триггер wait через штатный trig_wait_event (issue #3523).
+// from_current=true -> по таймеру продолжить с текущей строки (TRIG_FROM_LINE).
+void hang_trig_wait(void *go, Trigger *trig, int type, long time, bool from_current = false);
 
 // one line of the trigger //
 class cmdlist_element {
@@ -160,19 +172,24 @@ class Trigger {
 	Trigger(const Trigger &from);
 	Trigger &operator=(const Trigger &right);
 	Trigger(int rnum, const char *name, long trigger_type);
-	Trigger(int rnum, const char *name, byte attach_type, long trigger_type);
-	Trigger(int rnum, std::string &&name, byte attach_type, long trigger_type);
+	Trigger(int rnum, const char *name, int attach_type, long trigger_type);
+	Trigger(int rnum, std::string &&name, int attach_type, long trigger_type);
 
 	virtual ~Trigger() = default;    // make constructor virtual to be able to create a mock for this class
 
 	[[nodiscard]] auto get_rnum() const { return nr; }
 	void set_rnum(const sh_int _) { nr = _; }
-	void set_attach_type(const byte _) { attach_type = _; }
+	void set_attach_type(const int _) { attach_type = _; }
 	[[nodiscard]] auto get_attach_type() const { return attach_type; }
 	[[nodiscard]] const auto &get_name() const { return name; }
 	void set_name(const std::string &_) { name = _; }
 	[[nodiscard]] auto get_trigger_type() const { return trigger_type; }
 	void set_trigger_type(const long _) { trigger_type = _; }
+	[[nodiscard]] auto get_script_language() const { return script_language; }
+	void set_script_language(const TriggerScriptLanguage _) { script_language = _; }
+	[[nodiscard]] const std::string &get_lua_script_source() const { return lua_script_source; }
+	void set_lua_script_source(std::string source) { lua_script_source = std::move(source); }
+	[[nodiscard]] bool has_lua_script_source() const { return !lua_script_source.empty(); }
 	void clear_var_list() {var_list.clear();}
 	cmdlist_ptr cmdlist;    // top of command list             //
 	cmdlist_element::shared_ptr wait_line;    // ptr to current line of trigger after wait  //
@@ -193,9 +210,11 @@ class Trigger {
 	void reset();
 
 	int nr;            // trigger's rnum                  //
-	byte attach_type;    // mob/obj/wld intentions          //
+	int attach_type;    // mob/obj/wld intentions          //
 	std::string name;    // name of trigger
 	long trigger_type;    // type of trigger (for bitvector) //
+	TriggerScriptLanguage script_language = TriggerScriptLanguage::Dg;
+	std::string lua_script_source;
 	bool halted;
 };
 
@@ -245,7 +264,7 @@ class TriggersList {
 		TriggersList *m_owner;
 		triggers_list_t::const_iterator m_iterator;
 		TriggerEventObserver::shared_ptr m_observer;
-		bool m_removed;
+		Trigger *m_removed_trigger;
 	};
 
 	TriggersList();
@@ -329,6 +348,9 @@ struct script_memory {
 	struct script_memory *next;
 };
 
+// Имя того, на кого указывает UID переменной триггера; если не нашли -- сам UID.
+std::string find_uid_name(const char *uid);
+
 // function prototypes from triggers.cpp (and others) //
 void act_mtrigger(CharData *ch,
 				  char *str,
@@ -394,6 +416,11 @@ void trig_log(Trigger *trig, std::string msg, LogMode type = LogMode::OFF);
 using obj2triggers_t = std::unordered_map<ObjVnum, std::list<TrgVnum>>;
 extern obj2triggers_t &obj2triggers;
 
+// Добавляет в obj2triggers предметы, которые грузит скрипт триггера (см. 'vnum trig').
+void IndexTriggerObjLoads(TrgVnum trig_vnum, const Trigger *trig);
+// То же, но сначала убирает прежние записи триггера -- для правки скрипта в trigedit.
+void ReindexTriggerObjLoads(TrgVnum trig_vnum, const Trigger *trig);
+
 class GlobalTriggersStorage {
  public:
 	~GlobalTriggersStorage();
@@ -429,8 +456,8 @@ Trigger *read_trigger(int nr);
 // void add_var(struct TriggerVar **var_list, char *name, char *value, long id);
 CharData *dg_caster_owner_obj(ObjData *obj);
 RoomData *dg_room_of_obj(ObjData *obj);
-void do_dg_cast(void *go, Trigger *trig, int type, char *cmd);
-void do_dg_affect(void *go, Script *sc, Trigger *trig, int type, char *cmd);
+void do_dg_cast(void *go, Trigger *trig, int type, std::string cmd);
+void do_dg_affect(void *go, Script *sc, Trigger *trig, int type, std::string cmd);
 
 void add_var_cntx(std::list<TriggerVar> &var_list, std::string name, std::string value, long id);
 TriggerVar find_var_cntx(std::list<TriggerVar>, std::string name, long id);
@@ -495,6 +522,20 @@ extern int last_trig_vnum;//последний триг в котором про
 extern int last_trig_line_num;
 
 void save_char_vars(CharData *ch);
+
+// списки сущностей с триггерами смены времени - для быстрой итерации
+// вместо перебора всего мира
+extern std::unordered_set<CharData *> timechange_mobs;
+extern std::unordered_set<ObjData *> timechange_objs;
+extern std::unordered_set<RoomData *> timechange_rooms;
+
+// регистрация/снятие при attach/detach триггера
+void timechange_register_mob(CharData *ch);
+void timechange_unregister_mob(CharData *ch);
+void timechange_register_obj(ObjData *obj);
+void timechange_unregister_obj(ObjData *obj);
+void timechange_register_room(RoomData *room);
+void timechange_unregister_room(RoomData *room);
 
 #endif
 

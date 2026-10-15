@@ -12,17 +12,24 @@
 *  $Date$                                           *
 *  $Revision$                                                   *
 ************************************************************************ */
+#include <fmt/format.h>
+
 #include "dg_db_scripts.h"
+#include "gameplay/mechanics/magic_item.h"
 
 #include "engine/db/obj_prototypes.h"
 #include "dg_scripts.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
 #include "dg_event.h"
 #include "gameplay/magic/magic.h"
 #include "gameplay/magic/magic_temp_spells.h"
 #include "engine/db/global_objects.h"
+#include "trigger_indenter.h"
 
+#include <algorithm>
+#include <charconv>
 #include <stack>
+#include <string_view>
 
 //External functions
 extern void ExtractTrigger(Trigger *trig);
@@ -34,9 +41,109 @@ extern int top_of_trigt;
 
 extern IndexData *mob_index;
 
+namespace {
+
+constexpr std::string_view kSpaces = " \t";
+constexpr std::string_view kLoadCommands[] = {"%load%", "oload", "mload", "wload", "load"};
+constexpr std::string_view kObjArgument = "obj";
+
+std::string_view SkipSpaces(std::string_view text) {
+	const auto pos = text.find_first_not_of(kSpaces);
+	return pos == std::string_view::npos ? std::string_view{} : text.substr(pos);
+}
+
+std::string_view FirstWord(std::string_view text) {
+	return text.substr(0, text.find_first_of(kSpaces));
+}
+
+// utils::IsAbbr() для string_view: непустое сокращение слова без учета регистра.
+bool IsAbbrOf(std::string_view abbr, std::string_view word) {
+	if (abbr.empty() || abbr.size() > word.size()) {
+		return false;
+	}
+
+	for (std::size_t i = 0; i < abbr.size(); ++i) {
+		if (LOWER(abbr[i]) != LOWER(word[i])) {
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool IsSameWord(std::string_view lhs, std::string_view rhs) {
+	return lhs.size() == rhs.size() && IsAbbrOf(lhs, rhs);
+}
+
+// Разбирает строку скрипта вида "<load|oload|mload|wload|%load%> obj <внум>".
+bool ParseObjLoadCommand(std::string_view line, ObjVnum &obj_vnum) {
+	line = SkipSpaces(line);
+	const auto command = FirstWord(line);
+	if (std::none_of(std::begin(kLoadCommands), std::end(kLoadCommands),
+					 [command](const auto load_command) { return IsSameWord(command, load_command); })) {
+		return false;
+	}
+
+	// Аргументы сверяем так же, как рантайм в do_dgoload()/do_mload():
+	// IsAbbr(arg, "obj") -- без учета регистра и с сокращениями ("o", "ob", "obj"),
+	// внум -- строго число (иначе рантайм ругнется на синтаксис и ничего не загрузит).
+	line = SkipSpaces(line.substr(command.size()));
+	const auto argument = FirstWord(line);
+	if (!IsAbbrOf(argument, kObjArgument)) {
+		return false;
+	}
+
+	const auto number = FirstWord(SkipSpaces(line.substr(argument.size())));
+	if (number.empty() || number.front() == '-') {
+		return false;
+	}
+
+	const auto number_end = number.data() + number.size();
+	const auto parsed = std::from_chars(number.data(), number_end, obj_vnum);
+
+	return parsed.ec == std::errc() && parsed.ptr == number_end;
+}
+
+} // namespace
+
+// Индекс "внум предмета -> триггеры, грузящие этот предмет" для команды 'vnum trig'.
+// Строится при загрузке мира -- одинаково для всех форматов (YAML/SQLite/Legacy).
+void IndexTriggerObjLoads(TrgVnum trig_vnum, const Trigger *trig) {
+	if (!trig->cmdlist) {
+		return;
+	}
+
+	for (auto cmd = *trig->cmdlist; cmd; cmd = cmd->next) {
+		ObjVnum obj_vnum = 0;
+		if (!ParseObjLoadCommand(cmd->cmd, obj_vnum)) {
+			continue;
+		}
+
+		auto &triggers = obj2triggers[obj_vnum];
+		if (std::find(triggers.begin(), triggers.end(), trig_vnum) == triggers.end()) {
+			triggers.push_back(trig_vnum);
+		}
+	}
+}
+
+// То же, но с предварительной чисткой старых записей триггера: скрипт мог
+// перестать грузить предмет, который грузил до правки в trigedit.
+void ReindexTriggerObjLoads(TrgVnum trig_vnum, const Trigger *trig) {
+	for (auto it = obj2triggers.begin(); it != obj2triggers.end();) {
+		it->second.remove(trig_vnum);
+		if (it->second.empty()) {
+			it = obj2triggers.erase(it);
+		} else {
+			++it;
+		}
+	}
+
+	IndexTriggerObjLoads(trig_vnum, trig);
+}
+
 // TODO: Get rid of me
 char *dirty_indent_trigger(char *cmd, int *level) {
-	static std::stack<std::string> indent_stack;
+	thread_local std::stack<std::string> indent_stack;
 
 	*level = std::max(0, *level);
 	if (*level == 0) {
@@ -57,28 +164,28 @@ char *dirty_indent_trigger(char *cmd, int *level) {
 	skip_spaces(&ptr);
 
 	// ptr содержит строку без первых пробелов.
-	if (!strn_cmp("case ", ptr, 5) || !strn_cmp("default", ptr, 7)) {
+	if (utils::IsAbbr("case ", ptr) || utils::IsAbbr("default", ptr)) {
 		// последовательные case (или default после case) без break
 		if (!indent_stack.empty()
-			&& !strn_cmp("case ", indent_stack.top().c_str(), 5)) {
+			&& utils::IsAbbr("case ", indent_stack.top().c_str())) {
 			--currlev;
 		} else {
 			indent_stack.push(ptr);
 		}
 		nextlev = currlev + 1;
-	} else if (!strn_cmp("if ", ptr, 3) || !strn_cmp("while ", ptr, 6)
-		|| !strn_cmp("foreach ", ptr, 8) || !strn_cmp("switch ", ptr, 7)) {
+	} else if (utils::IsAbbr("if ", ptr) || utils::IsAbbr("while ", ptr)
+		|| utils::IsAbbr("foreach ", ptr) || utils::IsAbbr("switch ", ptr)) {
 		++nextlev;
 		indent_stack.push(ptr);
-	} else if (!strn_cmp("elseif ", ptr, 7) || !strn_cmp("else", ptr, 4)) {
+	} else if (utils::IsAbbr("elseif ", ptr) || utils::IsAbbr("else", ptr)) {
 		--currlev;
-	} else if (!strn_cmp("break", ptr, 5) || !strn_cmp("end", ptr, 3)
-		|| !strn_cmp("done", ptr, 4)) {
+	} else if (utils::IsAbbr("break", ptr) || utils::IsAbbr("end", ptr)
+		|| utils::IsAbbr("done", ptr)) {
 		// в switch завершающий break можно опускать и сразу писать done|end
-		if ((!strn_cmp("done", ptr, 4) || !strn_cmp("end", ptr, 3))
+		if ((utils::IsAbbr("done", ptr) || utils::IsAbbr("end", ptr))
 			&& !indent_stack.empty()
-			&& (!strn_cmp("case ", indent_stack.top().c_str(), 5)
-				|| !strn_cmp("default", indent_stack.top().c_str(), 7))) {
+			&& (utils::IsAbbr("case ", indent_stack.top().c_str())
+				|| utils::IsAbbr("default", indent_stack.top().c_str()))) {
 			--currlev;
 			--nextlev;
 			indent_stack.pop();
@@ -111,8 +218,9 @@ char *dirty_indent_trigger(char *cmd, int *level) {
 }
 
 void indent_trigger(std::string &cmd, int *level) {
+	thread_local TriggerIndenter indenter;
 	char *cmd_copy = str_dup(cmd.c_str());;
-	cmd_copy = dirty_indent_trigger(cmd_copy, level);
+	cmd_copy = indenter.indent(cmd_copy, level);
 	cmd = cmd_copy;
 	free(cmd_copy);
 }
@@ -182,7 +290,7 @@ void assign_triggers(void *i, int type) {
 
 	switch (type) {
 		case MOB_TRIGGER: mob = (CharData *) i;
-			for (const auto trigger_vnum : *mob_proto[GET_MOB_RNUM(mob)].proto_script) {
+			for (const auto trigger_vnum : *mob_proto[mob->get_rnum()].proto_script) {
 				rnum = GetTriggerRnum(trigger_vnum);
 				if (rnum == -1) {
 					const auto rnum = mob->get_rnum();
@@ -203,6 +311,9 @@ void assign_triggers(void *i, int type) {
 								owner_trig.emplace(trigger_vnum, tmp_map);
 							}
 							add_trig_to_owner(-1, trigger_vnum, GET_MOB_VNUM(mob));
+							if (IS_SET(GET_TRIG_TYPE(trig), MTRIG_TIMECHANGE)) {
+								timechange_register_mob(mob);
+							}
 						} else {
 							ExtractTrigger(trig);
 						}
@@ -233,6 +344,9 @@ void assign_triggers(void *i, int type) {
 								owner_trig.emplace(trigger_vnum, tmp_map);
 							}
 							add_trig_to_owner(-1, trigger_vnum, GET_OBJ_VNUM(obj));
+							if (IS_SET(GET_TRIG_TYPE(trig), OTRIG_TIMECHANGE)) {
+								timechange_register_obj(obj);
+							}
 						} else {
 							ExtractTrigger(trig);
 						}
@@ -262,6 +376,9 @@ void assign_triggers(void *i, int type) {
 								owner_trig.emplace(trigger_vnum, tmp_map);
 							}
 							add_trig_to_owner(-1, trigger_vnum, room->vnum);
+							if (IS_SET(GET_TRIG_TYPE(trig), WTRIG_TIMECHANGE)) {
+								timechange_register_room(room);
+							}
 						} else {
 							ExtractTrigger(trig);
 						}
@@ -276,64 +393,83 @@ void assign_triggers(void *i, int type) {
 }
 
 void trg_featturn(CharData *ch, EFeat feat_id, int featdiff, int vnum) {
+	const char *feat_name = MUD::Feat(feat_id).GetCName();
 	if (ch->HaveFeat(feat_id)) {
-		if (featdiff)
+		if (featdiff) {
+			// Раньше выходили молча: ни игроку, ни в лог. Со стороны это выглядело как
+			// неработающая команда, и разбираться приходилось чтением кода.
+			SendMsgToChar(fmt::format("Вы уже владеете способностью '{}'.\r\n", feat_name), ch);
+			log("featturn: %s уже владеет способностью '%s', триггер #%d",
+				GET_NAME(ch), feat_name, vnum);
 			return;
-		else {
-			sprintf(buf, "Вы утратили способность '%s'.\r\n", MUD::Feat(feat_id).GetCName());
-			SendMsgToChar(buf, ch);
-			log("Remove %s to %s (trigfeatturn) trigvnum %d", MUD::Feat(feat_id).GetCName(), GET_NAME(ch), vnum);
+		} else {
+			SendMsgToChar(fmt::format("Вы утратили способность '{}'.\r\n", feat_name), ch);
+			log("Remove %s to %s (trigfeatturn) trigvnum %d", feat_name, GET_NAME(ch), vnum);
 			ch->UnsetFeat(feat_id);
 		}
 	} else {
 		if (featdiff) {
 			if (MUD::Class(ch->GetClass()).feats.IsAvailable(feat_id)) {
-				sprintf(buf, "Вы обрели способность '%s'.\r\n", MUD::Feat(feat_id).GetCName());
-				SendMsgToChar(buf, ch);
-				log("Add %s to %s (trigfeatturn) trigvnum %d",
-					MUD::Feat(feat_id).GetCName(), GET_NAME(ch), vnum);
+				SendMsgToChar(fmt::format("Вы обрели способность '{}'.\r\n", feat_name), ch);
+				log("Add %s to %s (trigfeatturn) trigvnum %d", feat_name, GET_NAME(ch), vnum);
 				ch->SetFeat(feat_id);
+			} else {
+				// Второй тихий случай: способность не положена классу. Для билдера он
+				// выглядел точно так же -- команда есть, эффекта нет.
+				SendMsgToChar(fmt::format("Способность '{}' недоступна вашему классу.\r\n", feat_name), ch);
+				log("featturn: способность '%s' недоступна классу %s (%s), триггер #%d",
+					feat_name, MUD::Class(ch->GetClass()).GetCName(), GET_NAME(ch), vnum);
 			}
 		};
 	}
 }
 
 void trg_skillturn(CharData *ch, const ESkill skill_id, int skilldiff, int vnum) {
-	if (ch->GetMorphSkill(skill_id)) {
+	const char *skill_name = MUD::Skill(skill_id).GetName();
+	if (GetSkillBonus(ch, skill_id)) {
 		if (skilldiff) {
+			// Те же тихие выходы, что и у способностей, -- с тем же итогом для билдера.
+			SendMsgToChar(ch, "Вы уже владеете умением '%s'.\r\n", skill_name);
+			log("skillturn: %s уже владеет умением '%s', триггер #%d", GET_NAME(ch), skill_name, vnum);
 			return;
 		}
-		ch->set_skill(skill_id, 0);
-		SendMsgToChar(ch, "Вас лишили умения '%s'.\r\n", MUD::Skill(skill_id).GetName());
-		log("Remove %s from %s (trigskillturn)", MUD::Skill(skill_id).GetName(), GET_NAME(ch));
-	} else if (skilldiff && MUD::Class(ch->GetClass()).skills[skill_id].IsAvailable()) {
-		ch->set_skill(skill_id, 5);
-		SendMsgToChar(ch, "Вы изучили умение '%s'.\r\n", MUD::Skill(skill_id).GetName());
-		log("Add %s to %s (trigskillturn) trigvnum %d", MUD::Skill(skill_id).GetName(), GET_NAME(ch), vnum);
+		SetSkill(ch, skill_id, 0);
+		SendMsgToChar(ch, "Вас лишили умения '%s'.\r\n", skill_name);
+		log("Remove %s from %s (trigskillturn)", skill_name, GET_NAME(ch));
+	} else if (skilldiff) {
+		if (MUD::Class(ch->GetClass()).skills[skill_id].IsAvailable()) {
+			SetSkill(ch, skill_id, 5);
+			SendMsgToChar(ch, "Вы изучили умение '%s'.\r\n", skill_name);
+			log("Add %s to %s (trigskillturn) trigvnum %d", skill_name, GET_NAME(ch), vnum);
+		} else {
+			SendMsgToChar(ch, "Умение '%s' недоступно вашему классу.\r\n", skill_name);
+			log("skillturn: умение '%s' недоступно классу %s (%s), триггер #%d",
+				skill_name, MUD::Class(ch->GetClass()).GetCName(), GET_NAME(ch), vnum);
+		}
 	}
 }
 
 void AddSkill(CharData *ch, const ESkill skillnum, int skilldiff, int vnum) {
-	int skill = ch->GetMorphSkill(skillnum);
+	int skill = GetSkillBonus(ch, skillnum);
 
-	ch->set_skill(skillnum, std::clamp(skill + skilldiff, 1, MUD::Skill(skillnum).cap));
+	SetSkill(ch, skillnum, std::clamp(skill + skilldiff, 1, MUD::Skill(skillnum).cap));
 	log("Add skill %s for char %s, skilldif %d, room %d, trigger %d, line %d", 
 			MUD::Skill(skillnum).GetName(), GET_NAME(ch), skilldiff, GET_ROOM_VNUM(ch->in_room), vnum, last_trig_line_num);
-	if (skill > ch->GetMorphSkill(skillnum)) {
+	if (skill > GetSkillBonus(ch, skillnum)) {
 		SendMsgToChar(ch, "Ваше умение '%s' понизилось.\r\n", MUD::Skill(skillnum).GetName());
 		log("Decrease %s to %s from %d to %d (diff %d)(trigskilladd) trigvnum %d",
 			MUD::Skill(skillnum).GetName(), GET_NAME(ch), skill,
-			ch->GetMorphSkill(skillnum), skilldiff, vnum);
-	} else if (skill < ch->GetMorphSkill(skillnum)) {
+			GetSkillBonus(ch, skillnum), skilldiff, vnum);
+	} else if (skill < GetSkillBonus(ch, skillnum)) {
 		SendMsgToChar(ch, "Вы повысили свое умение '%s'.\r\n", MUD::Skill(skillnum).GetName());
 		log("Raise %s to %s from %d to %d (diff %d)(trigskilladd) trigvnum %d",
 			MUD::Skill(skillnum).GetName(), GET_NAME(ch), skill,
-			ch->GetMorphSkill(skillnum), skilldiff, vnum);
+			GetSkillBonus(ch, skillnum), skilldiff, vnum);
 	} else {
 		SendMsgToChar(ch, "Ваше умение '%s' не изменилось.\r\n", MUD::Skill(skillnum).GetName());
 		log("Unchanged %s to %s from %d to %d (diff %d)(trigskilladd) trigvnum %d",
 			MUD::Skill(skillnum).GetName(), GET_NAME(ch), skill,
-			ch->GetMorphSkill(skillnum), skilldiff, vnum);
+			GetSkillBonus(ch, skillnum), skilldiff, vnum);
 	}
 }
 
@@ -341,13 +477,20 @@ void trg_spellturn(CharData *ch, ESpell spell_id, int spelldiff, int vnum) {
 	int spell = GET_SPELL_TYPE(ch, spell_id);
 
 	if (!CanGetSpell(ch, spell_id)) {
-		log("Error trying to add %s to %s (trigspell) trigvnum %d",
+		// Молчало для игрока, а в логе стояло невнятное "Error trying to add".
+		SendMsgToChar(ch, "Заклинание '%s' вам сейчас недоступно.\r\n", MUD::Spell(spell_id).GetCName());
+		log("spellturn: заклинание '%s' недоступно %s (класс, уровень или реморт), триггер #%d",
 			MUD::Spell(spell_id).GetCName(), GET_NAME(ch), vnum);
 		return;
 	}
 
 	if (spell & ESpellType::kKnow) {
-		if (spelldiff) return;
+		if (spelldiff) {
+			SendMsgToChar(ch, "Вы уже знаете заклинание '%s'.\r\n", MUD::Spell(spell_id).GetCName());
+			log("spellturn: %s уже знает заклинание '%s', триггер #%d",
+				GET_NAME(ch), MUD::Spell(spell_id).GetCName(), vnum);
+			return;
+		}
 
 		REMOVE_BIT(GET_SPELL_TYPE(ch, spell_id), ESpellType::kKnow);
 		if (!IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kTemp))
@@ -363,7 +506,8 @@ void trg_spellturn(CharData *ch, ESpell spell_id, int spelldiff, int vnum) {
 
 void trg_spellturntemp(CharData *ch, ESpell spell_id, int spelldiff, int vnum) {
 	if (!CanGetSpell(ch, spell_id)) {
-		log("Error trying to add %s to %s (trigspelltemp) trigvnum %d",
+		SendMsgToChar(ch, "Заклинание '%s' вам сейчас недоступно.\r\n", MUD::Spell(spell_id).GetCName());
+		log("spellturntemp: заклинание '%s' недоступно %s (класс, уровень или реморт), триггер #%d",
 			MUD::Spell(spell_id).GetCName(), GET_NAME(ch), vnum);
 		return;
 	}
@@ -380,19 +524,27 @@ void trg_spelladd(CharData *ch, ESpell spell_id, int spelldiff, int vnum) {
 	GET_SPELL_MEM(ch, spell_id) = std::max(0, MIN(spell + spelldiff, 50));
 
 	if (spell > GET_SPELL_MEM(ch, spell_id)) {
+		std::string msg;
 		if (GET_SPELL_MEM(ch, spell_id)) {
 			log("Remove custom spell %s to %s (trigspell) trigvnum %d",
 				MUD::Spell(spell_id).GetCName(), GET_NAME(ch), vnum);
-			sprintf(buf, "Вы забыли часть заклинаний '%s'.\r\n", MUD::Spell(spell_id).GetCName());
+			msg = fmt::format("Вы забыли часть заклинаний '{}'.\r\n", MUD::Spell(spell_id).GetCName());
 		} else {
-			sprintf(buf, "Вы забыли все заклинания '%s'.\r\n", MUD::Spell(spell_id).GetCName());
+			msg = fmt::format("Вы забыли все заклинания '{}'.\r\n", MUD::Spell(spell_id).GetCName());
 			log("Remove all spells %s to %s (trigspell) trigvnum %d",
 				MUD::Spell(spell_id).GetCName(), GET_NAME(ch), vnum);
 		}
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(msg, ch);
 	} else if (spell < GET_SPELL_MEM(ch, spell_id)) {
 		SendMsgToChar(ch, "Вы выучили несколько заклинаний '%s'.\r\n", MUD::Spell(spell_id).GetCName());
 		log("Add %s to %s (trigspell) trigvnum %d", MUD::Spell(spell_id).GetCName(), GET_NAME(ch), vnum);
+	} else {
+		// Ноль в аргументе или упёрлись в предел (0 снизу, 50 сверху). У умений про это
+		// говорят ("не изменилось"), у заклинаний молчали.
+		SendMsgToChar(ch, "Число заученных заклинаний '%s' не изменилось.\r\n",
+					  MUD::Spell(spell_id).GetCName());
+		log("spelladd: число заклинаний '%s' у %s не изменилось (осталось %d), триггер #%d",
+			MUD::Spell(spell_id).GetCName(), GET_NAME(ch), GET_SPELL_MEM(ch, spell_id), vnum);
 	}
 }
 
@@ -400,8 +552,13 @@ void trg_spellitem(CharData *ch, ESpell spell_id, int spelldiff, ESpellType spel
 	char type[kMaxStringLength];
 
 	if ((spelldiff && IS_SET(GET_SPELL_TYPE(ch, spell_id), spell_type)) ||
-		(!spelldiff && !IS_SET(GET_SPELL_TYPE(ch, spell_id), spell_type)))
+		(!spelldiff && !IS_SET(GET_SPELL_TYPE(ch, spell_id), spell_type))) {
+		// Состояние уже такое, какое просят. Раньше выходили молча -- со стороны это
+		// неотличимо от неработающей команды.
+		log("spellitem: умение с заклинанием '%s' у %s уже %s",
+			MUD::Spell(spell_id).GetCName(), GET_NAME(ch), spelldiff ? "есть" : "снято");
 		return;
+	}
 	if (!spelldiff) {
 		REMOVE_BIT(GET_SPELL_TYPE(ch, spell_id), spell_type);
 		switch (spell_type) {
@@ -425,18 +582,18 @@ void trg_spellitem(CharData *ch, ESpell spell_id, int spelldiff, ESpellType spel
 		SET_BIT(GET_SPELL_TYPE(ch, spell_id), spell_type);
 		switch (spell_type) {
 			case ESpellType::kScrollCast:
-				if (!ch->GetSkill(ESkill::kCreateScroll))
-					ch->set_skill(ESkill::kCreateScroll, 5);
+				if (!GetSkill(ch, ESkill::kCreateScroll))
+					SetSkill(ch, ESkill::kCreateScroll, 5);
 				strcpy(type, "создания свитка");
 				break;
 			case ESpellType::kPotionCast:
-				if (!ch->GetSkill(ESkill::kCreatePotion))
-					ch->set_skill(ESkill::kCreatePotion, 5);
+				if (!GetSkill(ch, ESkill::kCreatePotion))
+					SetSkill(ch, ESkill::kCreatePotion, 5);
 				strcpy(type, "приготовления напитка");
 				break;
 			case ESpellType::kWandCast:
-				if (!ch->GetSkill(ESkill::kCreateWand))
-					ch->set_skill(ESkill::kCreateWand, 5);
+				if (!GetSkill(ch, ESkill::kCreateWand))
+					SetSkill(ch, ESkill::kCreateWand, 5);
 				strcpy(type, "изготовления посоха");
 				break;
 			case ESpellType::kItemCast: strcpy(type, "предметной магии");

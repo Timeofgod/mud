@@ -10,6 +10,8 @@
 #include "engine/structs/structs.h"
 #include "engine/structs/meta_enum.h"
 
+#include <map>
+
 enum class EFeat {
 	kUndefined = 0,			//DO NOT USE
 	kBerserker = 1,				//предсмертная ярость
@@ -188,14 +190,22 @@ enum class EFeat {
 	kAnimalMaster = 156,		//хозяин животных
 	kSlashMaster = 157, 		//двойной удар двуручем
 	kPhysicians = 158,
+	kEmberTouch = 159,		// issue.perk-action-patching: pilot perk (ignite on Burning Hands)
+	kEmberFury = 160,		// issue.perk-action-patching P2: manifestation-replace kBurningHands damage (x2)
+	kCinderburst = 161,		// issue.perk-action-patching P2: block-replace kBurningHands (x3 damage)
+	kPyromancer = 162,		// issue.perk-action-patching P1-selectors: kBurning on all fire damage spells
+	kMaledictor = 163,		// issue.perk-action-patching P3-selectors: category="curse" pilot
+	kBoneCommander = 164,	// issue #4000: костяной полководец -- открывает особые виды скелетов
 	kFirst = kBerserker,
-	kLast = kPhysicians				// !!! Не забываем менять !!!
+	kLast = kBoneCommander				// !!! Не забываем менять !!!
 };
 
 template<>
 const std::string &NAME_BY_ITEM<EFeat>(EFeat item);
 template<>
 EFeat ITEM_BY_NAME<EFeat>(const std::string &name);
+template<>
+const std::map<EFeat, std::string> &NAMES_OF<EFeat>();  // issue.thing-names: Vedun enum registry
 
 EFeat& operator++(EFeat &f);
 

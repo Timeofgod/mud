@@ -1,0 +1,3934 @@
+# Objects for zone 36
+
+# Object #3600
+0:
+  names:
+    aliases: череп пилатия
+    nominative: '&rчереп_&mПилатия&n'
+    genitive: '&rчерепа_&mПилатия&n'
+    dative: '&rчерепу_&mПилатия&n'
+    accusative: '&rчереп_&mПилатия&n'
+    instrumental: '&rчерепом_&mПилатия&n'
+    prepositional: '&rчерепе_&mПилатия&n'
+  short_desc: '&rЧереп &mПилатия&n лежит здесь. Какой ужас !'
+  type: kLiquidContainer
+  material: 13  # КОСТЬ
+  weight: 205
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 9999
+  cur_durability: 9999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+  extra_descriptions:
+    - keywords: череп пилатия
+      description: |2
+        Гладко отполированный череп некого Пилатия весело блестит на солнышке.
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 200
+    LIQUID_TYPE: 13  # КРОВИ
+
+# Object #3601
+1:
+  names:
+    aliases: луч света
+    nominative: '&Wлуч света&n'
+    genitive: '&Wлуча света&n'
+    dative: '&Wлучу света&n'
+    accusative: '&Wлуч света&n'
+    instrumental: '&Wлучом света&n'
+    prepositional: '&Wлуче света&n'
+  short_desc: Небольшой &Wлучик ослепительного света.&n
+  type: kLiquidContainer
+  material: 13  # КОСТЬ
+  weight: 205
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  wear_flags:
+    - kTake
+    - kNeck
+  extra_descriptions:
+    - keywords: луч света
+      description: |2
+        &WЛуч&n &Cяркого&n, &Wослепительного света.&n
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 200
+    LIQUID_TYPE: 9  # меду
+
+# Object #3602
+2:
+  names:
+    aliases: светящийся солнечный светом кошель
+    nominative: '&Yсолнечный кошель&n'
+    genitive: '&Yсолнечного кошеля&n'
+    dative: '&Yсолнечному кошелю&n'
+    accusative: '&Yсолнечный кошель&n'
+    instrumental: '&Yсолнечным кошелем&n'
+    prepositional: '&Yсолнечном кошеле&n'
+  short_desc: Светящийся &Wярким солнечным светом&Y кошель едва заметно парит над землей.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - 0  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: светящийся солнечный светом кошель
+      description: |2
+        Небольшой кошель, магией сплетенный из лучей солнечного света.
+
+# Object #3603
+3:
+  names:
+    aliases: светящийся лунный светом кошель
+    nominative: '&cлунный кошель&n'
+    genitive: '&cлунного кошеля&n'
+    dative: '&cлунному кошелю&n'
+    accusative: '&cлунный кошель&n'
+    instrumental: '&cлунным кошелем&n'
+    prepositional: '&cлунном кошеле&n'
+  short_desc: Светящийся &cтусклым лунным светом&Y кошель едва заметно парит над землей.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - 0  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: светящийся лунный светом кошель
+      description: |2
+        Небольшой кошель, магией сплетенный из нитей лунного света.
+
+# Object #3604
+4:
+  names:
+    aliases: клубящееся облако тьмы
+    nominative: '&Kклубящееся облако тьмы&n'
+    genitive: '&Kклубящегося облака тьмы&n'
+    dative: '&Kклубящемуся облаку тьмы&n'
+    accusative: '&Kклубящееся облако тьмы&n'
+    instrumental: '&Kклубящимя облаком тьмы&n'
+    prepositional: '&Kклубящемся облаке тьмы&n'
+  short_desc: '&KМаленькое темное облако стелется под ногами.&n'
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 3  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 99999
+  cur_durability: 99999
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: клубящееся облако тьмы
+      description: |2
+        &KТемное облако парит невысоко над землей.&n
+
+# Object #3605
+5:
+  names:
+    aliases: сизый туманная сумка контрабандиста
+    nominative: туманная сумка контрабандиста
+    genitive: туманной сумки контрабандиста
+    dative: туманной сумке контрабандиста
+    accusative: туманную сумку контрабандиста
+    instrumental: туманной сумкой контрабандиста
+    prepositional: туманной сумке контрабандиста
+  short_desc: '&KСизый туман стелется под ногами.&n'
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сизый туманная сумка контрабандиста
+      description: |2
+        Лишь вглядевшись в сизую дымку, Вы 
+        заметили едва различимые формы сумы,
+        сотканной из плотного тумана.
+
+# Object #3606
+6:
+  names:
+    aliases: сияние сумка
+    nominative: '&Wсияние&n'
+    genitive: '&Wсияния&n'
+    dative: '&Wсиянию&n'
+    accusative: '&Wсияние&n'
+    instrumental: '&Wсиянием&n'
+    prepositional: '&Wсиянии&n'
+  short_desc: '&WЧто-то ослепительно сияющее, заставляет ваши глаза слезиться.&n'
+  type: kContainer
+  material: 14  # ТКАНЬ
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сияние сумка
+      description: |2
+        Сгусток яркого, ослепительного света.
+
+# Object #3607
+7:
+  names:
+    aliases: деревянная кружка
+    nominative: деревянная кружка
+    genitive: деревянной кружки
+    dative: деревянной кружке
+    accusative: деревянную кружку
+    instrumental: деревянной кружкой
+    prepositional: деревянной кружке
+  short_desc: Крупная деревянная кружка оставлена здесь кем-то.
+  type: kLiquidContainer
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  weight: 1005
+  cost: 100
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kNamed
+  wear_flags:
+    - kTake
+    - kHold
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 1000
+    LIQUID_TYPE: 0  # воды
+
+# Object #3608
+8:
+  names:
+    aliases: киса паруса
+    nominative: '&Gкиса для паруса&n'
+    genitive: '&Gкисы для паруса&n'
+    dative: '&Gкисе для паруса&n'
+    accusative: '&Gкису для паруса&n'
+    instrumental: '&Gкисой для паруса&n'
+    prepositional: '&Gкисе для паруса&n'
+  short_desc: Киса для парусов лежит здесь.
+  type: kContainer
+  material: 14  # ТКАНЬ
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: киса паруса
+      description: |2
+        Хитрая мордочка Корабельного Кота вышита на одной из сторон.
+
+# Object #3609
+9:
+  names:
+    aliases: торба сум узелок
+    nominative: '&bперламутровая&n торба &gнеизвестного странника&n'
+    genitive: '&bперламутровой&n торбы &gнеизвестного странника&n'
+    dative: '&bперломутровой&n торбе &gнеизвестного странника&n'
+    accusative: '&bперламутровую&n торбу &gнеизвестного странника&n'
+    instrumental: '&bперламутровой&n торбой &gнеизвестного странника&n'
+    prepositional: '&bперламутровой&n торбе &gнеизвестного странника&n'
+  short_desc: Приглядевшись, вы заметили перламутровую торбу какого-то странника.
+  type: kContainer
+  material: 17  # БЕРЕСТА
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3610
+10:
+  names:
+    aliases: сумка брюхо гриба боброглота
+    nominative: брюхо &Rг&Wр&Rи&Wб&Rа&g-боброглота&n
+    genitive: брюха &Rг&Wр&Rи&Wб&Rа&g-боброглота&n
+    dative: брюху &Rг&Wр&Rи&Wб&Rа&g-боброглота&n
+    accusative: брюхо &Rг&Wр&Rи&Wб&Rа&g-боброглота&n
+    instrumental: брюхом &Rг&Wр&Rи&Wб&Rа&g-боброглота&n
+    prepositional: брюхе &Rг&Wр&Rи&Wб&Rа&g-боброглота&n
+  short_desc: Брюхо гриба-боброглота весело урчит и подрагивает здесь.
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сумка брюхо гриба боброглота
+      description: |2
+        Огромный живот невиданного существа, перевязанный кишкой, подрагивает и ухает.
+        Из него доносится стоны полупереваренных бобров.
+
+# Object #3611
+11:
+  names:
+    aliases: светящийся мигающим светом звездный кошель
+    nominative: '&Wзвездный кошель&n'
+    genitive: '&Wзвездного кошеля&n'
+    dative: '&Wзвездному кошелю&n'
+    accusative: '&Wзвездный кошель&n'
+    instrumental: '&Wзвездным кошелем&n'
+    prepositional: '&Wзвездном кошеле&n'
+  short_desc: Светящийся &Cслабым мигающим светом&Y кошель едва заметно парит над землей.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - 0  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: светящийся звездным светом кошель
+      description: |2
+        Небольшой кошель, магией сплетенный из нитей звездного света.
+
+# Object #3612
+12:
+  names:
+    aliases: охотничий мешок моясумка
+    nominative: '&gохотничий мешок&n'
+    genitive: '&gохотничьего мешка&n'
+    dative: '&gохотничьему мешку&n'
+    accusative: '&gохотничий мешок&n'
+    instrumental: '&gохотничьим мешком&n'
+    prepositional: '&gохотничьем мешке&n'
+  short_desc: Какой-то охотник потерял здесь свой мешок.
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: охотничий мешок моясумка
+      description: |2
+        Судя по надписи, этот мешок принадлежит охотнику под именем Ярий.
+        <Верните, пожалуйста, в целости и сохранности.> - также гласит надпись.
+
+# Object #3613
+13:
+  names:
+    aliases: дивный наполненный огнем кубок
+    nominative: '&Rнаполненный огнем кубок&n'
+    genitive: '&Rнаполненного огнем кубка&n'
+    dative: '&Rнаполненному огнем кубку&n'
+    accusative: '&Rнаполненный огнем кубок&n'
+    instrumental: '&Rнаполненным огнем кубком&n'
+    prepositional: '&Rнаполненном огнем кубке&n'
+  short_desc: '&RДивный кубок, доверху наполненный огнем, оставлен тут своим владельцем.&n'
+  type: kLiquidContainer
+  material: 6  # ДРАГ.МЕТАЛЛ
+  weight: 1005
+  cost: 100
+  rent_off: 0
+  rent_on: 0
+  max_durability: 200
+  cur_durability: 200
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: дивный наполненный огнем кубок
+      description: |2
+        До краев наполненный огнем кубок с выгравированными на стенках чудными изображениями
+        Огненного змея, Скипер-зверя, огненных саламандр, великанов, вихрей и элементалей.
+        Кубок источает ярчайший свет, который режет глаза, а стенки его дышат таким жаром,
+        что невозможно взять в руки.
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 1000
+    LIQUID_TYPE: 0  # воды
+    POTION_SPELL1_LVL: 50
+
+# Object #3614
+14:
+  names:
+    aliases: человечий желудочек
+    nominative: '&Kчеловечий&n &Rжелудочек&n'
+    genitive: '&Kчеловечьего&n &Rжелудочка&n'
+    dative: '&Kчеловечьему&n &Rжелудочку&n'
+    accusative: '&Kчеловечий&n &Rжелудочек&n'
+    instrumental: '&Kчеловечьим&n &Rжелудочком&n'
+    prepositional: '&Kчеловечьем&n &Rжелудочке&n'
+  short_desc: Огромный человеческий орган, окруженный мухами, изрыгает какую-то жижу.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: человечий желудочек
+      description: |2
+        Склизкий желудок огромных размеров. Бывший владелец был невероятным толстяком!
+
+# Object #3615
+15:
+  names:
+    aliases: брюхо стада безумных ежей
+    nominative: '&Yбрюхо из стада&n &BБезумных Ежей&n'
+    genitive: '&Yбрюха из стада&n &BБезумных Ежей&n'
+    dative: '&Yбрюху из стада&n &BБезумных Ежей&n'
+    accusative: '&Yбрюхо из стада&n &BБезумных Ежей&n'
+    instrumental: '&Yбрюхом из стада&n &BБезумных Ежей&n'
+    prepositional: '&Yбрюхе из стада&n &BБезумных Ежей&n'
+  short_desc: '&RЧто-то невероятно колючее&n и &Wфыркающее&n &Kхочет затоптать&n &Gвас своими лапками.&n'
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3616
+16:
+  names:
+    aliases: сумка-науз-символом-льва
+    nominative: '&Wнауз с символом&n &YЛьва&n'
+    genitive: '&Wнауза с символом&n &YЛьва&n'
+    dative: '&Wнаузу с символом&n &YЛьва&n'
+    accusative: '&Wнауз с символом&n &YЛьва&n'
+    instrumental: '&Wнаузом с символом&n &YЛьва&n'
+    prepositional: '&Wнаузе с символом&n &YЛьва&n'
+  short_desc: '&WНауз на серебрянной цепочке мерцает магическим светом.&n'
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - 0  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 400
+  cur_durability: 400
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kBless
+    - kNosell
+    - kNodecay
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сумка_науз_символом_льва
+      description: |2
+        Созданный руками мага науз с вышитым шелковой ниткой гордым символом Льва, который олицетворяет солнечную энергию, силу, храбрость и мудрость.
+        Это защитный символ, связанный с благородством и заботой о слабых. Науз заботливо перетянут серебрянной цепочкой.
+
+# Object #3617
+17:
+  names:
+    aliases: сумка-косметичка
+    nominative: '&Yкосметичка&n'
+    genitive: '&Yкосметички&n'
+    dative: '&Yкосметичке&n'
+    accusative: '&Yкосметичку&n'
+    instrumental: '&Yкосметичкой&n'
+    prepositional: '&Yкосметичке&n'
+  short_desc: '&YЗабытая кем-то Дамская сумочка лежит на земле.&n'
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - 0  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 400
+  cur_durability: 400
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kBless
+    - kNosell
+    - kNodecay
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: косметичка сумка
+      description: |2
+        И как туда столько Барахла влазит?... (вечный вопрос мужчин! )
+
+# Object #3618
+18:
+  names:
+    aliases: подсумок ленивого бегемота сумка
+    nominative: '&yподсумок&n &mЛенивого Бегемота&n'
+    genitive: '&yподсумка&n &mЛенивого Бегемота&n'
+    dative: '&yподсумку&n &mЛенивого Бегемота&n'
+    accusative: '&yподсумок&n &mЛенивого Бегемота&n'
+    instrumental: '&yподсумком&n &mЛенивого Бегемота&n'
+    prepositional: '&yподсумке&n &mЛенивого Бегемота&n'
+  short_desc: На земле лежит кусок шкуры &mбегемота&n.
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 3999  # макс. вместимый вес
+    - 0  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kFinger
+    - kNeck
+    - kHead
+    - kFeet
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: подсумок ленивого бегемота сумка
+      description: |2
+        Кусок шкуры с самого ленивого существа на свете, того и гляди накроет вас одеялом.
+
+# Object #3619
+19:
+  names:
+    aliases: сумка невидимка
+    nominative: '&rс&Yу&Cм&Gк&Bа&r-&Bн&rе&Yв&Rи&Gд&Bи&Rм&Gк&Bа&n'
+    genitive: '&rс&Yу&Cм&Gк&Bи&r-&Bн&rе&Yв&Rи&Gд&Bи&Rм&Gк&Bи&n'
+    dative: '&rс&Yу&Cм&Gк&Bе&r-&Bн&rе&Yв&Rи&Gд&Bи&Rм&Gк&Bе&n'
+    accusative: '&rс&Yу&Cм&Gк&Bу&r-&Bн&rе&Yв&Rи&Gд&Bи&Rм&Gк&Bу&n'
+    instrumental: '&rс&Yу&Cм&Gк&Bой&r-&Bн&rе&Yв&Rи&Gд&Bи&Rм&Gк&Bой&n'
+    prepositional: '&rс&Yу&Cм&Gк&Bе&r-&Bн&rе&Yв&Rи&Gд&Bи&Rм&Gк&Bе&n'
+  short_desc: Некая полупрозрачная субстанция с очертаниями напоминающими сумку лежит здесь.
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - 0  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 500
+  cur_durability: 500
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kNodonate
+    - kBless
+    - kNosell
+    - kNodecay
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сумка невидимка
+      description: |2
+        Данный артефакт, обязан своей диковинностью материалу, из которого он сделан.
+        А творят его из шкуры суслика. Трофей знатный, так как времени на поимку "того
+        самого" суслика уходит немало. Особую изюминку добавляет тот нюанс, что не
+        вполне понятно, какое всё же действие оказывает этот, безусловно, интересный
+        трофей: сама сумка практически не видна, но её содержимое видно прекрасно, что
+        позволяет всем окружающим проникаться безусловным величием славного героя.
+
+# Object #3620
+20:
+  names:
+    aliases: рюкзак сердца ледяного дракона сумка
+    nominative: '&Kрюкзак&n &Wиз&n &Rсердца&n &CЛедяного дракона&n'
+    genitive: '&Kрюкзака&n &Wиз&n &Rсердца&n &CЛедяного дракона&n'
+    dative: '&Kрюкзаку&n &Wиз&n &Rсердца&n &CЛедяного дракона&n'
+    accusative: '&Kрюкзак&n &Wиз&n &Rсердца&n &CЛедяного дракона&n'
+    instrumental: '&Kрюкзаком&n &Wиз&n &Rсердца&n &CЛедяного дракона&n'
+    prepositional: '&Kрюкзаке&n &Wиз&n &Rсердца&n &CЛедяного дракона&n'
+  short_desc: Огромное &Rсердце&n &CЛедяного дракона&n слегка пульсирует здесь.
+  type: kContainer
+  material: 7  # КРИСТАЛЛ
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: рюкзак сердца ледяного дракона сумка
+      description: |2
+        Огромное сердце, вырванное из груди Ледяного дракона,
+        немного пульсирует и обжигает невыносимым холодом.
+
+# Object #3621
+21:
+  names:
+    aliases: большая сума чешуи двухголового змея сумка
+    nominative: '&Kбольшая сума из чешуи Двухголового Змея&n'
+    genitive: '&Kбольшой сумы из чешуи Двухголового Змея&n'
+    dative: '&Kбольшой суме из чешуи Двухголового Змея&n'
+    accusative: '&Kбольшую суму из чешуи Двухголового Змея&n'
+    instrumental: '&Kбольшой сумой из чешуи Двухголового Змея&n'
+    prepositional: '&Kбольшой суме из чешуи Двухголового Змея&n'
+  short_desc: '&KБольшая сума из чешуи Двухголового Змея&n лежит здесь'
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: сума
+      description: |2
+        ___Эта сума сделана из чешуи одного из самых опасных
+        существ, населяющих Великую Русь, Двухголового 
+        Черного Змея. Видимо, владелец данной сумы обладает
+        огромной властью, раз сумел убить такое чудище.
+        На самой суме Вы видите небольшой знак нетопыря.
+        Наверное, это какой-то символ, который что-то значит
+        для владельца.
+  triggers:
+    - 3601  # именной шмот - карн
+
+# Object #3622
+22:
+  names:
+    aliases: котел пожирателя душ сумка
+    nominative: '&Kкотел п&cож&Cират&cел&Kя душ&n'
+    genitive: '&Kкотла п&cож&Cират&cел&Kя душ&n'
+    dative: '&Kкотлу п&cож&Cират&cел&Kя душ&n'
+    accusative: '&Kкотел п&cож&Cират&cел&Kя душ&n'
+    instrumental: '&Kкотлом п&cож&Cират&cел&Kя душ&n'
+    prepositional: '&Kкотле п&cож&Cират&cел&Kя душ&n'
+  short_desc: Котел из черного металла заполнен светящейся шипящей жидкостью
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kMagic
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: сумка котел душ
+      description: |2
+        ___Этот котел является даром темных сил смертному, выполняющему обязанности
+        жнеца душ. Материалом для него послужил черный металл полученный в адских 
+        котлах из тел грешников. В светящейся голубоватой жидкости, в 
+        потустороннем мире, несет свою службу древний змей - страж заключенных в 
+        котел потерянных душ.
+
+# Object #3623
+23:
+  names:
+    aliases: пустота сумка
+    nominative: '&Kпустота&n'
+    genitive: '&Kпустоты&n'
+    dative: '&Kпустоте&n'
+    accusative: '&Kпустоту&n'
+    instrumental: '&Kпустотой&n'
+    prepositional: '&Kпустоте&n'
+  short_desc: Зияющая &Kпустота&n завораживает взгляд.
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: пустота сумка
+      description: |2
+        Ваши глаза уставились в пустоту!
+
+# Object #3624
+24:
+  names:
+    aliases: торба купеческая
+    nominative: '&Kторба купеческая&n'
+    genitive: '&Kторбы купеческой&n'
+    dative: '&Kторбе купеческой&n'
+    accusative: '&Kторбу купеческую&n'
+    instrumental: '&Kторбой купеческой&n'
+    prepositional: '&Kторбе купеческой&n'
+  short_desc: Пыльная торба валяется здесь.
+  type: kContainer
+  material: 14  # ТКАНЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 1
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3625
+25:
+  names:
+    aliases: бездна сумка
+    nominative: '&Kбездна&n'
+    genitive: '&Kбездны&n'
+    dative: '&Kбездне&n'
+    accusative: '&Kбездну&n'
+    instrumental: '&Kбездной&n'
+    prepositional: '&Kбездне&n'
+  short_desc: Огромное отверстие в земле, невероятных размеров и глубины.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3626
+26:
+  names:
+    aliases: Пасть Мироеда
+    nominative: '&Rпасть Мироеда&n'
+    genitive: '&Rпасти Мироеда&n'
+    dative: '&Rпасти Мироеда&n'
+    accusative: '&Rпасть Мироеда&n'
+    instrumental: '&Rпастью Мироеда&n'
+    prepositional: '&Rпасти Мироеда&n'
+  short_desc: Огромная зубастая пасть в земле облизывается и причмокивает губами.
+  type: kContainer
+  material: 13  # КОСТЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: Пасть Мироеда
+      description: |2
+        Это огромная пасть с мясистыми ярко-красными губами,
+        набором белосженых зубищ и мелькающим в глубине длинным языком.
+
+# Object #3627
+27:
+  names:
+    aliases: сума великого целителя
+    nominative: '&Kсума великого целителя&n'
+    genitive: '&Kсумы великого целителя&n'
+    dative: '&Kсуме великого целителя&n'
+    accusative: '&Kсуму великого целителя&n'
+    instrumental: '&Kсумой великого целителя&n'
+    prepositional: '&Kсуме великого целителя&n'
+  short_desc: Сума из светлой ткани с красивым орнаментом лежит здесь.
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+  triggers:
+    - 3602  # именной шмот - хиля
+
+# Object #3628
+28:
+  names:
+    aliases: холщовый куль ведуна сумка
+    nominative: '&gх&n&yо&n&Kл&n&gщ&n&yо&n&Kв&n&gы&n&yй&n &gк&n&yу&n&Kл&n&gь&n &gв&n&yе&n&Kд&n&gу&n&yн&n&Kа&n'
+    genitive: '&gх&n&yо&n&Kл&n&gщ&n&yо&n&Kв&n&gо&n&yг&n&Kо&n &gк&n&yу&n&Kл&n&gя&n &gв&n&yе&n&Kд&n&gу&n&yн&n&Kа&n'
+    dative: '&gх&n&yо&n&Kл&n&gщ&n&yо&n&Kв&n&gо&n&yм&n&Kу&n &gк&n&yу&n&Kл&n&gю&n &gв&n&yе&n&Kд&n&gу&n&yн&n&Kа&n'
+    accusative: '&gх&n&yо&n&Kл&n&gщ&n&yо&n&Kв&n&gы&n&yй&n &gк&n&yу&n&Kл&n&gь&n &gв&n&yе&n&Kд&n&gу&n&yн&n&Kа&n'
+    instrumental: '&gх&n&yо&n&Kл&n&gщ&n&yо&n&Kв&n&gы&n&yм&n &gк&n&yу&n&Kл&n&gе&n&yм&n &gв&n&yе&n&Kд&n&gу&n&yн&n&Kа&n'
+    prepositional: '&gх&n&yо&n&Kл&n&gщ&n&yо&n&Kв&n&gо&n&yм&n &gк&n&yу&n&Kл&n&gе&n &gв&n&yе&n&Kд&n&gу&n&yн&n&Kа&n'
+  short_desc: Огромный холщовый куль лежит на земле, как всякий другой мешок.
+  type: kContainer
+  material: 14  # ТКАНЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: холщовый куль ведуна сумка
+      description: |2
+        Огромный мешок из плотной холщовой ткани лежит под ногами.
+        Мешок изрядно поношен, с множеством, акуратно пришитых, ровненьких заплаток.
+        У тропинки его можно принять за камень если б не эти опрятные,
+        но пёстрые заплатки. Они, как бы невпопад, расбросаны по всему кулю,
+        но в тоже время на них и держится все эта мешковина. Часть заплаток образуют множество
+        карманов из которых то и дело торчат корни трав, листья, прутья, сушеные лягушки и ящерицы.
+
+# Object #3629
+29:
+  names:
+    aliases: темная пирамида безмолвия
+    nominative: '&Kтемная&n &WПирамида Безмолвия&n'
+    genitive: '&Kтемной&n &WПирамиды Безмолвия&n'
+    dative: '&Kтемной&n &WПирамиде Безмолвия&n'
+    accusative: '&Kтемную&n &WПирамиду Безмолвия&n'
+    instrumental: '&Kтемной&n &WПирамидой Безмолвия&n'
+    prepositional: '&Kтемной&n &WПирамиде Безмолвия&n'
+  short_desc: Маленькая Истинно-Черная Пирамидка заглушающая каждый писк лежит на земле.
+  type: kLiquidContainer
+  material: 12  # КАМЕНЬ
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 9999
+  cur_durability: 9999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 1
+    LIQUID_TYPE: 13  # КРОВИ
+
+# Object #3630
+30:
+  names:
+    aliases: боксерская перчатка сумка
+    nominative: '&Rбоксерская&n &yПерчатка&n'
+    genitive: '&Rбоксерской&n &yПерчатки&n'
+    dative: '&Rбоксерской&n &yПерчатке&n'
+    accusative: '&Rбоксерскую&n &yПерчатку&n'
+    instrumental: '&Rбоксерской&n &yПерчаткой&n'
+    prepositional: '&Rбоксерской&n &yПерчатке&n'
+  short_desc: '&RЧто-то&n &yзакругленное,&n &Rлежит здесь в луже крови&n &Wи обломках зубов.&n'
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+    - kHold
+  extra_descriptions:
+    - keywords: боксерская перчатка сумка
+      description: |2
+        Нормальная такая Боксерская Перчатка, пудов тридцать весом.
+
+# Object #3631
+31:
+  names:
+    aliases: замшевый чулок страсти сумка
+    nominative: '&Kзамшевый &Wчулок &Rс&Cт&Rр&Cа&Rс&Cт&Rи&n'
+    genitive: '&Kзамшевого &Wчулка &Rс&Cт&Rр&Cа&Rс&Cт&Rи&n'
+    dative: '&Kзамшевому &Wчулку &Rс&Cт&Rр&Cа&Rс&Cт&Rи&n'
+    accusative: '&Kзамшевый &Wчулок &Rс&Cт&Rр&Cа&Rс&Cт&Rи&n'
+    instrumental: '&Kзамшевым &Wчулком &Rс&Cт&Rр&Cа&Rс&Cт&Rи&n'
+    prepositional: '&Kзамшевом &Wчулке &Rс&Cт&Rр&Cа&Rс&Cт&Rи&n'
+  short_desc: Потерянный &Wчулок&n лежит здесь.
+  type: kContainer
+  material: 14  # ТКАНЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kLegs
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: замшевый чулок страсти сумка
+      description: |2
+        Экстравагантный чулок в сеточку.
+
+# Object #3632
+32:
+  names:
+    aliases: облако сумка
+    nominative: '&Cоблако&n'
+    genitive: '&Cоблака&n'
+    dative: '&Cоблаку&n'
+    accusative: '&Cоблако&n'
+    instrumental: '&Cоблаком&n'
+    prepositional: '&Cоблаке&n'
+  short_desc: Магическое &Cо&cб&Cл&cа&Cк&cо &Wпарит над землей.&n
+  type: kContainer
+  material: 7  # КРИСТАЛЛ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kHead
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: магическое облако сумка
+      description: |2
+        Полупрозрачный сгусток магии и мириадов капелек воды, кажеться может поглотить весь мир.
+
+# Object #3633
+33:
+  names:
+    aliases: Кипящий адский котел сумка
+    nominative: '&Kкипящий &rадский &Kк&Rо&Kт&Rе&Kл&n'
+    genitive: '&Kкипящего &rадского &Kк&Rо&Kт&Rл&Kа&n'
+    dative: '&Kкипящему &rадскому &Kк&Rо&Kт&Rл&Kу&n'
+    accusative: '&Kкипящий &rадский &Kк&Rо&Kт&Rе&Kл&n'
+    instrumental: '&Kкипящим &rадским &Kк&Rо&Kт&Rл&Kо&Rм&n'
+    prepositional: '&Kкипящем &rадском &Kк&Rо&Kт&Rл&Kе&n'
+  short_desc: '&KКипящий &rадский &Kк&Rо&Kт&Rе&Kл&n стоит тут в ожидание &Kпогибшых душ &Rгрешников&n.'
+  type: kContainer
+  material: 10  # КЕРАМИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: Кипящий адский котел сумка
+      description: |2
+        Завораживающее зрелище, когда Вы видите как погибшие души варятся в собственном соку .
+        Брызги кипятка беспорядочно вырываются из адского котла.
+
+# Object #3634
+34:
+  names:
+    aliases: воровской общак сумка
+    nominative: '&Kворовской Общак&n'
+    genitive: '&Kворовского Общака&n'
+    dative: '&Kворовскому Общаку&n'
+    accusative: '&Kворовской Общак&n'
+    instrumental: '&Kворовским Общаком&n'
+    prepositional: '&Kворовском Общаке&n'
+  short_desc: '&KЗдоровенный котел, полный ЧУЖОГО добра, с гравированными куполами, звездами ветров и карточными мастями&n аккуратно поставлен тут.'
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: воровской общак сумка
+      description: |2
+        &KЗдоровенный котел с гравированными куполами с крестами, розами ветров и карточными мастями аккуратно поставлен тут &RНЕ ТОБОЙ!&n
+
+# Object #3635
+35:
+  names:
+    aliases: капля
+    nominative: '&cкапля&n'
+    genitive: '&cкапли&n'
+    dative: '&cкапле&n'
+    accusative: '&cкаплю&n'
+    instrumental: '&cкаплей&n'
+    prepositional: '&cкапле&n'
+  short_desc: Магическая &cКапля&n растеклась под вашими ногами.
+  type: kLiquidContainer
+  material: 7  # КРИСТАЛЛ
+  weight: 1005
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kFinger
+    - kNeck
+    - kWrist
+    - kHold
+  extra_descriptions:
+    - keywords: магическая капля
+      description: |2
+        &cМагические частички воды застыли во времени,&n
+        &cобразуя прозрачный сосуд виде блестящей капли.&n
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 1000
+    LIQUID_TYPE: 15  # родниковой воды
+
+# Object #3636
+36:
+  names:
+    aliases: мошна куча всякого хлама
+    nominative: '&Wкуча&n &Bвсякого&n &Rхлама&n'
+    genitive: '&Wкучи&n &Bвсякого&n &Rхлама&n'
+    dative: '&Wкуче&n &Bвсякого&n &Rхлама&n'
+    accusative: '&Wкучу&n &Bвсякого&n &Rхлама&n'
+    instrumental: '&Wкучей&n &Bвсякого&n &Rхлама&n'
+    prepositional: '&Wкуче&n &Bвсякого&n &Rхлама&n'
+  short_desc: '&WКучай&n &Bвсякого&n &Rхлама&n валяется под ногами.'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: мошна куча всякого хлама
+      description: |2
+        &WКуча&n &Bвсякого&n &Rхлама&n &Wнакидана&n &bв овощную&n &Rсетку.&n
+
+# Object #3637
+37:
+  names:
+    aliases: старый кожаный дипломат сумка
+    nominative: '&rстарый кожаный &Kдипломат&n'
+    genitive: '&rcтарого кожаного &Kдипломатa&n'
+    dative: '&rстарому кожаному &Kдипломату&n'
+    accusative: '&rстарый кожаный &Kдипломат&n'
+    instrumental: '&rстарым кожаным &Kдипломатом&n'
+    prepositional: '&rстаром кожаном &Kдипломате&n'
+  short_desc: Кем-то забытый дипломат, набитый бумагами и какими-то странным штукам, валяется тут
+  type: kContainer
+  material: 6  # ДРАГ.МЕТАЛЛ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: старый кожаный дипломат сумка
+      description: |2
+        Вы держите в руках вещь, которая досталась вам от Гвалиора. Ведь именно он учил вас всем тем трюкам, котороые сейчас вы используете еждневно. 
+    - keywords: test
+      description: |2
+        test2
+
+# Object #3638
+38:
+  names:
+    aliases: Окровавленная торба
+    nominative: '&rо&n&Rкровавленная&n &rт&n&Rорба&n'
+    genitive: '&rо&n&Rкровавленной&n &rт&n&Rорбы&n'
+    dative: '&rо&n&Rкровавленной&n &rт&n&Rорбе&n'
+    accusative: '&rо&n&Rкровавленную&n &rт&n&Rорбу&n'
+    instrumental: '&rо&n&Rкровавленной&n &rт&n&Rорбой&n'
+    prepositional: '&rо&n&Rкровавленной&n &rт&n&Rорбе&n'
+  short_desc: Вместительная торба почти вся заляпана кровью. Интересно, что случилось с ее хозяином?
+  type: kContainer
+  material: 6  # ДРАГ.МЕТАЛЛ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kNosell
+    - kSwimming
+    - kNolocate
+    - kNoalter
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: undefined
+      description: |2
+        То ли сумка, то ли рюкзак из толстой кожи редкого животного с многочисленными маленькими кормашками и клапанами.
+
+# Object #3639
+39:
+  names:
+    aliases: пылающий вихрь сума
+    nominative: '&Rпылающий &Wвихрь&n'
+    genitive: '&Rпылающего &Wвихря&n'
+    dative: '&Rпылающему &Wвихрю&n'
+    accusative: '&Rпылающий &Wвихрь&n'
+    instrumental: '&Rпылающим &Wвихрем&n'
+    prepositional: '&Rпылающем &Wвихре&n'
+  short_desc: '&RПылающий &Wвихрь &rбушует &gздесь.&n'
+  type: kContainer
+  material: 18  # ДРАГ.КАМЕНЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 3  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 300
+  cur_durability: 300
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNoalter
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+
+# Object #3640
+40:
+  names:
+    aliases: сумка внутренности
+    nominative: '&Kв&n&Rн&n&Wу&n&rт&n&Kр&n&Rе&n&Wн&n&rн&n&Kо&n&Rс&n&Wт&n&rи&n'
+    genitive: '&Kв&n&Rн&n&Wу&n&rт&n&Kр&n&Rе&n&Wн&n&rн&n&Kо&n&Rс&n&Wт&n&rе&n&Kй&n'
+    dative: '&Kв&n&Rн&n&Wу&n&rт&n&Kр&n&Rе&n&Wн&n&rн&n&Kо&n&Rс&n&Wт&n&rя&n&Kм&n'
+    accusative: '&Kв&n&Rн&n&Wу&n&rт&n&Kр&n&Rе&n&Wн&n&rн&n&Kо&n&Rс&n&Wт&n&rи&n'
+    instrumental: '&Kв&n&Rн&n&Wу&n&rт&n&Kр&n&Rе&n&Wн&n&rн&n&Kо&n&Rс&n&Wт&n&rя&n&Kм&n&Rи&n'
+    prepositional: '&Kв&n&Rн&n&Wу&n&rт&n&Kр&n&Rе&n&Wн&n&rн&n&Kо&n&Rс&n&Wт&n&rя&n&Kх&n'
+  short_desc: Пульсирующие внутренности источают зловонный запах.
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 999  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kPoly
+  extra_flags:
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3641
+41:
+  names:
+    aliases: воздушная пудреница зеркальцем сумка
+    nominative: '&cвоздушная &Mпудреница с &Wзеркальцем&n'
+    genitive: '&cвоздушной &Mпудреницы с &Wзеркальцем&n'
+    dative: '&cвоздушной &Mпудренице с &Wзеркальцем&n'
+    accusative: '&cвоздушную &Mпудреницу с &Wзеркальцем&n'
+    instrumental: '&cвоздушной &Mпудреницей с &Wзеркальцем&n'
+    prepositional: '&cвоздушной &Mпудренице с &Wзеркалльцем&n'
+  short_desc: '&cМаленькая косметичка лежит на земле.&n'
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNoalter
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: воздушная пудреница зеркальцем сумка
+      description: |2
+        Коробочка с пудрой.
+
+# Object #3642
+42:
+  names:
+    aliases: золотая бочка зеленым змием сумка
+    nominative: '&Yзолотая &yбочка с &Gзеленым &gзмием&n'
+    genitive: '&Yзолотой &yбочки с &Gзеленым &gзмием&n'
+    dative: '&Yзолотой &yбочке с &Gзеленым &gзмием&n'
+    accusative: '&Yзолотую &yбочку с &Gзеленым &gзмием&n'
+    instrumental: '&Yзолотой &yбочкой с &Gзеленым &gзмием&n'
+    prepositional: '&Yзолотой &yбочке с &Gзеленым &gзмием&n'
+  short_desc: '&YЗолотая &yбочка с &Gзеленым &gзмием&n испускает дурманящий запах.'
+  type: kContainer
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: золотая бочка зеленым змием сумка
+      description: |2
+        Присмотревшись к бочке, вы увидели нацарапанную надпись...
+        Даже если спирт замерзнет,
+        Все равно его не брошу
+        Буду грызть его зубами,
+        Потому что он хороший.
+
+# Object #3643
+43:
+  names:
+    aliases: Пасть Дракона сумка
+    nominative: '&Rпасть &YДракона&n'
+    genitive: '&Rпасти &YДракона&n'
+    dative: '&Rпасти &YДракона&n'
+    accusative: '&Rпасть &YДракона&n'
+    instrumental: '&Rпастью &YДракона&n'
+    prepositional: '&Rпасти &YДракона&n'
+  short_desc: Огромный баул в виде &RПасти &Y Дракона&n лежит здесь.
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kInvisible
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kHead
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3644
+44:
+  names:
+    aliases: Коробочка для рун сумка
+    nominative: '&Bкоробочка&n &Yдля рун&n'
+    genitive: '&Bкоробочки&n &Yдля рун&n'
+    dative: '&Bкоробочке&n &Yдля рун&n'
+    accusative: '&Bкоробочку&n &Yдля рун&n'
+    instrumental: '&Bкоробочкой&n &Yдля рун&n'
+    prepositional: '&Bкоробочке&n &Yдля рун&n'
+  short_desc: Коробочка с богатствами лежит здесь.
+  type: kContainer
+  material: 8  # ДЕРЕВО
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kHead
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3645
+45:
+  names:
+    aliases: бычья мошна
+    nominative: '&Rб&Gы&Rч&Gь&Rя м&Gо&Rш&Gн&Rа&n'
+    genitive: '&Rб&Gы&Rч&Gь&Rей м&Gо&Rш&Gн&Rы&n'
+    dative: '&Rб&Gы&Rч&Gь&Rей м&Gо&Rш&Gн&Rе&n'
+    accusative: '&Rб&Gы&Rч&Gь&Rю м&Gо&Rш&Gн&Rу&n'
+    instrumental: '&Rб&Gы&Rч&Gь&Rей м&Gо&Rш&Gн&Rой&n'
+    prepositional: '&Rб&Gы&Rч&Gь&Rей м&Gо&Rш&Gн&Rе&n'
+  short_desc: '&RБ&Gы&Rч&Gь&Rя м&Gо&Rш&Gн&Rа&n &Gваляется тут,&R ПРИВЛЕКАЯ ВНИМАНИЕ!&n'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: бычья мошна
+      description: |2
+        &GРади этого &Rз&Gа&Rм&Gш&Rе&Gв&Rо&Gг&Rо м&Gе&Rш&Gо&Rч&Gк&Rа &Gбыку пришлось пожертвовать &Rсамым дорогим!&n
+
+# Object #3646
+46:
+  names:
+    aliases: Бутылка Женская Грудь
+    nominative: '&Cбутылка&n &Wв форме&n &MЖенской&n &RГруди&n'
+    genitive: '&Cбутылки&n &Wв форме&n &MЖенской&n &RГруди&n'
+    dative: '&Cбутылке&n &Wв форме&n &MЖенской&n &RГруди&n'
+    accusative: '&Cбутылку&n &Wв форме&n &MЖенской&n &RГруди&n'
+    instrumental: '&Cбутылкой&n &Wв форме&n &MЖенской&n &RГруди&n'
+    prepositional: '&Cбутылке&n &Wв форме&n &MЖенской&n &RГруди&n'
+  short_desc: Красивая, округлая штука приковывает Ваше внимание.
+  action_desc: |2
+    Прекраснее нее Вы никогда ничего не видели и не трогали! Так и хочется взять, и никогда с ней не расставаться!
+  type: kLiquidContainer
+  material: 11  # СТЕКЛО
+  weight: 1005
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kFinger
+    - kNeck
+    - kHold
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 1000
+    LIQUID_TYPE: 15  # родниковой воды
+
+# Object #3647
+47:
+  names:
+    aliases: темный грааль родниковой водой
+    nominative: '&Kтемный&n &RГрааль&n с родниковой водой'
+    genitive: '&Kтемного&n &RГрааля&n с родниковой водой'
+    dative: '&Kтемному&n &RГраалю&n с родниковой водой'
+    accusative: '&Kтемный&n &RГрааль&n с родниковой водой'
+    instrumental: '&Kтемным&n &RГраалем&n с родниковой водой'
+    prepositional: '&Kтемном&n &RГраале&n с родниковой водой'
+  short_desc: Кубок из черного золота до краев наполненный слезами.
+  type: kLiquidContainer
+  material: 0  # НЕИЗВЕСТЕН
+  weight: 1005
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kFinger
+    - kNeck
+    - kHold
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 1000
+    LIQUID_TYPE: 15  # родниковой воды
+
+# Object #3648
+48:
+  names:
+    aliases: Что-то маленькое и урчащее
+    nominative: '&Kчто-то маленькое и урчащее&n'
+    genitive: '&Kчего-то маленького и урчащего&n'
+    dative: '&Kчему-то маленькому и урчащему&n'
+    accusative: '&Kчто-то маленькое и урчащее&n'
+    instrumental: '&Kчем-то маленьким и урчащим&n'
+    prepositional: '&Kчем-то маленьком и урчащем&n'
+  short_desc: Что-то маленькое и урчащее затаилось у ваших ног.
+  type: kContainer
+  material: 18  # ДРАГ.КАМЕНЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 0
+  rent_on: 0
+  max_durability: 500
+  cur_durability: 500
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  minimum_remorts: -1
+  extra_flags:
+    - kNodonate
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+
+# Object #3649
+49:
+  names:
+    aliases: сумка трехглавая зубастая
+    nominative: '&Cтрехглавая&n &RЗубастая&n &MСумка&n'
+    genitive: '&Cтрехглавой&n &RЗубастой&n &MСумки&n'
+    dative: '&Cтрехглавой&n &RЗубастой&n &MСумке&n'
+    accusative: '&Cтрехглавую&n &RЗубастую&n &MСумку&n'
+    instrumental: '&Cтрехглавой&n &RЗубастой&n &MСумкой&n'
+    prepositional: '&Cтрехглавой&n &RЗубастой&n &MСумке&n'
+  short_desc: '&CТрехглавая&n &RЗубастая&n &MСумка&n сторожит добро своего хозяина'
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сумка трехглав зубаст
+      description: |2
+        Сумка с тремя головами Змея норовит укусить своего хозяина,
+        не стоит сувать руку внутрь, если она злая
+        жуть...
+
+# Object #3650
+50:
+  names:
+    aliases: сумка сгущенка банка
+    nominative: '&Cж&Wес&Cтя&Wн&Cа&Wя &Wбанка &Cиз-&Wпод &Cсгущенки&n'
+    genitive: '&Cж&Wес&Cтя&Wн&Cо&Wй &Wбанки &Cиз-&Wпод &Cсгущенки&n'
+    dative: '&Cж&Wес&Cтя&Wн&Cо&Wй &Wбанке &Cиз-&Wпод &Cсгущенки&n'
+    accusative: '&Cж&Wес&Cтя&Wн&Cу&Wю &Wбанку &Cиз-&Wпод &Cсгущенки&n'
+    instrumental: '&Cж&Wес&Cтя&Wн&Cо&Wй &Wбанкой &Cиз-&Wпод &Cсгущенки&n'
+    prepositional: '&Cж&Wес&Cтя&Wн&Cо&Wй &Wбанке &Cиз-&Wпод &Cсгущенки&n'
+  short_desc: 'Огромная &Wжестяная &Cбанка &Wиз-&Cпод &Wсгущёнки, &Yна крышке которой надпись "изготовлено Муромской молочной фабрикой&n.'
+  type: kContainer
+  material: 7  # КРИСТАЛЛ
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сумка банка
+      description: |2
+        Жестяная банка из под сгущёнки, с потёртой этикеткой, на которой нарисован косолапый мишка, и написано: "молоко концентрированое, с сахаром" изготовлено Муромской молочной фабрикой.
+
+# Object #3651
+51:
+  names:
+    aliases: маленькая сумочка красненьким крестиком аптечка
+    nominative: маленькая сумочка с &Rкрасненьким крестиком&n
+    genitive: маленькой сумочки с &Rкрасненьким крестиком&n
+    dative: маленькой сумочке с &Rкрасненьким крестиком&n
+    accusative: маленькую сумочку с &Rкрасненьким крестиком&n
+    instrumental: маленькой сумочкой с &Rкрасненьким крестиком&n
+    prepositional: маленькой сумочке с &Rкрасненьким крестиком&n
+  short_desc: Маленькая сумочка с &Rкрасненьким крестиком&n на боку лежит у вас под ногами
+  action_desc: |2
+    Маленькая сумочка, в которой вы заметили хирургическую пилку, тампон, спирт, еще раз спирт, огурец...
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3652
+52:
+  names:
+    aliases: мешок хорошего настроения сидор
+    nominative: мешок &Yхорошего &Gнастроения&n
+    genitive: мешка &Yхорошего &Gнастроения&n
+    dative: мешку &Yхорошего &Gнастроения&n
+    accusative: мешок &Yхорошего &Gнастроения&n
+    instrumental: мешком &Yхорошего &Gнастроения&n
+    prepositional: мешке &Yхорошего &Gнастроения&n
+  short_desc: Кто-то оставил здесь подозрительного вида &Gм&Yе&Gш&Yо&Gк&n, от которого приятно пахнет праздником
+  action_desc: |2
+    Большой мешок, в который можно положить все, о чем только можно мечтать.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3653
+53:
+  names:
+    aliases: мешок грибами сидор
+    nominative: мешок с &Rг&Wр&Gи&Yб&Cа&Wм&Rи&n
+    genitive: мешка с &Rг&Wр&Gи&Yб&Cа&Wм&Rи&n
+    dative: мешку с &Rг&Wр&Gи&Yб&Cа&Wм&Rи&n
+    accusative: мешок с &Rг&Wр&Gи&Yб&Cа&Wм&Rи&n
+    instrumental: мешком с &Rг&Wр&Gи&Yб&Cа&Wм&Rи&n
+    prepositional: мешке с &Rг&Wр&Gи&Yб&Cа&Wм&Rи&n
+  short_desc: Мешок с &Rг&Wр&Gи&Yб&Cа&Wм&Rи&n лежит позабыт-позаброшен
+  action_desc: |2
+    Большой мешок, в который можно положить все, о чем только можно мечтать. Особенно грибы.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3654
+54:
+  names:
+    aliases: нычка
+    nominative: '&Wн&wы&Kч&wк&Wа&n'
+    genitive: '&Wн&wы&Kч&wк&Wи&n'
+    dative: '&Wн&wы&Kч&wк&Wе&n'
+    accusative: '&Wн&wы&Kч&wк&Wу&n'
+    instrumental: '&Wн&wы&Kчк&wо&Wй&n'
+    prepositional: '&Wн&wы&Kч&wк&Wе&n'
+  short_desc: Неумело замаскированная &Wн&wы&Kч&wк&Wа&n находится недалеко от вас.
+  action_desc: |2
+    Кто-то сделал здесь свою нычку, но замаскировал неудачно.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3655
+55:
+  names:
+    aliases: Экзотическое изделие ароматом заморских фруктов
+    nominative: экзотическое изделие с &Gароматом &Yзаморских &Rфруктов&n
+    genitive: экзотического изделия с &Gароматом &Yзаморских &Rфруктов&n
+    dative: экзотическому изделию с &Gароматом &Yзаморских &Rфруктов&n
+    accusative: экзотическое изделие с &Gароматом &Yзаморских &Rфруктов&n
+    instrumental: экзотическим изделием с &Gароматом &Yзаморских &Rфруктов&n
+    prepositional: экзотическом изделии с &Gароматом &Yзаморских &Rфруктов&n
+  short_desc: Непонятная вещица, источающая &Gди&Yвн&Rый &Gар&Yом&Rат&n, лежит у вас под ногами.
+  action_desc: |2
+    Экзотическое изделие с ароматом заморских фруктов. Очень нужная в хозяйстве вещица.
+    Эти изделия были известны еще с глубокой древности.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3656
+56:
+  names:
+    aliases: грозовая туча сумка
+    nominative: '&Rгрозовая &Kтуча&n'
+    genitive: '&Rгрозовой &Kтучи&n'
+    dative: '&Rгрозовой &Kтуче&n'
+    accusative: '&Rгрозовую &Kтучу&n'
+    instrumental: '&Rгрозовой &Kтучей&n'
+    prepositional: '&Rгрозовой &Kтуче&n'
+  short_desc: '&RГрозовая &Kтуча &Wнависла над вами.&n'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: грозовая туча сумка
+      description: |2
+        &WЯ просто &Kсумка тучка&W!&n
+        &WЯ вовсе не &Rмедведь&W,&n
+        &WКапризы все хозяина&n
+        &WПриходится терпеть.&n
+        &WНо даже в &Kсумке тучке&n
+        &WПорядок и уют,&n
+        &WПоэтому из &Kтучки&n
+        &RНИЧЕГО НЕ УКРАДУТ&W!&n
+
+# Object #3657
+57:
+  names:
+    aliases: Потайные карманы бродяги сумка
+    nominative: '&Gпотайные карманы &Wбродяги&n'
+    genitive: '&Gпотайных карманов &Wбродяги&n'
+    dative: '&Gпотайным карманам &Wбродяги&n'
+    accusative: '&Gпотайные карманы &Wбродяги&n'
+    instrumental: '&Gпотайными карманами &Wбродяги&n'
+    prepositional: '&Gпотайных карманах &Wбродяги&n'
+  short_desc: '&GСотни кармашков &Wразбросаны повсюду.&n'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kPoly
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: потайные карманы бродяги сумка
+      description: |2
+        &GНабор бесчисленных&G карманов&K, приспособленный для скрытого ношения по всему телу.&n
+
+# Object #3658
+58:
+  names:
+    aliases: вечно голодный Гномик Обжорка лохматый сумка сума
+    nominative: '&Yвечно голодный&n &CГномик-Обжорка&n'
+    genitive: '&Yгномика&n-&CОбжорки&n'
+    dative: '&Yгномику&n-&CОбжорке&n'
+    accusative: '&Yгномика&n-&CОбжорку&n'
+    instrumental: '&Yгномиком&n-&CОбжоркой&n'
+    prepositional: '&Yгномике&n-&CОбжорке&n'
+  short_desc: '&YМаленький лохматый&n &Cгномик с голодными глазами&n &Rделовито жгет покрышки.&n'
+  type: kContainer
+  material: 13  # КОСТЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: Пасть Мироеда
+      description: |2
+        Это огромная пасть с мясистыми ярко-красными губами,
+        набором белосженых зубищ и мелькающим в глубине длинным языком.
+
+# Object #3659
+59:
+  names:
+    aliases: ящик арбузов
+    nominative: '&yящик&n &gА&n&Gрб&n&gуз&n&Gов&n с &BОд&n&Wес&n&Bск&n&Wого&n &CПр&n&cив&n&Cоза&n'
+    genitive: '&yящика&n &gА&n&Gрб&n&gуз&n&Gов&n с &BОд&n&Wес&n&Bск&n&Wого&n &CПр&n&cив&n&Cоза&n'
+    dative: '&yящику&n &gА&n&Gрб&n&gуз&n&Gов&n с &BОд&n&Wес&n&Bск&n&Wого&n &CПр&n&cив&n&Cоза&n'
+    accusative: '&yящик&n &gА&n&Gрб&n&gуз&n&Gов&n с &BОд&n&Wес&n&Bск&n&Wого&n &CПр&n&cив&n&Cоза&n'
+    instrumental: '&yящиком&n &gА&n&Gрб&n&gуз&n&Gов&n с &BОд&n&Wес&n&Bск&n&Wого&n &CПр&n&cив&n&Cоза&n'
+    prepositional: '&yящике&n &gА&n&Gрб&n&gуз&n&Gов&n с &BОд&n&Wес&n&Bск&n&Wого&n &CПр&n&cив&n&Cоза&n'
+  short_desc: '&yЯщик&n &gА&n&Gрб&n&gуз&n&Gов&n с &BОд&n&Wес&n&Bск&n&Wого&n &CПр&n&cив&n&Cоза&n так и манит к себе...'
+  type: kContainer
+  material: 13  # КОСТЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kShoulders
+  extra_descriptions:
+    - keywords: Пасть Мироеда
+      description: |2
+        Это огромная пасть с мясистыми ярко-красными губами,
+        набором белосженых зубищ и мелькающим в глубине длинным языком.
+
+# Object #3660
+60:
+  names:
+    aliases: загашник сумка
+    nominative: '&Wза&bгаш&Rник&n'
+    genitive: '&Wза&bгаш&Rника&n'
+    dative: '&Wза&bгаш&Rнику&n'
+    accusative: '&Wза&bгаш&Rник&n'
+    instrumental: '&Wза&bгаш&Rником&n'
+    prepositional: '&Wза&bгаш&Rнике&n'
+  short_desc: '&WЧей-то за&bгаш&Rник привлек ваше внимание.&n'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: загашник сумка
+      description: |2
+        &WТайник заныкан чей-то здесь,&n
+        &bИ он хранит всего не мало!&n
+        &RНо лучше ты в него не лезь,&n
+        &WА то хозяин&b даст в&R хлебало!&n
+
+# Object #3661
+61:
+  names:
+    aliases: бак для мусора
+    nominative: '&gбак для мусора&n'
+    genitive: '&gбака для мусора&n'
+    dative: '&gбаку для мусора&n'
+    accusative: '&gбак для мусора&n'
+    instrumental: '&gбаком для мусора&n'
+    prepositional: '&gбаке для мусора&n'
+  short_desc: На земле стоит &gнеприметный бак для мусора.&n
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: бак для мусора
+      description: |2
+        Бак для хранения различного рода отходов.
+
+# Object #3662
+62:
+  names:
+    aliases: сумка красного волка
+    nominative: сумка Кр&Rа&nсног&Rо&n В&Gо&nлк&Gа&n
+    genitive: сумки Кр&Rа&nсног&Rо&n В&Gо&nлк&Gа&n
+    dative: сумке Кр&Rа&nсног&Rо&n В&Gо&nлк&Gа&n
+    accusative: сумку Кр&Rа&nсног&Rо&n В&Gо&nлк&Gа&n
+    instrumental: сумкой Кр&Rа&nсног&Rо&n В&Gо&nлк&Gа&n
+    prepositional: сумке Кр&Rа&nсног&Rо&n В&Gо&nлк&Gа&n
+  short_desc: Сумка Кр&Rа&nсног&Rо&n В&Gо&nлк&Gа&n брошена владельцем.
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сумка красного волка
+      description: |2
+        Эта сумка принадлежит Красному Волку, легендарному путешественнику и
+        авантюристу. Для одних он герой и помощник, для других он горе и смерть.  
+
+# Object #3663
+63:
+  names:
+    aliases: багрового неба раскат грома сумка
+    nominative: '&Rбагрового&C неба раскат&R грома&n'
+    genitive: '&Rбагрового&C неба раската &Rгрома&n'
+    dative: '&Rбагрового&C неба раскату &Rгрома&n'
+    accusative: '&Rбагрового&C неба раскат &Rгрома&n'
+    instrumental: '&Rбагрового&C неба раскатом &Rгрома&n'
+    prepositional: '&Rбагрового&C неба раскате &Rгрома&n'
+  short_desc: '&RСумка,&C созданная магией разума&n, лежит здесь.'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: багрового неба раскат грома сумка
+      description: |2
+        &RСумка &Cсозданная магией разума &Cсвоего владельца&n
+
+# Object #3664
+64:
+  names:
+    aliases: сумка кузнеца-полубога
+    nominative: '&Kсумка&n &yКузнеца-полубога&n'
+    genitive: '&Kсумки&n &yКузнеца-полубога&n'
+    dative: '&Kсумке&n &yКузнеца-полубога&n'
+    accusative: '&Kсумку&n &yКузнеца-полубога&n'
+    instrumental: '&Kсумкой&n &yКузнеца-полубога&n'
+    prepositional: '&Kсумке&n &yКузнеца-полубога&n'
+  short_desc: '&KСумка&n &yКузнеца-полубога&n лежит тут.'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: сумка кузнеца-полубога
+      description: |2
+        Волшебная сумка изготовленна самим Богом Сварогом, покровителем мастеров кузнечного дела.
+
+# Object #3665
+65:
+  names:
+    aliases: пасть ледяного дракона
+    nominative: '&Yпасть&n &Cледяного&n &Rдракона&n'
+    genitive: '&Yпасти&n &Cледяного&n &Rдракона&n'
+    dative: '&Yпасти&n &Cледяного&n &Rдракона&n'
+    accusative: '&Yпасть&n &Cледяного&n &Rдракона&n'
+    instrumental: '&Yпастью&n &Cледяного&n &Rдракона&n'
+    prepositional: '&Yпасти&n &Cледяного&n &Rдракона&n'
+  short_desc: Большая &Rголова дракона&n лежит тут.
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 3000  # макс. вместимый вес
+    - 0  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kFinger
+    - kNeck
+    - kLegs
+    - kArms
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3666
+66:
+  names:
+    aliases: желудок
+    nominative: '&rжелудок&n'
+    genitive: '&rжелудка&n'
+    dative: '&rжелудку&n'
+    accusative: '&rжелудок&n'
+    instrumental: '&rжелудком&n'
+    prepositional: '&rжелудке&n'
+  short_desc: Чей-то &rжелудок&n урчит здесь.
+  action_desc: |+2
+    
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  minimum_remorts: -1
+  extra_flags:
+    - kMagic
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: желудок
+      description: |2
+        Сколько не корми, все равно урчит и просит добавки.
+
+# Object #3667
+67:
+  names:
+    aliases: волшебный канфар
+    nominative: '&Kволшебный канфар&n'
+    genitive: '&Kволшебного канфара&n'
+    dative: '&Kволшебному канфару&n'
+    accusative: '&Kволшебный канфар&n'
+    instrumental: '&Kволшебным канфаром&n'
+    prepositional: '&Kволшебном канфаре&n'
+  short_desc: '&KДревний канфар&n слабо мерцает здесь магическим светом.'
+  action_desc: |+2
+    
+  type: kLiquidContainer
+  material: 7  # КРИСТАЛЛ
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: волшебный канфар
+      description: |2
+        ___Едва взглянув на этот древний сосуд, понимаешь - из него пили сами боги!
+        Толстые стенки, украшенные прекрасной росписью, слегка мерцают магическим светом.
+        Какой же волшебной силой наделяет он напиток, налитый в него?
+  extra_values:
+    LIQUID_CAPACITY: 500
+    LIQUID_CURRENT: 0
+    LIQUID_TYPE: 0  # воды
+
+# Object #3668
+68:
+  names:
+    aliases: что-то мерзкое скверна
+    nominative: '&Kскв&Wе&Gрна&n'
+    genitive: '&Kскв&Wе&Gрны&n'
+    dative: '&Kскв&Wе&Gрне&n'
+    accusative: '&Kскв&Wе&Gрну&n'
+    instrumental: '&Kскв&Wе&Gрной&n'
+    prepositional: '&Kскв&Wе&Gрне&n'
+  short_desc: '&KЧто-то мерзкое отравляет землю&n, &Wубивая все&G живое вокруг&n.'
+  action_desc: |+2
+    
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  minimum_remorts: -1
+  extra_flags:
+    - kMagic
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: что-то мерзкое скверна
+      description: |2
+        &KКлубок&W темной&G магии&n.
+
+# Object #3669
+69:
+  names:
+    aliases: густой туман
+    nominative: '&Kгустой туман&n'
+    genitive: '&Kгустого тумана&n'
+    dative: '&Kгустому туману&n'
+    accusative: '&Kгустой туман&n'
+    instrumental: '&Kгустым туманом&n'
+    prepositional: '&Kгустом тумане&n'
+  short_desc: '&KГустой туман&n Стелется под вашими ногами.'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: густой туман
+      description: |2
+        ___Магический туман собрался в непроницаемое облако и по его поверхности
+        вальяжно перекатываются серые волны ртутных всполохов, частично приоткрывая
+        вашему взору вид на гору аккуратно сложенных дорогих доспехов и сверкающего
+        полированной сталью оружия лучших мастеров этого мира.  
+
+# Object #3670
+70:
+  names:
+    aliases: шелковая тесемка расшитая золотыми рунами
+    nominative: '&Wшелковая тесемка&n, расшитая &Yзолотыми рунами&n'
+    genitive: '&Wшелковой тесемки&n, расшитой &Yзолотыми рунами&n'
+    dative: '&Wшелковой тесемке&n, расшитой &Yзолотыми рунами&n'
+    accusative: '&Wшелковую тесемку&n, расшитую &Yзолотыми рунами&n'
+    instrumental: '&Wшелковой тесемкой&n, расшитой &Yзолотыми рунами&n'
+    prepositional: '&Wшелковой тесемке&n, расшитой &Yзолотыми рунами&n'
+  short_desc: '&WШелковая тесемка&Y змеится, брошенная на землю.'
+  type: kContainer
+  material: 14  # ТКАНЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kNosell
+    - kSwimming
+    - kFlying
+    - kNoalter
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: шелковая тесемка расшитая золотыми рунами
+      description: |2
+        Небольшая полоса в виде ленты из дорого шёлка с вместительными карманами 
+        прекрасно украсит любой наряд. Свечение ярких рун золотом однозначно указывает 
+        на богатство и индивидуальность ее владельца.
+
+# Object #3671
+71:
+  names:
+    aliases: неприкосновенный запас сумка сума
+    nominative: '&Rнеприкосновенный запас&n'
+    genitive: '&Rнеприкосновенного запаса&n'
+    dative: '&Rнеприкосновенному запасу&n'
+    accusative: '&Rнеприкосновенный запас&n'
+    instrumental: '&Rнеприкосновенным запасом&n'
+    prepositional: '&Rнеприкосновенном запасе&n'
+  short_desc: '&RНеприкосновенный запас&n дожидается своего владельца.'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: пустота мошна
+      description: |2
+        Ваши глаза уставились в пустоту!
+
+# Object #3672
+72:
+  names:
+    aliases: переносной фонтан хил
+    nominative: переносной фонтан
+    genitive: переносного фонтана
+    dative: переносному фонтану
+    accusative: переносной фонтан
+    instrumental: переносным фонтаном
+    prepositional: переносном фонтане
+  short_desc: Переносной фонтан парит над землей.
+  action_desc: |2
+    Небольшой переносной фонтан. Да переносной. Да фонтан.
+  type: kLiquidContainer
+  material: 10  # КЕРАМИКА
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kHold
+  extra_values:
+    LIQUID_CAPACITY: 200
+    LIQUID_CURRENT: 0
+    LIQUID_TYPE: 21  # черного колдовского зелья
+
+# Object #3673
+73:
+  names:
+    aliases: большая банка MONSTER monster монстр инеист ангел
+    nominative: большая банка &WMONSTER&n &Genergy&n
+    genitive: большой банки &WMONSTER&n &Genergy&n
+    dative: большой банке &WMONSTER&n &Genergy&n
+    accusative: большую банку &WMONSTER&n &Genergy&n
+    instrumental: большой банкой &WMONSTER&n &Genergy&n
+    prepositional: большой банке &WMONSTER&n &Genergy&n
+  short_desc: Большая банка &WMONSTER&n &Genergy&n парит над землей.
+  action_desc: |2
+    Большая, 500 ml, made in USA.
+  type: kLiquidContainer
+  material: 6  # ДРАГ.МЕТАЛЛ
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kHold
+  extra_values:
+    LIQUID_CAPACITY: 200
+    LIQUID_CURRENT: 0
+    LIQUID_TYPE: 21  # черного колдовского зелья
+
+# Object #3674
+74:
+  names:
+    aliases: необъятная черная сума сумка
+    nominative: '&Kнеобъятная черная сума&n'
+    genitive: '&Kнеобъятной черной сумы&n'
+    dative: '&Kнеобъятной черной суме&n'
+    accusative: '&Kнеобъятную черную суму&n'
+    instrumental: '&Kнеобъятной черной сумой&n'
+    prepositional: '&Kнеобъятной черной суме&n'
+  short_desc: Необъятная черная сума маячит под ногами темным пятном.
+  action_desc: |+2
+    
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+  extra_descriptions:
+    - keywords: необъятная черная сума
+      description: |2
+        Огромных размеров сума из мягкой черной кожи, прошитой прочными нитками.
+        Единственная широченная лямка не предполагает особого удобства переноски, однако одеть сумку на плечо как и достать что-либо можно практически моментально.
+        Сумка кажется очень вместительной на вид, однако способна вместить в себя намного больше, тут явно не обошлось без сильных чар!
+        Явным преимуществом такого вида сумок является возможность доставать вещи не снимая суму с плеча.
+        Врядли можно незаметно спрятать эту громадину, также как и украсть...
+
+# Object #3675
+75:
+  names:
+    aliases: недра мироздания
+    nominative: '&kнедра мироздания&n'
+    genitive: '&kнедр мироздания&n'
+    dative: '&kнедрам мироздания&n'
+    accusative: '&kнедра мироздания&n'
+    instrumental: '&kнедрами мироздания&n'
+    prepositional: '&kнедрах мироздания&n'
+  short_desc: Развороченные &kнедра мироздания&n открылись перед вами.
+  type: kContainer
+  material: 18  # ДРАГ.КАМЕНЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 0
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 10000
+  cur_durability: 10000
+  timer: 99999
+  sex: kPoly
+  max_in_world: 1
+  minimum_remorts: -1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3676
+76:
+  names:
+    aliases: небольшое озерцо
+    nominative: '&bнебольшое озерцо&n'
+    genitive: '&bнебольшого озерца&n'
+    dative: '&bнебольшому озерцу&n'
+    accusative: '&bнебольшое озерцо&n'
+    instrumental: '&bнебольшим озерцом&n'
+    prepositional: '&bнебольшом озерце&n'
+  short_desc: '&bНебольшое озерцо&n раскинулось перед вами.'
+  type: kLiquidContainer
+  material: 12  # КАМЕНЬ
+  weight: 205
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 10000
+  cur_durability: 10000
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  minimum_remorts: -1
+  extra_flags:
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kHold
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 200
+    LIQUID_TYPE: 10  # молока
+
+# Object #3677
+77:
+  names:
+    aliases: бурдюк рыбьего меха
+    nominative: бурдюк из рыбьего меха
+    genitive: бурдюка из рыбьего меха
+    dative: бурдюку из рыбьего меха
+    accusative: бурдюк из рыбьего меха
+    instrumental: бурдюком из рыбьего меха
+    prepositional: бурдюке из рыбьего меха
+  short_desc: Бурдюк из доселе невиданного меха лежит здесь.
+  type: kLiquidContainer
+  material: 15  # КОЖА
+  weight: 205
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 10000
+  cur_durability: 10000
+  timer: 99999
+  sex: kNeutral
+  max_in_world: 1
+  minimum_remorts: -1
+  extra_flags:
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kWaist
+  extra_values:
+    LIQUID_CAPACITY: 1000
+    LIQUID_CURRENT: 200
+    LIQUID_TYPE: 10  # молока
+
+# Object #3678
+78:
+  names:
+    aliases: черный узел колдуна сума сумка
+    nominative: '&Kчерный узел колдуна&n'
+    genitive: '&Kчерного узла колдуна&n'
+    dative: '&Kчерному узлу колдуна&n'
+    accusative: '&Kчерный узел колдуна&n'
+    instrumental: '&Kчерным узлом колдуна&n'
+    prepositional: '&Kчерном узле колдуна&n'
+  short_desc: Чей-то черный узелок парит здесь, привлекая внимание...
+  action_desc: |2
+    Черный как смоль узел пугает вас.
+  type: kContainer
+  material: 14  # ТКАНЬ
+  values:
+    - 2000  # макс. вместимый вес
+    - 5  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 1
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3679
+79:
+  names:
+    aliases: сундучок сказками сума сумка
+    nominative: '&gсундучок &yсо &gсказками&n'
+    genitive: '&gсундучка &yсо &gсказками&n'
+    dative: '&gсундучку &yсо &gсказками&n'
+    accusative: '&gсундучок &yсо &gсказками&n'
+    instrumental: '&gсундучком &yсо &gсказками&n'
+    prepositional: '&gсундучке &yсо &gсказками&n'
+  short_desc: Кто-то оставил здесь подозрительного вида &Gс&Yу&Gн&Yд&Gу&Yк&n, из которого торчат три пушистые мордочки.
+  action_desc: |2
+    Сундучок наполненный сказками, в который можно положить все, о чем только можно мечтать.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3680
+80:
+  names:
+    aliases: параллельная вселенная сумка сума
+    nominative: '&Rпараллельная Вселенная&n'
+    genitive: '&Rпараллельной Вселенной&n'
+    dative: '&Rпараллельной Вселенной&n'
+    accusative: '&Rпараллельную Вселенную&n'
+    instrumental: '&Rпараллельной Вселенной&n'
+    prepositional: '&Rпараллельной Вселенной&n'
+  short_desc: Вы заметили вход в &RПараллельную Вселенную&n.
+  action_desc: |2
+    Здесь поместится целая &Rвселенная&n.
+  type: kContainer
+  material: 6  # ДРАГ.МЕТАЛЛ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: undefined
+      description: |2
+        То ли сумка, то ли рюкзак из толстой кожи редкого животного с многочисленными маленькими кормашками и клапанами.
+
+# Object #3681
+81:
+  names:
+    aliases: фляга камня
+    nominative: фляга из камня
+    genitive: фляги из камня
+    dative: фляге из камня
+    accusative: флягу из камня
+    instrumental: флягой из камня
+    prepositional: фляге из камня
+  short_desc: Фляга из камня удивительным образом парит над землей.
+  action_desc: |2
+    Каменная фляга, при осмотре различимы старинные руны. Глотков эдак на 200... Пить или не пить?...
+  type: kLiquidContainer
+  material: 12  # КАМЕНЬ
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kHold
+  extra_values:
+    LIQUID_CAPACITY: 200
+    LIQUID_CURRENT: 0
+    LIQUID_TYPE: 21  # черного колдовского зелья
+
+# Object #3682
+82:
+  names:
+    aliases: вплетенный небо колосок сумка сума
+    nominative: '&Wвплетенный в &Bнебо &Yколосок&n'
+    genitive: '&Wвплетенного в &Bнебо &Yколоска&n'
+    dative: '&Wвплетенному в &Bнебо &Yколоску&n'
+    accusative: '&Wвплетенный в &Bнебо &Yколосок&n'
+    instrumental: '&Wвплетенным в &Bнебо &Yколоском&n'
+    prepositional: '&Wвплетенном в &Bнебо &Yколоске&n'
+  short_desc: '&WВплетенный в &Bнебо &Yколосок&n трепещет на ветру.'
+  action_desc: |2
+    &WВплетенный в &Bнебо &Yколосок&n это сумка. Увы и ах, вам этого не понять!
+  type: kContainer
+  material: 15  # КОЖА
+  values:
+    - 1999  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 255  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 1000
+  cur_durability: 1000
+  timer: 99999
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kWaist
+    - kWrist
+
+# Object #3683
+83:
+  names:
+    aliases: кровавая безумной кудесницы сумка сума
+    nominative: '&Rкровавая сумка Безумной кудесницы&n'
+    genitive: '&Rкровавой сумки Безумной кудесницы&n'
+    dative: '&Rкровавой сумке Безумной кудесницы&n'
+    accusative: '&Rкровавую сумку Безумной кудесницы&n'
+    instrumental: '&Rкровавой сумкой Безумной кудесницы&n'
+    prepositional: '&Rкровавой сумке Безумной кудесницы&n'
+  short_desc: '&RКровавая сумка Безумной кудесницы&n лежит тут истекая &Rкровью&n.'
+  action_desc: |+2
+    
+  type: kContainer
+  material: 6  # ДРАГ.МЕТАЛЛ
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+  extra_descriptions:
+    - keywords: undefined
+      description: |2
+        То ли сумка, то ли рюкзак из толстой кожи редкого животного с многочисленными маленькими кормашками и клапанами.
+
+# Object #3684
+84:
+  names:
+    aliases: сумка калита хозяина мира мертвых
+    nominative: калита хозяина &Rмира&n &Kмертвых&n
+    genitive: калиты хозяина &Rмира&n &Kмертвых&n
+    dative: калите хозяина &Rмира&n &Kмертвых&n
+    accusative: калиту хозяина &Rмира&n &Kмертвых&n
+    instrumental: калитой хозяина &Rмира&n &Kмертвых&n
+    prepositional: калите хозяина &Rмира&n &Kмертвых&n
+  short_desc: Калита хозяина &Rмира&n &Kмертвых&n лежит тут перед Вами.
+  action_desc: |2
+    Именная сумка господина Ягморта.
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 3999  # макс. вместимый вес
+    - 0  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 5000
+  cur_durability: 5000
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNolocate
+    - kNoalter
+    - kUnique
+    - kLimitedTimer
+  wear_flags:
+    - kTake
+    - kFinger
+    - kNeck
+    - kHead
+    - kShoulders
+    - kWaist
+    - kWrist
+
+# Object #3685
+85:
+  names:
+    aliases: походная канистра упыря
+    nominative: '&Bпоходная канистра&n &Kупыря&n'
+    genitive: '&Bпоходной канистры&n &Kупыря&n'
+    dative: '&Bпоходной канистре&n &Kупыря&n'
+    accusative: '&Bпоходную канистру&n &Kупыря&n'
+    instrumental: '&Bпоходной канистрой&n &Kупыря&n'
+    prepositional: '&Bпоходной канистре&n &Kупыря&n'
+  short_desc: '&BПоходная канистра&n &Kупыря&n лежит тут.'
+  type: kLiquidContainer
+  material: 0  # НЕИЗВЕСТЕН
+  weight: 1
+  cost: 100
+  rent_off: 100
+  rent_on: 100
+  max_durability: 100
+  cur_durability: 100
+  timer: 99999
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kWaist
+  extra_values:
+    LIQUID_CAPACITY: 999
+    LIQUID_CURRENT: 0
+    LIQUID_TYPE: 0  # воды
+
+# Object #3686
+86:
+  names:
+    aliases: непроглядная пучина
+    nominative: '&yнепроглядная&n &rпучина&n'
+    genitive: '&yнепроглядной&n &rпучины&n'
+    dative: '&yнепроглядной&n &rпучине&n'
+    accusative: '&yнепроглядную&n &rпучину&n'
+    instrumental: '&yнепроглядной&n &rпучиной&n'
+    prepositional: '&yнепроглядной&n &rпучине&n'
+  short_desc: '&yНепроглядная&n &rпучина&n лежит здесь.'
+  type: kContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 1500
+  cur_durability: 1500
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kNodonate
+    - kNoinvis
+    - kNosell
+    - kNodisarm
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNoalter
+    - kLimitedTimer
+  wear_flags:
+    - kTake
+    - kNeck
+
+# Object #3687
+87:
+  names:
+    aliases: Черная Дыра
+    nominative: '&Kчерная Дыра&n'
+    genitive: '&Kчерной Дыры&n'
+    dative: '&Kчерной Дыре&n'
+    accusative: '&Kчерную Дыру&n'
+    instrumental: '&Kчерной Дырой&n'
+    prepositional: '&Kчерной Дыре&n'
+  short_desc: '&KНа земле лежит что-то очень темное, словно поглощает свет вокруг себя.&n'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNosell
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: черная дыра
+      description: |2
+        ___Легенда гласит, что внутри живет маленький домовой, который проглатывает
+        все, что попадает внутрь. Время от времени можно услышать тихое урчание
+        изнутри.  
+
+# Object #3688
+88:
+  names:
+    aliases: громовой узел сумка
+    nominative: '&Wгромовой узел&n'
+    genitive: '&Wгромового узла&n'
+    dative: '&Wгромовому узлу&n'
+    accusative: '&Wгромовой узел&n'
+    instrumental: '&Wгромовым узлом&n'
+    prepositional: '&Wгромовом узле&n'
+  short_desc: '&WПод ногами мерцает Громовой узел, будто пойманная молния, затаившаяся в узорчатых узлах&n.'
+  type: kContainer
+  material: 16  # ОРГАНИКА
+  values:
+    - 2000  # макс. вместимый вес
+    - 1  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+    - kNeck
+    - kBody
+    - kShoulders
+    - kWaist
+    - kWrist
+  extra_descriptions:
+    - keywords: громовой узел сумка
+      description: |2
+        ___Сплетен не руками людскими, а вихрями да молнией. В нем вещи не теряются +
+        словно спрятаны в небесной кузнице. Ткань его подобна окаменевшему всполоху
+        грозы: холодна на ощупь, но в добрых руках теплеет. При опасности узел
+        задрожит, как перед грозой, и глухо загремит + то голос древней силы, что
+        бережет хозяина. Но помни: Громовой узел выбирает лишь тех, кто достоин нести
+        отголосок небесной кузни.  
+
+# Object #3689
+89:
+  names:
+    aliases: шлем бромира
+    nominative: '&Yш&Cлем &YБром&Cира&n'
+    genitive: '&Yш&Cлема &YБром&Cира&n'
+    dative: '&Yш&Cлему &YБром&Cира&n'
+    accusative: '&Yш&Cлем &YБром&Cира&n'
+    instrumental: '&Yш&Cлемом &YБром&Cира&n'
+    prepositional: '&Yш&Cлеме &YБром&Cира&n'
+  short_desc: '&YШ&Cлем &Rвитязя &YБром&Cира&n лежит на земле.'
+  type: kLiquidContainer
+  material: 1  # БУЛАТ
+  weight: 105
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 999
+  cur_durability: 999
+  timer: 99999
+  sex: kFemale
+  max_in_world: 1
+  extra_flags:
+    - kMagic
+    - kBless
+    - kNodecay
+    - kSwimming
+    - kFlying
+    - kNamed
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: шлем бромира
+      description: |2
+        ___Это старый боевой шлем Бромира, в который черниговские ювелиры вставили
+        большую серебряную флягу. На все свои скромные сбережения Бромир повелел
+        украсить его позолотой в виде орла, расправившего крылья под солнцем, и
+        вставками из мелкого янтаря, привезённого им из Новгорода. А один варяжский
+        волхв вывел рунами сомнительную надпись "Бромир был здесь" и заколдовал его на
+        личное владение.  
+  extra_values:
+    LIQUID_CAPACITY: 100
+    LIQUID_CURRENT: 100
+    LIQUID_TYPE: 0  # воды

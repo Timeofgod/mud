@@ -1,0 +1,59 @@
+name: Build
+
+on:
+  push:
+    branches: [ master, world-load-refactoring ]
+    # Правка только документации собирать нечего. paths-ignore пропускает запуск, когда ВСЕ
+    # изменённые файлы попали под список: правка кода вместе с .md соберётся как обычно.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'lib/cfg/**'
+      # Единственный конфиг, который читают юнит-тесты, из пропуска исключаем: правка в нём
+      # должна гонять сборку. Восклицательный знак отменяет предыдущий шаблон (порядок важен).
+      - '!lib/cfg/mechanics/group_exp_handicap.xml'
+  pull_request:
+    branches: [ master ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'lib/cfg/**'
+      # Единственный конфиг, который читают юнит-тесты, из пропуска исключаем: правка в нём
+      # должна гонять сборку. Восклицательный знак отменяет предыдущий шаблон (порядок важен).
+      - '!lib/cfg/mechanics/group_exp_handicap.xml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    uses: ./.github/workflows/_linux.yml
+    secrets: inherit
+
+  windows:
+    uses: ./.github/workflows/_windows.yml
+    secrets: inherit
+
+  macos:
+    uses: ./.github/workflows/_macos.yml
+    secrets: inherit
+
+  summary:
+    name: Build Summary
+    runs-on: ubuntu-latest
+    needs: [linux, windows, macos]
+    if: always()
+    steps:
+      - name: Report results
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Linux    | ${{ needs.linux.result }}   |" >> $GITHUB_STEP_SUMMARY
+          echo "| Windows  | ${{ needs.windows.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| macOS    | ${{ needs.macos.result }}   |" >> $GITHUB_STEP_SUMMARY

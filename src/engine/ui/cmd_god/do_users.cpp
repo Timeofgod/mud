@@ -3,21 +3,21 @@
 //
 
 #include "engine/ui/color.h"
-#include "gameplay/classes/classes.h"
+#include <fmt/format.h>
+#include "administration/privilege.h"
+#include "gameplay/classes/pc_classes.h"
 #include "engine/entities/char_data.h"
 #include "engine/ui/modify.h"
 #include "engine/db/global_objects.h"
 #include "gameplay/mechanics/weather.h"
-/*#include "utils/utils_string.h"
-#include "utils/table_wrapper.h"
-#include "utils/utils.h"*/
+#include "gameplay/core/remort.h"
+#include "gameplay/mechanics/sight.h"
 
 #define USERS_FORMAT \
 "Формат: users [-l minlevel[-maxlevel]] [-n name] [-h host] [-c classlist] [-o] [-p]\r\n"
 const int kMaxListLen = 200;
 void do_users(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	char line[256], line2[220], idletime[10], classname[128];
-	char state[30] = "\0", *timeptr, mode;
+	char mode;
 	char name_search[kMaxInputLength] = "\0", host_search[kMaxInputLength];
 	char host_by_name[kMaxInputLength] = "\0";
 	DescriptorData *list_players[kMaxListLen];
@@ -34,87 +34,86 @@ void do_users(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 	host_search[0] = name_search[0] = '\0';
 
-	strcpy(buf, argument);
-	while (*buf) {
-		half_chop(buf, arg, buf1);
-		if (*arg == '-') {
-			mode = *(arg + 1);    // just in case; we destroy arg in the switch
+	char rest[kMaxInputLength], option[kMaxInputLength], tail[kMaxInputLength];
+	strl_cpy(rest, argument, sizeof(rest));
+	while (*rest) {
+		half_chop(rest, option, tail);
+		if (*option == '-') {
+			mode = *(option + 1);    // just in case; we destroy option in the switch
 			switch (mode) {
 				case 'o':
 				case 'k': outlaws = 1;
 					playing = 1;
-					strcpy(buf, buf1);
+					strl_cpy(rest, tail, sizeof(rest));
 					break;
 				case 'p': playing = 1;
-					strcpy(buf, buf1);
+					strl_cpy(rest, tail, sizeof(rest));
 					break;
 				case 'd': deadweight = 1;
-					strcpy(buf, buf1);
+					strl_cpy(rest, tail, sizeof(rest));
 					break;
 				case 'l':
-					if (!IS_GOD(ch))
+					if (!privilege::IsGod(ch))
 						return;
 					playing = 1;
-					half_chop(buf1, arg, buf);
-					sscanf(arg, "%d-%d", &low, &high);
+					half_chop(tail, option, rest);
+					sscanf(option, "%d-%d", &low, &high);
 					break;
 				case 'n': playing = 1;
-					half_chop(buf1, name_search, buf);
+					half_chop(tail, name_search, rest);
 					break;
 				case 'h': playing = 1;
-					half_chop(buf1, host_search, buf);
+					half_chop(tail, host_search, rest);
 					break;
 				case 'u': playing = 1;
-					half_chop(buf1, host_by_name, buf);
+					half_chop(tail, host_by_name, rest);
 					break;
 				case 'w':
-					if (!IS_GRGOD(ch))
+					if (!privilege::IsGrGod(ch))
 						return;
 					playing = 1;
 					locating = 1;
-					strcpy(buf, buf1);
+					strl_cpy(rest, tail, sizeof(rest));
 					break;
 				case 'c': {
 					playing = 1;
-					half_chop(buf1, arg, buf);
+					half_chop(tail, option, rest);
 /*					const size_t len = strlen(arg);
 					for (size_t i = 0; i < len; i++) {
 						showclass |= FindCharClassMask(arg[i]);
 					}*/
-					showclass = FindAvailableCharClassId(arg);
+					showclass = FindAvailableCharClassId(option);
 					break;
 				}
 				case 'e': showemail = 1;
-					strcpy(buf, buf1);
+					strl_cpy(rest, tail, sizeof(rest));
 					break;
 				case 'r': showremorts = 1;
-					strcpy(buf, buf1);
+					strl_cpy(rest, tail, sizeof(rest));
 					break;
 
 				case 's':
-					sorting = *(arg + 2);
-					strcpy(buf, buf1);
+					sorting = *(option + 2);
+					strl_cpy(rest, tail, sizeof(rest));
 					break;
 				default: SendMsgToChar(USERS_FORMAT, ch);
 					return;
 			}    // end of switch
 
 		} else {
-			strcpy(name_search, arg);
-			strcpy(buf, buf1);
+			strl_cpy(name_search, option, sizeof(name_search));
+			strl_cpy(rest, tail, sizeof(rest));
 		}
 	}            // end while (parser)
 
-	const char *format = "%3d %-7s %-20s %-17s %-3s %-8s ";
-	if (showemail) {
-		strcpy(line, "Ном Професс    Имя                  Состояние         Idl Логин    Сайт       E-mail\r\n");
-	} else {
-		strcpy(line, "Ном Професс    Имя                  Состояние         Idl Логин    Сайт\r\n");
-	}
-	strcat(line, "--- ---------- -------------------- ----------------- --- -------- ----------------------------\r\n");
-	SendMsgToChar(line, ch);
-
-	one_argument(argument, arg);
+	// Ширина колонок - в символах, а не в байтах (issue #3681): поля ниже паддятся
+// через native_text, поэтому формат содержит голые "%s".
+	const char *format = "{:3} {:<7} {:<20} {:<17} {:<3} {:<8} ";
+	std::string header = showemail
+		? "Ном Професс    Имя                  Состояние         Idl Логин    Сайт       E-mail\r\n"
+		: "Ном Професс    Имя                  Состояние         Idl Логин    Сайт\r\n";
+	header += "--- ---------- -------------------- ----------------- --- -------- ----------------------------\r\n";
+	SendMsgToChar(header, ch);
 
 	if (strlen(host_by_name) != 0) {
 		strcpy(host_search, "!");
@@ -176,6 +175,7 @@ void do_users(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	for (cycle_i = 0; cycle_i < count_pl; cycle_i++) {
 		d = list_players[cycle_i];
 
+		std::string classname;
 		if (d->state != EConState::kPlaying && playing)
 			continue;
 		if (d->state == EConState::kPlaying && deadweight)
@@ -192,7 +192,7 @@ void do_users(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			if (*name_search && !isname(name_search, GET_NAME(character))) {
 				continue;
 			}
-			if (!CAN_SEE(ch, character) || GetRealLevel(character) < low || GetRealLevel(character) > high) {
+			if (!sight::CanSee(ch, character) || GetRealLevel(character) < low || GetRealLevel(character) > high) {
 				continue;
 			}
 			if (outlaws && !(ch)->IsFlagged(EPlrFlag::kKiller)) {
@@ -205,128 +205,84 @@ void do_users(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				continue;
 			}
 
-			if (d->original) {
-				if (showremorts) {
-					sprintf(classname,
-							"[%2d %2d %s]",
-							GetRealLevel(d->original),
-							GetRealRemort(d->original),
-							MUD::Class(d->original->GetClass()).GetAbbr().c_str());
-				} else {
-					sprintf(classname,
-							"[%2d %s]   ",
-							GetRealLevel(d->original),
-							MUD::Class(d->original->GetClass()).GetAbbr().c_str());
-				}
-			} else if (showremorts) {
-				sprintf(classname,
-						"[%2d %2d %s]",
-						GetRealLevel(d->character),
-						GetRealRemort(d->character),
-						MUD::Class(d->character->GetClass()).GetAbbr().c_str());
-			} else {
-				sprintf(classname,
-						"[%2d %s]   ",
-						GetRealLevel(d->character),
-						MUD::Class(d->character->GetClass()).GetAbbr().c_str());
-			}
+			// В switched-состоянии показываем того, кем игрок был до вселения.
+			const CharData *shown = d->original ? d->original.get() : d->character.get();
+			classname = showremorts
+						? fmt::format("[{:2} {:2} {}]",
+									  GetRealLevel(shown), remort::GetRealRemort(shown),
+									  MUD::Class(shown->GetClass()).GetAbbr())
+						: fmt::format("[{:2} {}]   ",
+									  GetRealLevel(shown), MUD::Class(shown->GetClass()).GetAbbr());
 		} else {
-			strcpy(classname, "      -      ");
+			classname = "      -      ";
 		}
 
 		if (GetRealLevel(ch) < kLvlImplementator && !ch->IsFlagged(EPrf::kCoderinfo)) {
-			strcpy(classname, "      -      ");
+			classname = "      -      ";
 		}
 
-		timeptr = asctime(localtime(&d->login_time));
-		timeptr += 11;
-		*(timeptr + 8) = '\0';
+		// asctime отдаёт "Www Mmm dd hh:mm:ss yyyy"; берём часы-минуты-секунды, не затирая
+		// нулём статический буфер библиотеки, как делал прежний код.
+		const std::string login_time = std::string(asctime(localtime(&d->login_time))).substr(11, 8);
 
-		if (d->state == EConState::kPlaying && d->original) {
-			strcpy(state, "Switched");
+		const std::string state = (d->state == EConState::kPlaying && d->original)
+								  ? "Switched"
+								  : GetConDescription(d->state);
+
+		const std::string idletime = (d->character
+									  && d->state == EConState::kPlaying
+									  && !privilege::IsGod(d->character.get()))
+									 ? fmt::format("{:<3}", d->character->char_specials.timer
+												   * kSecsPerMudHour / kSecsPerRealMin)
+									 : "   ";
+
+		std::string line;
+		if (d->character) {
+			line = fmt::format(fmt::runtime(format), d->desc_num, classname,
+							   d->original ? d->original->GetCharAliases() : d->character->GetCharAliases(),
+							   state, idletime, login_time);
 		} else {
-			strcpy(state, GetConDescription(d->state));
+			line = fmt::format(fmt::runtime(format), d->desc_num, "   -   ", "UNDEFINED",
+							   state, idletime, login_time);
 		}
 
-		if (d->character
-			&& d->state == EConState::kPlaying
-			&& !IS_GOD(d->character)) {
-			sprintf(idletime, "%-3d", d->character->char_specials.timer *
-				kSecsPerMudHour / kSecsPerRealMin);
+		if (*d->host) {
+			line += fmt::format("[{}]", d->host);
 		} else {
-			strcpy(idletime, "   ");
-		}
-
-		if (d->character
-			&& d->character->GetCharAliases().c_str()) {
-			if (d->original) {
-				sprintf(line,
-						format,
-						d->desc_num,
-						classname,
-						d->original->GetCharAliases().c_str(),
-						state,
-						idletime,
-						timeptr);
-			} else {
-				sprintf(line,
-						format,
-						d->desc_num,
-						classname,
-						d->character->GetCharAliases().c_str(),
-						state,
-						idletime,
-						timeptr);
-			}
-		} else {
-			sprintf(line, format, d->desc_num, "   -   ", "UNDEFINED", state, idletime, timeptr);
-		}
-
-		if (d && *d->host) {
-			sprintf(line2, "[%s]", d->host);
-			strcat(line, line2);
-		} else {
-			strcat(line, "[Неизвестный хост]");
+			line += "[Неизвестный хост]";
 		}
 
 		if (showemail) {
-			sprintf(line2, "[&S%s&s]",
-					d->original ? GET_EMAIL(d->original) : d->character ? GET_EMAIL(d->character) : "");
-			strcat(line, line2);
+			line += fmt::format("[&S{}&s]",
+								d->original ? GET_EMAIL(d->original) : d->character ? GET_EMAIL(d->character) : "");
 		}
 
-		if (locating && (*name_search || *host_by_name)) {
-			if (d->state == EConState::kPlaying) {
-				const auto ci = d->get_character();
-				if (ci
-					&& CAN_SEE(ch, ci)
-					&& ci->in_room != kNowhere) {
-					if (d->original && d->character) {
-						sprintf(line2, " [%5d] %s (in %s)",
-								GET_ROOM_VNUM(d->character->in_room),
-								world[d->character->in_room]->name, GET_NAME(d->character));
-					} else {
-						sprintf(line2, " [%5d] %s",
-								GET_ROOM_VNUM(ci->in_room), world[ci->in_room]->name);
-					}
+		// Комната ищется только по ключу -w с именем или хостом. Раньше строка с комнатой
+		// приклеивалась и тогда, когда её не собрали, -- в вывод попадал прошлый кусок буфера.
+		if (locating && (*name_search || *host_by_name) && d->state == EConState::kPlaying) {
+			const auto ci = d->get_character();
+			if (ci && sight::CanSee(ch, ci) && ci->in_room != kNowhere) {
+				// имя комнаты бывает нулевым (конструктор RoomData), а fmt на нуле бросает исключение
+				const char *room_name = world[ci->in_room]->name ? world[ci->in_room]->name : "";
+				if (d->original && d->character) {
+					line += fmt::format(" [{:7}] {} (in {})",
+										GET_ROOM_VNUM(d->character->in_room), room_name, GET_NAME(d->character));
+				} else {
+					line += fmt::format(" [{:7}] {}", GET_ROOM_VNUM(ci->in_room), room_name);
 				}
-
-				strcat(line, line2);
 			}
 		}
 
-		strcat(line, "\r\n");
+		line += "\r\n";
 		if (d->state != EConState::kPlaying) {
-			snprintf(line2, sizeof(line2), "%s%s%s", kColorGrn, line, kColorNrm);
-			strcpy(line, line2);
+			line = fmt::format("&g{}&w", line);
 		}
 
-		if (d->state != EConState::kPlaying || (d->state == EConState::kPlaying && d->character && CAN_SEE(ch, d->character))) {
+		if (d->state != EConState::kPlaying || (d->state == EConState::kPlaying && d->character && sight::CanSee(ch, d->character))) {
 			SendMsgToChar(line, ch);
 			num_can_see++;
 		}
 	}
 
-	sprintf(line, "\r\n%d видимых соединений.\r\n", num_can_see);
-	page_string(ch->desc, line, true);
+	page_string(ch->desc, fmt::format("\r\n{} видимых соединений.\r\n", num_can_see));
 }

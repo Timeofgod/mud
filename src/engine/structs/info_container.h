@@ -13,7 +13,7 @@
 #include <map>
 
 #include "utils/logger.h"
-#include "utils/parse.h"
+#include "utils/utils_parse.h"
 #include "utils/parser_wrapper.h"
 
 /**
@@ -33,6 +33,8 @@ enum class EItemMode {
 
 template<>
 const std::string &NAME_BY_ITEM<EItemMode>(EItemMode item);
+template<>
+const std::map<EItemMode, std::string> &NAMES_OF<EItemMode>();
 template<>
 EItemMode ITEM_BY_NAME<EItemMode>(const std::string &name);
 
@@ -109,6 +111,9 @@ class InfoContainer {
 	 *  Горячая перезагрузка. Позволяет перегрузить данные контейнера.
 	 */
 	void Reload(const NodeRange &data);
+	// issue.vedun-editor: dry-run parse for the editor's safe commit -- build a fresh register
+	// from `data` WITHOUT swapping the live one. true => safe to write the file and Reload.
+	[[nodiscard]] bool Validate(const NodeRange &data) const;
 	/**
 	 *  Id известен. Не гарантируется, что он означает корректный элемент.
 	 */
@@ -197,6 +202,9 @@ template<typename IdEnum, typename Item, typename ItemBuilder>
 InfoContainer<IdEnum, Item, ItemBuilder>::InfoContainer() {
 	if (!items_) {
 		items_ = std::make_unique<Register>();
+		// Create default undefined item for safe fallback before Init() is called
+		auto default_item = std::make_shared<Item>();
+		items_->try_emplace(IdEnum::kUndefined, std::move(default_item));
 	}
 }
 
@@ -208,6 +216,11 @@ void InfoContainer<IdEnum, Item, ItemBuilder>::Reload(const NodeRange &data) {
 	} else {
 		err_log("Reloading was canceled - file damaged.");
 	}
+}
+
+template<typename IdEnum, typename Item, typename ItemBuilder>
+bool InfoContainer<IdEnum, Item, ItemBuilder>::Validate(const NodeRange &data) const {
+	return static_cast<bool>(RegisterBuilder::Build(data, true));
 }
 
 template<typename IdEnum, typename Item, typename ItemBuilder>
@@ -403,6 +416,9 @@ class InfoContainer<int, Item, ItemBuilder> {
 	 *  Горячая перезагрузка. Позволяет перегрузить данные контейнера.
 	 */
 	void Reload(const NodeRange &data);
+	// issue.vedun-editor: dry-run parse for the editor's safe commit -- build a fresh register
+	// from `data` WITHOUT swapping the live one. true => safe to write the file and Reload.
+	[[nodiscard]] bool Validate(const NodeRange &data) const;
 	/**
 	 *  Id известен. Не гарантируется, что он означает корректный элемент.
 	 */
@@ -498,6 +514,9 @@ template<typename Item, typename ItemBuilder>
 InfoContainer<int, Item, ItemBuilder>::InfoContainer() {
 	if (!items_) {
 		items_ = std::make_unique<Register>();
+		// Create default undefined item for safe fallback before Init() is called
+		auto default_item = std::make_shared<Item>();
+		items_->try_emplace(kUndefinedVnum, std::move(default_item));
 	}
 	if (!text_ids_register_) {
 		text_ids_register_ = std::make_unique<TextIdRegister>();
@@ -513,6 +532,11 @@ void InfoContainer<int, Item, ItemBuilder>::Reload(const NodeRange &data) {
 	} else {
 		err_log("Reloading was canceled - file damaged.");
 	}
+}
+
+template<typename Item, typename ItemBuilder>
+bool InfoContainer<int, Item, ItemBuilder>::Validate(const NodeRange &data) const {
+	return static_cast<bool>(RegisterBuilder::Build(data, true));
 }
 
 template<typename Item, typename ItemBuilder>

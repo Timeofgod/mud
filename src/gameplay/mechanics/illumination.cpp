@@ -20,11 +20,14 @@ bool is_dark(RoomRnum room) {
 
 	// если на комнате висит флаг всегда светло, то добавляем
 	// +2 к коэф
-	if (room_spells::IsRoomAffected(world[room], ESpell::kLight))
+	// issue.affect-migration: the room-light affect is kRoomLight (the kMagRoom spell). This used to check
+	// ESpell::kLight (a char-side light spell that never produces a room affect), so room light never lit
+	// a room -- fixed to kRoomLight.
+	if (room_spells::IsRoomAffected(world[room], room_spells::ERoomAffect::kRoomLight))
 		coef += 2.0;
 	// если светит луна и комната !помещение и !город
 	if ((SECT(room) != ESector::kInside) && (SECT(room) != ESector::kCity)
-		&& (GET_ROOM_SKY(room) == kSkyLightning
+		&& ((world[room]->weather.duration > 0 ? world[room]->weather.sky : weather_info.sky) == kSkyLightning
 			&& weather_info.moon_day >= kFullMoonStart
 			&& weather_info.moon_day <= kFullMoonStop))
 		coef += 1.0;
@@ -77,6 +80,64 @@ bool IsDefaultDark(RoomRnum room_rnum) {
 			SECT(room_rnum) != ESector::kCity &&
 			(weather_info.sunlight == kSunSet ||
 				weather_info.sunlight == kSunDark)));
+}
+
+
+// issue.handler-cleaning: char light source + room light bookkeeping (moved from handler).
+bool IsWearingLight(CharData *ch) {
+	bool wear_light = false;
+	for (int wear_pos = 0; wear_pos < EEquipPos::kNumEquipPos; wear_pos++) {
+		if (GET_EQ(ch, wear_pos)
+			&& GET_EQ(ch, wear_pos)->get_type() == EObjType::kLightSource
+			&& GET_OBJ_VAL(GET_EQ(ch, wear_pos), 2)) {
+			wear_light = true;
+		}
+	}
+	return wear_light;
+}
+
+namespace {
+}  // namespace
+
+void CheckLight(CharData *ch, int was_equip, int was_single, int was_holylight, int was_holydark, int koef) {
+	if (ch->in_room == kNowhere) {
+		return;
+	}
+
+	if (IsWearingLight(ch)) {
+		if (was_equip == kLightNo) {
+			world[ch->in_room]->light = std::max(0, world[ch->in_room]->light + koef);
+		}
+	} else {
+		if (was_equip == kLightYes)
+			world[ch->in_room]->light = std::max(0, world[ch->in_room]->light - koef);
+	}
+
+	if (AFF_FLAGGED(ch, EAffect::kSingleLight)) {
+		if (was_single == kLightNo)
+			world[ch->in_room]->light = std::max(0, world[ch->in_room]->light + koef);
+	} else {
+		if (was_single == kLightYes)
+			world[ch->in_room]->light = std::max(0, world[ch->in_room]->light - koef);
+	}
+
+	if (AFF_FLAGGED(ch, EAffect::kHolyLight)) {
+		if (was_holylight == kLightNo)
+			world[ch->in_room]->glight = std::max(0, world[ch->in_room]->glight + koef);
+	} else {
+		if (was_holylight == kLightYes)
+			world[ch->in_room]->glight = std::max(0, world[ch->in_room]->glight - koef);
+	}
+
+	if (AFF_FLAGGED(ch, EAffect::kHolyDark)) {
+		if (was_holydark == kLightNo) {
+			world[ch->in_room]->gdark = std::max(0, world[ch->in_room]->gdark + koef);
+		}
+	} else {
+		if (was_holydark == kLightYes) {
+			world[ch->in_room]->gdark = std::max(0, world[ch->in_room]->gdark - koef);
+		}
+	}
 }
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

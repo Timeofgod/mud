@@ -1,6 +1,10 @@
-#include "do_order.h"
+#include <fmt/format.h>
 
-#include "engine/core/handler.h"
+#include "do_order.h"
+#include "administration/privilege.h"
+
+#include "engine/entities/char_data.h"
+#include "engine/core/target_resolver.h"
 
 // ****************** CHARM ORDERS PROCEDURES
 void do_order(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
@@ -23,13 +27,13 @@ void do_order(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	}
 	if (!*name || !*message)
 		SendMsgToChar("Приказать что и кому?\r\n", ch);
-	else if (!(vict = get_char_vis(ch, name, EFind::kCharInRoom)) &&
+	else if (!(vict = target_resolver::FindCharInRoom(ch, name)) &&
 		!utils::IsAbbr(name, "followers") && !utils::IsAbbr(name, "все") && !utils::IsAbbr(name, "всем"))
 		SendMsgToChar("Вы не видите такого персонажа.\r\n", ch);
 	else if (ch == vict && !utils::IsAbbr(name, "все") && !utils::IsAbbr(name, "всем"))
 		SendMsgToChar("Вы начали слышать императивные голоса - срочно к психиатру!\r\n", ch);
 	else {
-		if (vict && !vict->IsNpc() && !IS_GOD(ch)) {
+		if (vict && !vict->IsNpc() && !privilege::IsGod(ch)) {
 			SendMsgToChar(ch, "Игрокам приказывать могут только Боги!\r\n");
 			return;
 		}
@@ -43,20 +47,19 @@ void do_order(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			&& !utils::IsAbbr(name, "все")
 			&& !utils::IsAbbr(name, "всем")
 			&& !utils::IsAbbr(name, "followers")) {
-			sprintf(buf, "$N приказал$g вам '%s'", message);
-			act(buf, false, vict, 0, ch, kToChar | kToNotDeaf);
+			act(fmt::format("$N приказал$g вам '{}'", message), false, vict, 0, ch, kToChar | kToNotDeaf);
 			act("$n отдал$g приказ $N2.", false, ch, 0, vict, kToRoom | kToNotDeaf);
 
 			if (vict->get_master() != ch
 				|| !(AFF_FLAGGED(vict, EAffect::kCharmed) || AFF_FLAGGED(vict, EAffect::kHelper))
 				|| AFF_FLAGGED(vict, EAffect::kDeafness)) {
-				if (!IS_POLY(vict)) {
+				if (!IsPoly(vict)) {
 					act("$n безразлично смотрит по сторонам.", false, vict, 0, 0, kToRoom);
 				} else {
 					act("$n безразлично смотрят по сторонам.", false, vict, 0, 0, kToRoom);
 				}
 			} else {
-				SendMsgToChar(OK, ch);
+				SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 				if (vict->get_wait() <= 0) {
 					command_interpreter(vict, message);
 				} else if (vict->GetEnemy()) {
@@ -86,7 +89,7 @@ void do_order(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			}
 
 			if (found) {
-				SendMsgToChar(OK, ch);
+				SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 			} else {
 				SendMsgToChar("Вы страдаете манией величия!\r\n", ch);
 			}

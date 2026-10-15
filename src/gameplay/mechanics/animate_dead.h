@@ -1,0 +1,136 @@
+/**
+\file animate_dead.h - a part of the Bylins engine.
+\brief Warlock construct (kAnimateDead) parameters, moved to data (cfg/mechanics/animate_dead.xml).
+\details A necromancer's undead are described in one file: the control budget, the tier ladder
+		 (each tier = a mob vnum + skill-weight + corpse-level band + caster-rating gate + pick odds),
+		 and per-tier stat scaling off the cast competence C. Loaded via CfgManager ("animate_dead"),
+		 exposed through MUD::AnimateDead(). See claude_1/OUTPUT for the design.
+*/
+
+#ifndef GAMEPLAY_MECHANICS_ANIMATE_DEAD_H_
+#define GAMEPLAY_MECHANICS_ANIMATE_DEAD_H_
+
+#include "engine/boot/cfg_manager.h"
+#include "gameplay/skills/skills.h"   // ESkill
+#include "gameplay/magic/spells_constants.h"   // ESpell -- чьи ярусы описывает <creature>
+#include "gameplay/affects/affect_contants.h"   // EAffect -- что выдаёт <grant>
+
+#include <string>
+#include <vector>
+
+class CharData;
+
+namespace animate_dead {
+
+enum class EScaleMode { kAdd, kMult };
+
+// One scaled stat: stat = add ? proto + round(beta*C) : proto * (1 + beta*C), then bounded by cap.
+struct StatScale {
+	double beta = 0.0;
+	EScaleMode mode = EScaleMode::kAdd;
+	bool has_cap = false;   // set from cap!=0. mode=mult: cap is the max MULTIPLIER (hp <= proto*cap);
+	double cap = 0;         // mode=add "up": ceiling; "down" (ac/saving): floor. cap="0"/absent = no cap.
+};
+
+// Per-tier scaling. 'luck' is intentionally absent (mobs have no luck stat).
+struct CreatureScaling {
+	StatScale hp, damage_dice, damage_size, damage_bonus, hitroll, ac, skills, saving, armor, morale, initiative;
+};
+
+struct CreatureInfo {
+	int vnum = 0;              // config index (weakest->strongest ladder order)
+	std::string id;            // e.g. "kSkeleton"
+	int proto_vnum = 0;        // the summoned mob prototype
+	int weight = 0;            // control-budget cost
+	int corpse_max_level = 0;  // highest source-corpse level that yields this tier
+	int min_rating = 0;        // smallest caster rating (level + skill-derived remort-equiv + 4)
+	int pick = 0;              // relative odds within a shared top corpse band (0 = the single tier)
+	// issue #4000: чьи это ярусы. kAnimateDead -- лестница "поднять труп" (по умолчанию),
+	// kAnimateSkeleton -- виды скелетов заклинания "оживить скелет". Ярусы разных заклинаний
+	// лежат в отдельных списках и друг друга не выбирают.
+	ESpell spell = ESpell::kAnimateDead;
+	// Нижняя граница уровня трупа. У лестницы нежити её нет (вид выбирается как слабейший, чей
+	// corpse_max_level накрывает труп), а скелетам она нужна: труп слабее -- поднимается обычный.
+	int corpse_min_level = 0;
+	// issue #4032: доля урона вида в процентах от урона нежити "поднять труп". Кубики задают силу
+	// скелета, а это число -- цену: пока скелет жив, столько процентов урона теряет нежить хозяина.
+	// Держим отдельным числом, а не выводим из кубиков: кубики считаются от компетенции каста и
+	// кости прототипа, и обратный пересчёт был бы хрупким.
+	double damage_share = 0.0;
+	// Предел дамролла этого вида нежити в автоатаке. Дамролл приходит из прототипа, подъёма
+	// и баффов (силы зла), и потолок у верхних видов должен быть выше, чем у младших, иначе
+	// бонусы упираются в общий кап подчинённого. 0 = потолок не задан, берётся общий.
+	int damroll_cap = 0;
+	CreatureScaling scaling;
+};
+
+// issue #4038: аффект, который поднятый получает даром, когда умение контроля дотянуто до
+// порога. Пороги подбираются на боевом, поэтому живут в данных, а не в коде.
+struct AffectGrant {
+	ESpell spell = ESpell::kAnimateDead;
+	int min_skill = 0;
+	EAffect affect = EAffect::kUndefined;
+};
+
+class AnimateDeadInfo {
+	ESkill control_skill_ = ESkill::kDarkMagic;
+	int budget_cap_ = 75;
+	std::vector<CreatureInfo> creatures_;   // ladder order, weakest -> strongest
+	std::vector<CreatureInfo> skeletons_;   // issue #4000: виды заклинания "оживить скелет"
+	std::vector<AffectGrant> grants_;       // issue #4038: даровые аффекты по порогу умения
+
+ public:
+	void Load(parser_wrapper::DataNode data);
+
+	[[nodiscard]] ESkill ControlSkill() const { return control_skill_; }
+	[[nodiscard]] int BudgetCap() const { return budget_cap_; }
+	[[nodiscard]] const std::vector<CreatureInfo> &Creatures() const { return creatures_; }
+	[[nodiscard]] const std::vector<CreatureInfo> &Skeletons() const { return skeletons_; }
+	[[nodiscard]] const std::vector<AffectGrant> &Grants() const { return grants_; }
+	[[nodiscard]] bool empty() const { return creatures_.empty(); }
+	// Tier lookups keyed by the summoned mob's proto vnum.
+	[[nodiscard]] const CreatureInfo *ByProtoVnum(int proto_vnum) const;
+	[[nodiscard]] int WeightOf(int proto_vnum) const;   // 0 if not a configured tier
+	// Потолок дамролла вида; 0 -- в конфиге не задан (вызывающий берёт общий предел).
+	[[nodiscard]] int DamrollCapOf(int proto_vnum) const;
+	[[nodiscard]] int LadderIndex(int proto_vnum) const;
+};
+
+class AnimateDeadLoader : virtual public cfg_manager::IEditableCfgLoader {
+ public:
+	void Load(parser_wrapper::DataNode data) final;
+	void Reload(parser_wrapper::DataNode data) final;
+	// Vedun editor: each <creature> is an editable element keyed by its integer vnum.
+	[[nodiscard]] std::string EditableWhat() const final;
+	[[nodiscard]] std::vector<cfg_manager::EditableElement> ListElements() const final;
+	[[nodiscard]] cfg_manager::ValidationResult Validate(parser_wrapper::DataNode &doc) const final;
+	[[nodiscard]] parser_wrapper::DataNode FindElementNode(parser_wrapper::DataNode root, const std::string &id) const final;
+	[[nodiscard]] std::string CanonicalElementId(const std::string &id) const final;
+	[[nodiscard]] parser_wrapper::DataNode CreateElementNode(parser_wrapper::DataNode root, const std::string &id) const final;
+};
+
+// The construct VNUM for a corpse of `corpse_mob_level`, cast by `ch`: the corpse-level band, then
+// the caster-rating gate (demote down the ladder), then the random pick within a shared top band.
+// Returns 0 when nothing is configured.
+[[nodiscard]] int PickTier(CharData *ch, int corpse_mob_level);
+
+// The strongest configured tier (vnum) not exceeding `desired` that fits the caster's remaining
+// control budget, demoting down the ladder as needed. 0 when even the weakest tier does not fit.
+[[nodiscard]] int FitUndeadTier(CharData *ch, int desired);
+
+// Scale a freshly-read construct's stats off the caster's cast competence C, per the tier's
+// <scaling>. No-op for a mob whose vnum is not a configured tier.
+void SetupUndeadStats(CharData *ch, CharData *mob, double competence);
+// Группа бонусов (броня, спасы, удача, инициатива), которую affect_total очищает до
+// прототипной: выдаётся аффектами, поэтому возвращается сама при каждом пересчёте.
+// duration -- срок жизни прибавок, обычно равный сроку чар.
+void ApplyVolatileUndeadStats(CharData *mob, double competence, int duration);
+// issue #4038: навесить на поднятого даровые аффекты своего заклинания -- те, чей порог умения
+// контроля заклинатель уже перешагнул. duration -- срок жизни, обычно равный сроку чар.
+void ApplyGrantedAffects(CharData *ch, CharData *mob, ESpell spell_id, int duration);
+
+}  // namespace animate_dead
+
+#endif  // GAMEPLAY_MECHANICS_ANIMATE_DEAD_H_
+
+// vim: ts=4 sw=4 tw=0 noet syntax=cpp :

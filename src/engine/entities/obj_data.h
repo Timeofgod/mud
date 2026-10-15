@@ -11,6 +11,7 @@
 #include "engine/db/id.h"
 #include "gameplay/mechanics/obj_enchant.h"
 #include "gameplay/magic/spells.h"
+#include "gameplay/affects/obj_affects.h"   // obj_affects::ObjAffects (affects that live ON the item)
 #include "gameplay/skills/skills.h"
 #include "engine/structs/extra_description.h"
 #include "engine/structs/flag_data.h"
@@ -22,6 +23,7 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <list>
 
 std::string print_obj_affects(const obj_affected_type &affect);
 void print_obj_affects(CharData *ch, const obj_affected_type &affect);
@@ -34,17 +36,44 @@ void set_obj_aff(ObjData *itemobj, EAffect bitv);
 class ObjVal {
  public:
 	enum class EValueKey : uint32_t {
-		// номер и уровень заклинаний в зелье/емкости с зельем
-		POTION_SPELL1_NUM = 0,
-		POTION_SPELL1_LVL = 1,
-		POTION_SPELL2_NUM = 2,
-		POTION_SPELL2_LVL = 3,
-		POTION_SPELL3_NUM = 4,
-		POTION_SPELL3_LVL = 5,
-		// внум прототипа зелья, перелитого в емкость
-		// 0 - если зелье в емкости проставлено через олц
-		POTION_PROTO_VNUM = 6
+		// issue.potion-hotfix: magic-potion (kPotion) payload, also carried by a drink container.
+		// Persisted BY NAME via the text_id kObjVals table (utils_parse.cpp), so the on-disk
+		// strings stay stable even though the C++ identifiers follow the Google style.
+		// issue.magic-items: unified spell-casting-item payload -- shared by potions, scrolls, wands and
+		// staves (a potion IS a magic item). The spell/skill/stat keys are COMMON; only the type-specific
+		// keys differ (potion: proto/potency/brew-roll/liquid; wand/staff: charges). Persisted BY NAME via
+		// text_id::kObjVals; the canonical strings are the new short names, and the old POTION_*/SPELLITEM_*
+		// strings are kept as READ-ALIASES so every existing item still loads (see text_id::InitObjVals).
+		kSpell1Num = 0,        // shared: 1st spell (was kPotionSpell1Num / kSpellItemSpell1Num)
+		kPotionSpell1Lvl = 1,  // retired per-spell level; kept only so old potion saves still load
+		kSpell2Num = 2,        // shared: 2nd spell
+		kPotionSpell2Lvl = 3,  // retired
+		kSpell3Num = 4,        // shared: 3rd spell
+		kPotionSpell3Lvl = 5,  // retired
+		kPotionProtoVnum = 6,  // potion-only: vnum of the source potion poured into a container
+		kPotionPotency = 7,    // potion-only: legacy pre-computed potency (pre-P3b migrated saves)
+		kPotionBrewRoll = 8,   // potion-only: frozen brew-luck noise, replayed at cast
+		kMakerSkill = 9,       // shared: maker skill -> potency + duration (was kPotionSkill / kSpellItemSkill)
+		kMakerStat = 10,       // shared: maker key stat -> potency (was kPotionStat / kSpellItemStat)
+		kLiquidTimer = 11,     // drink/potion-only: contents freshness countdown
+		kLiquidPoison = 12,    // drink/potion-only: poison level applied on drinking
+		kMaxCharges = 13,      // wand/staff-only: capacity (was kSpellItemMaxCharges)
+		kCurCharges = 14,      // wand/staff-only: charges remaining (was kSpellItemCurCharges)
+		// issue.magic-items-hotfix: drink-container/fountain liquid core (migrated off raw val[0..2]).
+		// val[] stays the runtime store; these keys are the on-disk (YAML) + OLC/display form.
+		kLiquidCapacity = 15,  // drink/fountain-only: total volume (was val[0])
+		kLiquidCurrent = 16,   // drink/fountain-only: current contents (was val[1])
+		kLiquidType = 17       // drink/fountain-only: liquid kind (was val[2])
 	};
+
+	// issue.potion-hotfix: fixed-point scale for kPotionBrewRoll. The stored int is
+	// lround((1 + eps) * kBrewRollScale), so the brewed noise factor (always > 0) equals
+	// kPotionBrewRoll / kBrewRollScale -- a fractional noise realization living in the int store.
+	static constexpr int kBrewRollScale = 1000;
+	// issue.potion-hotfix: bias so a NEGATIVE brew-luck z still stores as a POSITIVE int (the value map
+	// drops negatives). Stored = lround((z + kBrewRollBias) * kBrewRollScale); z = stored/scale - bias.
+	// Draw range clamps |z| to <= kBrewRollBias (a standard normal essentially never exceeds it).
+	static constexpr int kBrewRollBias = 5;
 
 	class EValueKeyHash {
 	 public:
@@ -156,7 +185,7 @@ class CObjectPrototype {
 	using skills_t = std::map<ESkill, int>;
 	using vals_t = std::array<int, VALS_COUNT>;
 	using wear_flags_t = std::underlying_type<EWearFlag>::type;
-	using pnames_t = std::array<std::string, ECase::kLastCase + 1>;
+	using pnames_t = std::array<std::string, grammar::ECase::kLastCase + 1>;
 	using triggers_list_t = std::list<ObjVnum>;
 	using triggers_list_ptr = std::shared_ptr<triggers_list_t>;
 	using affected_t = std::array<obj_affected_type, kMaxObjAffect>;
@@ -176,21 +205,37 @@ class CObjectPrototype {
 										   m_current_durability(DEFAULT_CURRENT_DURABILITY),
 										   m_material(DEFAULT_MATERIAL),
 										   m_sex(EGender::kMale),
-										   m_wear_flags(to_underlying(EWearFlag::kUndefined)),
+										   m_wear_flags(),
 										   m_timer(DEFAULT_TIMER),
 										   m_minimum_remorts(DEFAULT_MINIMUM_REMORTS),  // для хранения количеста мортов. если отричательное тогда до какого морта
 											m_cost(DEFAULT_COST),
 										   m_rent_on(DEFAULT_RENT_ON),
 										   m_rent_off(DEFAULT_RENT_OFF),
 										   m_ilevel(0),
-										   m_extract_list(false),
+										   m_in_extracted_list(false),
 										   m_rnum(DEFAULT_RNUM) {}
 	virtual ~CObjectPrototype() = default;
 	ObjRnum get_parent_rnum() const {return m_parent_proto;}
 	ObjVnum get_parent_vnum();
 	void set_parent_rnum(ObjRnum _) {m_parent_proto = _;}
 	auto &get_skills() const { return m_skills; }
-	auto dec_val(size_t index) { return --m_vals[index]; }
+	// issue.magic-items-hotfix: a drink container's / fountain's liquid core (capacity=0, current=1,
+	// liquid-type=2) is the source of truth in the ObjVal keys, NOT val[0..2]. The val mutators below
+	// transparently redirect those indices for those types to the keys, so every existing consumer uses
+	// the extended store and val[] stops being authoritative. (YAML save skips val[]; old worlds
+	// auto-migrate because the loader's set_val() writes the key.)
+	static constexpr ObjVal::EValueKey liquid_core_key(size_t index) {
+		return index == 0 ? ObjVal::EValueKey::kLiquidCapacity
+			 : index == 1 ? ObjVal::EValueKey::kLiquidCurrent
+						  : ObjVal::EValueKey::kLiquidType;
+	}
+	bool uses_liquid_core(size_t index) const {
+		return index <= 2 && (m_type == EObjType::kLiquidContainer || m_type == EObjType::kFountain);
+	}
+	int dec_val(size_t index) {
+		if (uses_liquid_core(index)) { const int v = get_val(index) - 1; set_val(index, v); return v; }
+		return --m_vals[index];
+	}
 	auto get_current_durability() const { return m_current_durability; }
 	auto get_destroyer() const { return m_destroyer; }
 	auto get_level() const { return m_level; }
@@ -201,14 +246,30 @@ class CObjectPrototype {
 	auto get_spec_param() const { return m_sparam; }
 	auto get_spell() const { return m_spell; }
 	auto get_type() const { return m_type; }
-	auto get_val(size_t index) const { return m_vals[index]; }
+	int get_val(size_t index) const {
+		if (uses_liquid_core(index)) {
+			const int v = m_values.get(liquid_core_key(index));
+			if (v >= 0) { return v; }
+		}
+		return m_vals[index];
+	}
 	auto GetPotionValueKey(const ObjVal::EValueKey key) const { return m_values.get(key); }
-	auto get_wear_flags() const { return m_wear_flags; }
+	wear_flags_t get_wear_flags() const { return m_wear_flags.get_plane(0); }
+	// issue.magic-items: номер заклинания в позиции 1..3. У свитков, зелий, посохов и жезлов
+	// заклинания живут в extra_values, сырые val[] у них нулевые.
+	int GetSpellItemSpellNum(int pos) const {
+		switch (pos) {
+			case 1: return m_values.get(ObjVal::EValueKey::kSpell1Num);
+			case 2: return m_values.get(ObjVal::EValueKey::kSpell2Num);
+			case 3: return m_values.get(ObjVal::EValueKey::kSpell3Num);
+			default: return -1;
+		}
+	}
 	auto get_weight() const { return m_weight; }
 	auto serialize_values() const { return m_values.print_to_file(); }
-	bool can_wear_any() const { return m_wear_flags > 0 && m_wear_flags != to_underlying(EWearFlag::kTake); }
-	bool GetEWeaponAffect(const EWeaponAffect weapon_affect) const { return m_waffect_flags.get(weapon_affect); }
-	bool GetWeaponAffect(const Bitvector weapon_affect) const { return m_waffect_flags.get(weapon_affect); }
+	bool can_wear_any() const { return m_wear_flags.any() && m_wear_flags.get_plane(0) != to_underlying(EWearFlag::kTake); }
+	bool GetEEquipmentAffect(const EEquipmentAffect equipment_affect) const { return m_waffect_flags.get(equipment_affect); }
+	bool GetEquipmentAffect(const Bitvector equipment_affect) const { return m_waffect_flags.get(static_cast<EEquipmentAffect>(equipment_affect)); }
 	bool has_anti_flag(const EAntiFlag flag) const { return m_anti_flags.get(flag); }
 	bool has_flag(const EObjFlag packed_flag) const { return m_extra_flags.get(packed_flag); }
 	bool has_flag(const size_t plane, const Bitvector flag) const { return m_extra_flags.get_flag(plane, flag); }
@@ -225,20 +286,25 @@ class CObjectPrototype {
 	const auto &get_anti_flags() const { return m_anti_flags; }
 	const auto &get_description() const { return m_description; }
 	const auto &get_ex_description() const { return m_ex_description; }
+	// Мутабельный доступ к вектору экстра-описаний (для OLC-редактора).
+	std::vector<ExtraDescription> &ex_descriptions() { return m_ex_description; }
 	const auto &get_extra_flags() const { return m_extra_flags; }
 	const auto &get_no_flags() const { return m_no_flags; }
 	const auto &get_proto_script() const { return *m_proto_script; }
 	const auto &get_proto_script_ptr() const { return m_proto_script; }
-	const std::string &get_PName(const ECase name_case = ECase::kNom) const { return m_pnames[name_case]; }
+	const std::string &get_PName(const grammar::ECase name_case = grammar::ECase::kNom) const { return m_pnames[name_case]; }
 	const std::string &get_short_description() const { return m_short_description; }
-	void add_affect_flags(const FlagData &flags) { m_waffect_flags += flags; }
+	void add_affect_flags(const BitsetFlags<EEquipmentAffect> &flags) { m_waffect_flags += flags; }
 	void add_affected(const size_t index, const int amount) { m_affected[index].modifier += amount; }
-	void add_anti_flags(const FlagData &flags) { m_anti_flags += flags; }
-	void add_extra_flags(const FlagData &flags) { m_extra_flags += flags; }
+	void add_anti_flags(const BitsetFlags<EAntiFlag> &flags) { m_anti_flags += flags; }
+	void add_extra_flags(const BitsetFlags<EObjFlag> &flags) { m_extra_flags += flags; }
 	void add_maximum(const int amount) { m_maximum_durability += amount; }
-	void add_no_flags(const FlagData &flags) { m_no_flags += flags; }
+	void add_no_flags(const BitsetFlags<ENoFlag> &flags) { m_no_flags += flags; }
 	void add_proto_script(const ObjVnum vnum) { m_proto_script->push_back(vnum); }
-	void add_val(const size_t index, const int amount) { m_vals[index] += amount; }
+	void add_val(const size_t index, const int amount) {
+		if (uses_liquid_core(index)) { set_val(index, get_val(index) + amount); return; }
+		m_vals[index] += amount;
+	}
 	void add_weight(const int _) { m_weight += _; }
 	void clear_action_description() { m_action_description.clear(); }
 	void clear_affected(const size_t index) { m_affected[index].location = EApply::kNone; }
@@ -253,7 +319,10 @@ class CObjectPrototype {
 	void gm_extra_flag(const char *subfield, const char **list, char *res) {
 		m_extra_flags.gm_flag(subfield, list, res);
 	}
-	void inc_val(const size_t index) { ++m_vals[index]; }
+	void inc_val(const size_t index) {
+		if (uses_liquid_core(index)) { set_val(index, get_val(index) + 1); return; }
+		++m_vals[index];
+	}
 	void init_values_from_zone(const char *str) { m_values.init_from_zone(str); }
 	void load_affect_flags(const char *string) { m_waffect_flags.from_string(string); }
 	void load_anti_flags(const char *string) { m_anti_flags.from_string(string); }
@@ -261,8 +330,8 @@ class CObjectPrototype {
 	void load_no_flags(const char *string) { m_no_flags.from_string(string); }
 	void remove_incorrect_values_keys(const int type) { m_values.remove_incorrect_keys(type); }
 	void set_action_description(const std::string &_) { m_action_description = _; }
-	void SetEWeaponAffectFlag(const EWeaponAffect packed_flag) { m_waffect_flags.set(packed_flag); }
-	void SetWeaponAffectFlags(const FlagData &flags) { m_waffect_flags = flags; }
+	void SetEEquipmentAffectFlag(const EEquipmentAffect packed_flag) { m_waffect_flags.set(packed_flag); }
+	void SetEquipmentAffectFlags(const BitsetFlags<EEquipmentAffect> &flags) { m_waffect_flags = flags; }
 	void set_affected(const size_t index, const EApply location, const int modifier);
 	void set_affected(const size_t index, const obj_affected_type &affect) { m_affected[index] = affect; }
 	void set_affected_location(const size_t index, const EApply _) { m_affected[index].location = _; }
@@ -270,24 +339,22 @@ class CObjectPrototype {
 	void set_aliases(const std::string &_) { m_aliases = _; }
 	void set_all_affected(const affected_t &_) { m_affected = _; }
 	void set_anti_flag(const EAntiFlag packed_flag) { m_anti_flags.set(packed_flag); }
-	void set_anti_flags(const FlagData &flags) { m_anti_flags = flags; }
+	void set_anti_flags(const BitsetFlags<EAntiFlag> &flags) { m_anti_flags = flags; }
 	void set_current_durability(const int _) { m_current_durability = _; }
 	void set_description(const std::string &_) { m_description = _; }
 	void set_destroyer(const int _) { m_destroyer = _; }
-	void set_ex_description(const ExtraDescription::shared_ptr &_) { m_ex_description = _; }
-	void set_ex_description(ExtraDescription *_) { m_ex_description.reset(_); }
 	void set_extra_flag(const EObjFlag packed_flag) { m_extra_flags.set(packed_flag); }
 	void set_extra_flag(const size_t plane, const Bitvector flag) { m_extra_flags.set_flag(plane, flag); }
-	void set_extra_flags(const FlagData &flags) { m_extra_flags = flags; }
+	void set_extra_flags(const BitsetFlags<EObjFlag> &flags) { m_extra_flags = flags; }
 	void set_level(const int _) { m_level = _; }
 	void set_material(const EObjMaterial _) { m_material = _; }
 	void set_max_in_world(const int _) { m_max_in_world = _; }
 	void set_maximum_durability(const int _) { m_maximum_durability = _; }
 	void set_no_flag(const ENoFlag flag) { m_no_flags.set(flag); }
-	void set_no_flags(const FlagData &flags) { m_no_flags = flags; }
-	void set_obj_aff(const Bitvector packed_flag) { m_waffect_flags.set(packed_flag); }
-	void set_PName(const ECase index, const char *_) { m_pnames[index] = _; }
-	void set_PName(const ECase index, const std::string &_) { m_pnames[index] = _; }
+	void set_no_flags(const BitsetFlags<ENoFlag> &flags) { m_no_flags = flags; }
+	void set_obj_aff(const Bitvector packed_flag) { m_waffect_flags.set(static_cast<EEquipmentAffect>(packed_flag)); }
+	void set_PName(const grammar::ECase index, const char *_) { m_pnames[index] = _; }
+	void set_PName(const grammar::ECase index, const std::string &_) { m_pnames[index] = _; }
 	void set_PNames(const pnames_t &_) { m_pnames = _; }
 	void set_proto_script(const triggers_list_t &_) { *m_proto_script = _; }
 	void set_short_description(const char *_) { m_short_description = _; }
@@ -299,11 +366,17 @@ class CObjectPrototype {
 	void SetPotionValueKey(const ObjVal::EValueKey key, const int value) { return m_values.set(key, value); }
 	void SetPotionValues(const ObjVal &_) { m_values = _; }
 	void set_wear_flag(const EWearFlag flag);
-	void set_wear_flags(const wear_flags_t _) { m_wear_flags = _; }
+	void set_wear_flags(const wear_flags_t _) { m_wear_flags.clear(); m_wear_flags.set_plane(0, _); }
 	void set_weight(const int _) { m_weight = _; }
-	void set_val(size_t index, int value) { m_vals[index] = value; }
+	void set_val(size_t index, int value) {
+		if (uses_liquid_core(index)) { m_values.set(liquid_core_key(index), value); return; }
+		m_vals[index] = value;
+	}
 	void sub_current(const int _) { m_current_durability -= _; }
-	void sub_val(const size_t index, const int amount) { m_vals[index] -= amount; }
+	void sub_val(const size_t index, const int amount) {
+		if (uses_liquid_core(index)) { set_val(index, get_val(index) - amount); return; }
+		m_vals[index] -= amount;
+	}
 	void sub_weight(const int _) { m_weight -= _; }
 	void swap_proto_script(triggers_list_t &_) { m_proto_script->swap(_); }
 	void toggle_affect_flag(const size_t plane, const Bitvector flag) { m_waffect_flags.toggle_flag(plane, flag); }
@@ -318,8 +391,8 @@ class CObjectPrototype {
 	int get_skill(ESkill skill_num) const;
 	void get_skills(skills_t &out_skills) const;
 	bool has_skills() const;
-	void set_timer(int timer);
-	int get_timer() const;
+	virtual void set_timer(int timer);
+	virtual int get_timer() const;
 	void set_skills(const skills_t &_) { m_skills = _; }
 	auto get_minimum_remorts() const { return m_minimum_remorts; }
 	auto get_dgscript_field() const { return m_dgscript_field; }
@@ -329,7 +402,7 @@ class CObjectPrototype {
 	void set_rent_off(int x);
 	auto get_rent_on() const { return m_rent_on; }
 	void set_rent_on(int x);
-	void set_ex_description(const char *keyword, const char *description);
+	void set_ex_description(const std::string &keyword, const std::string &description);
 	void set_minimum_remorts(const int _) { m_minimum_remorts = _; }
 	void set_dgscript_field(const std::string _) { m_dgscript_field = _; }
 	int get_auto_mort_req() const;
@@ -340,7 +413,11 @@ class CObjectPrototype {
 	auto get_rnum() const { return m_rnum; }
 	void set_rnum(const ObjRnum _);
 	auto get_vnum() const { return m_vnum; }
-	auto get_extracted_list() const { return m_extract_list; }
+	auto get_extracted_list() const { return m_in_extracted_list; }
+	// issue.obj-casting: mirrors CharData::purged() -- true once the object is on the deferred
+	// extraction list (AddToExtractedList): logically destroyed but not yet freed (freed by
+	// WorldObjects::PurgeExtractedList at heartbeat end). Cast stages guard ctx.ovict with this.
+	[[nodiscard]] bool purged() const { return m_in_extracted_list; }
 	void set_extracted_list(bool _);
 	void subscribe_for_vnum_changes(const VNumChangeObserver::shared_ptr &observer) {
 		m_vnum_change_observers.insert(observer);
@@ -355,7 +432,7 @@ class CObjectPrototype {
 		m_rnum_change_observers.erase(observer);
 	}
 
-	std::string item_count_message(int num, ECase name_case);
+	std::string item_count_message(int num, grammar::ECase name_case);
 	void DungeonProtoCopy(const CObjectPrototype &from);
 
  protected:
@@ -378,7 +455,7 @@ class CObjectPrototype {
 
 	std::string m_short_description;    // when worn/carry/in cont.         //
 	std::string m_action_description;    // What to write when used          //
-	ExtraDescription::shared_ptr m_ex_description;    // extra descriptions     //
+	std::vector<ExtraDescription> m_ex_description;    // extra descriptions     //
 
 	triggers_list_ptr m_proto_script;    // list of default triggers  //
 
@@ -397,12 +474,12 @@ class CObjectPrototype {
 	EObjMaterial m_material;
 	EGender m_sex;
 
-	FlagData m_extra_flags;    // If it hums, glows, etc.      //
-	FlagData m_waffect_flags;
-	FlagData m_anti_flags;
-	FlagData m_no_flags;
+	BitsetFlags<EObjFlag> m_extra_flags;    // If it hums, glows, etc.      //
+	BitsetFlags<EEquipmentAffect> m_waffect_flags;
+	BitsetFlags<EAntiFlag> m_anti_flags;
+	BitsetFlags<ENoFlag> m_no_flags;
 
-	wear_flags_t m_wear_flags;        // Where you can wear it     //
+	BitsetFlags<EWearFlag> m_wear_flags;        // Where you can wear it     //
 
 	int m_timer;    ///< таймер (в минутах рл)
 
@@ -415,7 +492,7 @@ class CObjectPrototype {
 	int m_rent_off;    ///< стоимость ренты, если в инве
 
 	double m_ilevel;    ///< расчетный уровень шмотки, не сохраняется
-	bool m_extract_list;
+	bool m_in_extracted_list;
 	ObjVnum m_rnum;    ///< Where in data-base
 
 	std::unordered_set<VNumChangeObserver::shared_ptr> m_vnum_change_observers;
@@ -435,17 +512,17 @@ inline auto GET_OBJ_VAL(const CObjectPrototype::shared_ptr &obj, size_t index) {
 
 class activation {
 	std::string actmsg, deactmsg, room_actmsg, room_deactmsg;
-	FlagData affects;
+	BitsetFlags<EEquipmentAffect> affects;
 	std::array<obj_affected_type, kMaxObjAffect> affected;
 	int weight, ndices, nsides;
 	CObjectPrototype::skills_t skills;
 
  public:
-	activation() : affects(clear_flags), weight(-1), ndices(-1), nsides(-1) {}
+	activation() : affects(), weight(-1), ndices(-1), nsides(-1) {}
 
 	activation(const std::string &__actmsg, const std::string &__deactmsg,
 			   const std::string &__room_actmsg, const std::string &__room_deactmsg,
-			   const FlagData &__affects, const obj_affected_type *__affected,
+			   const BitsetFlags<EEquipmentAffect> &__affects, const obj_affected_type *__affected,
 			   int __weight, int __ndices, int __nsides) :
 		actmsg(__actmsg), deactmsg(__deactmsg), room_actmsg(__room_actmsg),
 		room_deactmsg(__room_deactmsg), affects(__affects), weight(__weight),
@@ -544,13 +621,13 @@ class activation {
 		return *this;
 	}
 
-	const FlagData &
+	const BitsetFlags<EEquipmentAffect> &
 	get_affects() const {
 		return affects;
 	}
 
 	activation &
-	set_affects(const FlagData &__affects) {
+	set_affects(const BitsetFlags<EEquipmentAffect> &__affects) {
 		affects = __affects;
 		return *this;
 	}
@@ -618,53 +695,29 @@ class set_info : public std::map<ObjVnum, qty_to_camap_map> {
 
 typedef std::map<int, set_info> id_to_set_info_map;
 
-// * Временное заклинание на предмете (одно).
-class TimedSpell {
- public:
-	[[nodiscard]] bool check_spell(ESpell spell_id) const;
-	[[nodiscard]] ESpell IsSpellPoisoned() const;
-	[[nodiscard]] bool empty() const;
-	[[nodiscard]] std::string print() const;
-	void dec_timer(ObjData *obj, int time = 1);
-	void add(ObjData *obj, ESpell spell_id, int time);
-	void del(ObjData *obj, ESpell spell_id, bool message);
-	std::string diag_to_char();
+// issue.obj-affects: the former "TimedSpell on objects" mechanic is now the ObjAffect subsystem
+// (gameplay/affects/obj_affects.h) -- affects that live ON an item, keyed by obj_affects::EObjAffect.
+// ObjData stores them as obj_affects::ObjAffects (see m_obj_affects); runtime lives in obj_affects.cpp.
 
- private:
-	std::map<ESpell /* номер заклинания (SPELL_ХХХ) */, int /* таймер в минутах */> spell_list_;
-};
 
 // метки для команды "нацарапать"
 struct custom_label {
  public:
-	custom_label() : text_label(nullptr), clan_abbrev(nullptr), author(-2), author_mail(nullptr) {}
-	~custom_label();
+	custom_label() : author(-2) {}
+	// rule-of-0: std::string fields self-manage; default copy/move are deep copies (issue #3568).
 
-	char *text_label; // текст
-	char *clan_abbrev;       // аббревиатура клана, если метка предназначена для клана
+	std::string text_label; // текст
+	std::string clan_abbrev;       // аббревиатура клана, если метка предназначена для клана
 	int author;       // кем нанесена: содержит результат ch->get_idnum(), по умолчанию -2
-	char *author_mail;// будем проверять по емейлу тоже
+	std::string author_mail;// будем проверять по емейлу тоже
 };
-
-inline custom_label::~custom_label() {
-	if (nullptr != text_label) {
-		free(text_label);
-	}
-
-	if (nullptr != clan_abbrev) {
-		free(clan_abbrev);
-	}
-
-	if (nullptr != author_mail) {
-		free(author_mail);
-	}
-}
 
 class Script;    // to avoid inclusion of "dg_scripts.h"
 
 class ObjData : public CObjectPrototype {
  public:
 	using shared_ptr = std::shared_ptr<ObjData>;
+	using obj_list_t = std::list<ObjData*>;
 
 	constexpr static const int DEFAULT_MAKER = 0;
 	constexpr static const int DEFAULT_OWNER = 0;
@@ -679,22 +732,34 @@ class ObjData : public CObjectPrototype {
 	int get_serial_num();
 	void set_serial_num(int num);
 
+	void set_timer(int timer) override;
+	int get_timer() const override;
 	void dec_timer(int time = 1, bool ingore_utimer = false, bool exchange = false);
+	void process_periodic_effects();
 
 	static id_to_set_info_map set_table;
-	static void InitSetTable() {};
 
 	void purge();
 
 	void set_activator(bool flag, int num);
 	std::pair<bool, int> get_activator() const;
 
-	// wrappers to access to timed_spell
-	const TimedSpell &timed_spell() const { return m_timed_spell; }
-	std::string diag_ts_to_char() { return m_timed_spell.diag_to_char(); }
-	bool has_timed_spell() const { return !m_timed_spell.empty(); }
-	void add_timed_spell(const ESpell spell_id, const int time);
-	void del_timed_spell(const ESpell spell_id, const bool message);
+	// issue.obj-affects: affects that live ON this item (obj_affects::EObjAffect). Runtime helpers
+	// (impose/remove/tick/query) are free functions in gameplay/affects/obj_affects.h.
+	const obj_affects::ObjAffects &get_obj_affects() const { return m_obj_affects; }
+	obj_affects::ObjAffects &get_obj_affects() { return m_obj_affects; }
+	bool has_obj_affects() const { return !m_obj_affects.empty(); }
+
+	// issue.obj-suppressor-affect: equipment affects this item confers but that are temporarily suppressed
+	// by a dispel (affect_total skips them while suppressed). Backed by kSuppressed obj-affects, so they
+	// persist across rent/relog and tick with every other obj-affect; the API lives in obj_affects.h.
+	bool is_affect_suppressed(EAffect aff) const { return obj_affects::IsEquipAffectSuppressed(this, aff); }
+	bool has_suppressed_affects() const { return !obj_affects::SuppressedEquipAffects(this).empty(); }
+	std::vector<std::pair<EAffect, int>> suppressed_equip_affects() const { return obj_affects::SuppressedEquipAffects(this); }
+	// issue.affect-suppression-dispell: lift the suppression of `aff` NOW (weave-restoration success) --
+	// erase the kSuppressed and, if worn, re-materialize the equipment affect on the wearer (same as the
+	// timer auto-return in process_periodic_effects). No-op if `aff` was not suppressed.
+	void release_suppression(EAffect aff);
 
 	auto get_carried_by() const { return m_carried_by; }
 	auto get_contains() const { return m_contains; }
@@ -767,6 +832,7 @@ class ObjData : public CObjectPrototype {
 	}
 
 	void attach_triggers(const triggers_list_t &trigs);
+	bool is_unrentable();
 
  private:
 	void zero_init();
@@ -797,7 +863,7 @@ class ObjData : public CObjectPrototype {
 
 	int m_craft_timer;
 
-	TimedSpell m_timed_spell;    ///< временный обкаст
+	obj_affects::ObjAffects m_obj_affects;    ///< issue.obj-affects: affects on this item
 
 	long  m_id;            // used by DG triggers              //
 	std::shared_ptr<Script> m_script;    // script info for the object       //
@@ -822,10 +888,10 @@ inline bool CAN_WEAR(const CObjectPrototype *obj, const EWearFlag part) { return
 inline bool CAN_WEAR_ANY(const CObjectPrototype *obj) { return obj->can_wear_any(); }
 inline void SET_OBJ_AFF(CObjectPrototype *obj, const Bitvector packed_flag) { return obj->set_obj_aff(packed_flag); }
 inline bool OBJ_AFFECT(const CObjectPrototype *obj,
-					   const Bitvector weapon_affect) { return obj->GetWeaponAffect(weapon_affect); }
+					   const Bitvector equipment_affect) { return obj->GetEquipmentAffect(equipment_affect); }
 
-inline bool OBJ_AFFECT(const CObjectPrototype *obj, const EWeaponAffect weapon_affect) {
-	return OBJ_AFFECT(obj, static_cast<Bitvector>(weapon_affect));
+inline bool OBJ_AFFECT(const CObjectPrototype *obj, const EEquipmentAffect equipment_affect) {
+	return OBJ_AFFECT(obj, static_cast<Bitvector>(equipment_affect));
 }
 int GetObjMIW(ObjRnum rnum);
 

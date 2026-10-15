@@ -3,10 +3,21 @@
 // Part of Bylins http://www.mud.ru
 
 #include "shop_ext.h"
+#include "utils/native_text.h"
+#include "engine/olc/vedun/enum_registry.h"   // vedun::RegisterEditorEnums (refresh ShopItemSetId)
+#include <cstdlib>
+#include "gameplay/economics/currencies.h"
+#include "utils/grammar/declensions.h"
+#include "gameplay/ai/subcmd_resolver.h"
+#include "gameplay/ai/special_messages.h"
+#include "gameplay/mechanics/identify.h"
+
+#include "third_party_libs/pugixml/pugixml.h"
 
 #include "engine/db/global_objects.h"
 #include "engine/db/obj_prototypes.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/entities/char_data.h"
 #include "gameplay/clans/house.h"
 #include "shops_implementation.h"
 #include "gameplay/ai/spec_procs.h"
@@ -21,20 +32,102 @@ const char *MSG_NO_STEAL_HERE = "$n, грязн$w воришка, чеши от�
 typedef std::map<int/*vnum предмета*/, item_desc_node> ObjDescType;
 std::map<std::string/*id шаблона*/, ObjDescType> item_descriptions;
 
-struct item_set_node {
-	long item_vnum;
-	int item_price;
-};
+namespace {
+ItemSetListType g_item_sets;   // catalog from cfg/economics/shop_item_sets.xml
 
-struct item_set {
-	item_set() = default;
+// A valid shop / item-set id: CamelCase -- starts with a letter, letters and digits only.
+bool IsValidShopId(const std::string &id) {
+	if (id.empty() || !a_isalpha(id[0])) {
+		return false;
+	}
+	for (const char c : id) {
+		if (!a_isalnum(c)) {
+			return false;
+		}
+	}
+	return true;
+}
+}
 
-	std::string _id;
-	std::vector<item_set_node> item_list;
-};
+const ItemSetListType &item_sets() {
+	return g_item_sets;
+}
 
-typedef std::shared_ptr<item_set> ItemSetPtr;
-typedef std::vector<ItemSetPtr> ItemSetListType;
+void ShopItemSetsLoader::Load(parser_wrapper::DataNode data) {
+	g_item_sets.clear();
+	for (auto set_node : data.Children()) {
+		if (std::string(set_node.GetName()) != "shop_item_set") {
+			continue;
+		}
+		auto set = std::make_shared<item_set>();
+		set->_id = set_node.GetValue("id");
+		set->comment = set_node.GetValue("comment");
+		for (auto item : set_node.Children()) {
+			if (std::string(item.GetName()) != "item") {
+				continue;
+			}
+			item_set_node node;
+			node.item_vnum = parse::ReadAsInt(item.GetValue("vnum"));
+			node.item_price = parse::ReadAsInt(item.GetValue("price"));
+			set->item_list.push_back(node);
+		}
+		g_item_sets.push_back(set);
+	}
+}
+
+void ShopItemSetsLoader::Reload(parser_wrapper::DataNode data) {
+	Load(data);
+	vedun::RegisterEditorEnums();   // refresh ShopItemSetId so new/removed sets show in the editor
+	load(true);   // rebuild shops so catalog edits take effect immediately
+}
+
+std::string ShopItemSetsLoader::EditableWhat() const {
+	return "shopitemset";   // no underscores -- matches currencyname/shopmsg/mobrace convention
+}
+
+std::vector<cfg_manager::EditableElement> ShopItemSetsLoader::ListElements() const {
+	std::vector<cfg_manager::EditableElement> out;
+	for (const auto &set : g_item_sets) {
+		std::string label = set->_id;
+		if (!set->comment.empty()) {
+			label += "  -- " + set->comment;
+		}
+		out.push_back({set->_id, label});
+	}
+	return out;
+}
+
+cfg_manager::ValidationResult ShopItemSetsLoader::Validate(parser_wrapper::DataNode &doc) const {
+	for (auto set_node : doc.Children()) {
+		if (std::string(set_node.GetName()) != "shop_item_set") {
+			continue;
+		}
+		const std::string id = set_node.GetValue("id");
+		if (id.empty()) {
+			return {false, "a <shop_item_set> has an empty id"};
+		}
+		for (auto item : set_node.Children()) {
+			if (std::string(item.GetName()) != "item") {
+				continue;
+			}
+			if (parse::ReadAsInt(item.GetValue("vnum")) < 0 || parse::ReadAsInt(item.GetValue("price")) < 0) {
+				return {false, "shop_item_set '" + id + "': negative item vnum/price"};
+			}
+		}
+	}
+	return {true, ""};
+}
+
+std::string ShopItemSetsLoader::CanonicalElementId(const std::string &id) const {
+	return IsValidShopId(id) ? id : "";   // CamelCase: letters/digits, starts with a letter
+}
+
+parser_wrapper::DataNode ShopItemSetsLoader::CreateElementNode(parser_wrapper::DataNode root, const std::string &id) const {
+	auto node = root.AddChild("shop_item_set");
+	node.SetValue("id", id);
+	node.SetValue("comment", "");
+	return node;   // items are added afterwards in the editor
+}
 
 ShopListType &shop_list = GlobalObjects::Shops();
 
@@ -56,17 +149,18 @@ void log_shop_load() {
 
 void load_item_desc() {
 	pugi::xml_document doc;
-	pugi::xml_parse_result result = doc.load_file(LIB_PLRSTUFF"/shop/item_desc.xml");
+	// Файл лежит на диске в KOI8-R; читаем через границу кодировки, а разбираем уже
+	// буфер в нативной кодировке движка (issue #3681). Под KOI8-R это тождество.
+	const std::string xml_shop_ext = native_text::read_data_file(LIB_CLANS"item_desc.xml");
+	pugi::xml_parse_result result = doc.load_buffer(xml_shop_ext.data(), xml_shop_ext.size());
 	if (!result) {
-		snprintf(buf, kMaxStringLength, "...%s", result.description());
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+		mudlog(fmt::format("...{}", result.description()), CMP, kLvlImmortal, SYSLOG, true);
 		return;
 	}
 
 	pugi::xml_node node_list = doc.child("templates");
 	if (!node_list) {
-		snprintf(buf, kMaxStringLength, "...templates list read fail");
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+		mudlog("...templates list read fail", CMP, kLvlImmortal, SYSLOG, true);
 		return;
 	}
 	item_descriptions.clear();
@@ -78,9 +172,7 @@ void load_item_desc() {
 
 			int item_vnum = parse::ReadAttrAsInt(item, "vnum");
 			if (item_vnum <= 0) {
-				snprintf(buf, kMaxStringLength,
-						 "...bad item description attributes (item_vnum=%d)", item_vnum);
-				mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+				mudlog(fmt::format("...bad item description attributes (item_vnum={})", item_vnum), CMP, kLvlImmortal, SYSLOG, true);
 				return;
 			}
 			item_desc_node desc_node;
@@ -91,17 +183,17 @@ void load_item_desc() {
 			child = item.child("short_description");
 			desc_node.short_description = child.child_value();
 			child = item.child("PNames0");
-			desc_node.PNames[ECase::kNom] = child.child_value();
+			desc_node.PNames[grammar::ECase::kNom] = child.child_value();
 			child = item.child("PNames1");
-			desc_node.PNames[ECase::kGen] = child.child_value();
+			desc_node.PNames[grammar::ECase::kGen] = child.child_value();
 			child = item.child("PNames2");
-			desc_node.PNames[ECase::kDat] = child.child_value();
+			desc_node.PNames[grammar::ECase::kDat] = child.child_value();
 			child = item.child("PNames3");
-			desc_node.PNames[ECase::kAcc] = child.child_value();
+			desc_node.PNames[grammar::ECase::kAcc] = child.child_value();
 			child = item.child("PNames4");
-			desc_node.PNames[ECase::kIns] = child.child_value();
+			desc_node.PNames[grammar::ECase::kIns] = child.child_value();
 			child = item.child("PNames5");
-			desc_node.PNames[ECase::kPre] = child.child_value();
+			desc_node.PNames[grammar::ECase::kPre] = child.child_value();
 			child = item.child("sex");
 			desc_node.sex = static_cast<EGender>(atoi(child.child_value()));
 
@@ -116,22 +208,12 @@ void load_item_desc() {
 					trig_vnum = std::stoi(tmp_value, nullptr, 10);
 				}
 				catch (const std::invalid_argument &) {
-					snprintf(buf,
-							 kMaxStringLength,
-							 "...error while casting to num (item_vnum=%d, casting value=%s)",
-							 item_vnum,
-							 tmp_value.c_str());
-					mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+					mudlog(fmt::format("...error while casting to num (item_vnum={}, casting value={})", item_vnum, tmp_value.c_str()), CMP, kLvlImmortal, SYSLOG, true);
 					continue;
 				}
 
 				if (trig_vnum <= 0) {
-					snprintf(buf,
-							 kMaxStringLength,
-							 "...error while parsing triggers (item_vnum=%d, parsed value=%s)",
-							 item_vnum,
-							 tmp_value.c_str());
-					mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+					mudlog(fmt::format("...error while parsing triggers (item_vnum={}, parsed value={})", item_vnum, tmp_value.c_str()), CMP, kLvlImmortal, SYSLOG, true);
 					return;
 				}
 				trig_vnums.push_back(trig_vnum);
@@ -142,190 +224,86 @@ void load_item_desc() {
 	}
 }
 
-void load(bool reload) {
-	if (reload) {
-		for (const auto &shop : shop_list) {
-			shop->clear_store();
-
-			for (const auto &mob_vnum : shop->mob_vnums()) {
-				int mob_rnum = GetMobRnum(mob_vnum);
-				if (mob_rnum >= 0) {
-					mob_index[mob_rnum].func = nullptr;
-				}
+// Build (or rebuild) the shop list from cfg/economics/shops.xml. The item-set catalog
+// (ShopItemSetsLoader) must already be loaded.
+void ShopsLoader::Load(parser_wrapper::DataNode data) {
+	for (const auto &shop : shop_list) {
+		shop->clear_store();
+		for (const auto &mob_vnum : shop->mob_vnums()) {
+			int mob_rnum = GetMobRnum(mob_vnum);
+			if (mob_rnum >= 0) {
+				mob_index[mob_rnum].func = nullptr;
 			}
 		}
-
-		shop_list.clear();
 	}
+	shop_list.clear();
 	load_item_desc();
 
-	pugi::xml_document doc;
-	pugi::xml_parse_result result = doc.load_file(LIB_PLRSTUFF"/shop/shops.xml");
-	if (!result) {
-		snprintf(buf, kMaxStringLength, "...%s", result.description());
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-		return;
-	}
-	pugi::xml_node node_list = doc.child("shop_list");
-	if (!node_list) {
-		snprintf(buf, kMaxStringLength, "...shop_list read fail");
-		mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-		return;
-	}
-	//наборы предметов - "заготовки" для реальных предметов в магазинах. живут только на время лоада
-	ItemSetListType itemSetList;
-	pugi::xml_node itemSets = doc.child("shop_item_sets");
-	for (pugi::xml_node itemSet = itemSets.child("shop_item_set"); itemSet;
-		 itemSet = itemSet.next_sibling("shop_item_set")) {
-		std::string itemSetId = itemSet.attribute("id").value();
-		ItemSetPtr tmp_set(new item_set);
-		tmp_set->_id = itemSetId;
-
-		for (pugi::xml_node item = itemSet.child("item"); item; item = item.next_sibling("item")) {
-			int item_vnum = parse::ReadAttrAsInt(item, "vnum");
-			int price = parse::ReadAttrAsInt(item, "price");
-			if (item_vnum < 0 || price < 0) {
-				snprintf(buf,
-						 kMaxStringLength,
-						 "...bad shop item set attributes (item_set=%s, item_vnum=%d, price=%d)",
-						 itemSetId.c_str(),
-						 item_vnum,
-						 price);
-				mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-				return;
-			}
-			struct item_set_node tmp_node;
-			tmp_node.item_price = price;
-			tmp_node.item_vnum = item_vnum;
-			tmp_set->item_list.push_back(tmp_node);
+	for (auto node : data.Children()) {
+		if (std::string(node.GetName()) != "shop") {
+			continue;
 		}
-		itemSetList.push_back(tmp_set);
-	}
-
-	for (pugi::xml_node node = node_list.child("shop"); node; node = node.next_sibling("shop")) {
-		std::string shop_id = node.attribute("id").value();
-		std::string currency = node.attribute("currency").value();
-		int profit = node.attribute("profit").as_int();
-		std::string can_buy_value = node.attribute("can_buy").value();
-		bool shop_can_buy = can_buy_value != "false";
-		int store_time_min =
-			(node.attribute("waste_time_min").value() ? node.attribute("waste_time_min").as_int() : 180);
-
-		// иним сам магазин
+		const std::string shop_id = node.GetValue("id");
 		const auto tmp_shop = std::make_shared<shop_node>();
 		tmp_shop->id = shop_id;
-		tmp_shop->currency = currency;
-		tmp_shop->profit = profit;
-		tmp_shop->can_buy = shop_can_buy;
-		tmp_shop->waste_time_min = store_time_min;
-		//словарные данные
-		tmp_shop->SetDictionaryName(shop_id);//а нету у магазинов названия
+		tmp_shop->currency = node.GetValue("currency");
+		tmp_shop->profit = std::atoi(node.GetValue("profit"));
+		tmp_shop->can_buy = std::string(node.GetValue("can_buy")) != "false";
+		const char *wt = node.GetValue("waste_time_min");
+		tmp_shop->waste_time_min = (wt && *wt) ? std::atoi(wt) : 180;
+		tmp_shop->SetDictionaryName(shop_id);
 		tmp_shop->SetDictionaryTID(shop_id);
 
 		std::map<int, std::string> mob_to_template;
-
-		for (pugi::xml_node mob = node.child("mob"); mob; mob = mob.next_sibling("mob")) {
-			int mob_vnum = parse::ReadAttrAsInt(mob, "mob_vnum");
-			std::string templateId = mob.attribute("template").value();
-			if (mob_vnum < 0) {
-				snprintf(buf, kMaxStringLength,
-						 "...bad shop attributes (mob_vnum=%d shop id=%s)", mob_vnum, shop_id.c_str());
-				mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-				return;
-			}
-
-			if (!templateId.empty()) {
-				mob_to_template[mob_vnum] = templateId;
-			}
-
-			tmp_shop->add_mob_vnum(mob_vnum);
-			// проверяем и сетим мобу спешиал
-			// даже если дальше магаз не залоадится - моб будет выдавать ошибку на магазинные спешиалы
-			auto mob_rnum = GetMobRnum(mob_vnum);
-			if (mob_rnum >= 0) {
-				if (mob_index[mob_rnum].func
-					&& mob_index[mob_rnum].func != shop_ext) {
-					snprintf(buf, kMaxStringLength,
-							 "...shopkeeper already with special (mob_vnum=%d)", mob_vnum);
-					mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-				} else {
-					mob_index[mob_rnum].func = shop_ext;
+		for (auto child : node.Children()) {
+			const std::string cname = child.GetName();
+			if (cname == "mob") {
+				const int mob_vnum = std::atoi(child.GetValue("mob_vnum"));
+				const std::string templateId = child.GetValue("template");
+				if (mob_vnum < 0) {
+					mudlog(fmt::format("...bad shop attributes (mob_vnum={} shop id={})", mob_vnum, shop_id.c_str()), CMP, kLvlImmortal, SYSLOG, true);
+					continue;
 				}
-			} else {
-				snprintf(buf, kMaxStringLength, "...incorrect mob_vnum=%d", mob_vnum);
-				mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-			}
-		}
-
-		// и список его продукции
-		for (pugi::xml_node item = node.child("item"); item; item = item.next_sibling("item")) {
-			int item_vnum = parse::ReadAttrAsInt(item, "vnum");
-			int price = parse::ReadAttrAsInt(item, "price");
-			if (item_vnum < 0
-				|| price < 0) {
-				snprintf(buf, kMaxStringLength,
-						 "...bad shop attributes (item_vnum=%d, price=%d)", item_vnum, price);
-				mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-				return;
-			}
-
-			// проверяем шмотку
-			int item_rnum = GetObjRnum(item_vnum);
-			if (item_rnum < 0) {
-				snprintf(buf, kMaxStringLength, "...incorrect item_vnum=%d", item_vnum);
-				mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-				return;
-			}
-
-			// иним ее в магазе
-			const auto item_price = price == 0 ? obj_proto[item_rnum]->get_cost()
-											   : price; //если не указана цена - берем цену из прототипа
-			tmp_shop->add_item(item_vnum, item_price);
-		}
-
-		//и еще добавим наборы
-		for (pugi::xml_node itemSet = node.child("item_set"); itemSet; itemSet = itemSet.next_sibling("item_set")) {
-			std::string itemSetId = itemSet.child_value();
-			for (ItemSetListType::const_iterator it = itemSetList.begin(); it != itemSetList.end(); ++it) {
-				if ((*it)->_id == itemSetId) {
-					for (unsigned i = 0; i < (*it)->item_list.size(); i++) {
-						// проверяем шмотку
-						int item_rnum = GetObjRnum((*it)->item_list[i].item_vnum);
+				if (!templateId.empty()) {
+					mob_to_template[mob_vnum] = templateId;
+				}
+				tmp_shop->add_mob_vnum(mob_vnum);
+			} else if (cname == "item") {
+				const int item_vnum = std::atoi(child.GetValue("vnum"));
+				const int price = std::atoi(child.GetValue("price"));
+				if (item_vnum < 0 || price < 0) {
+					mudlog(fmt::format("...bad shop attributes (item_vnum={}, price={})", item_vnum, price), CMP, kLvlImmortal, SYSLOG, true);
+					continue;
+				}
+				const int item_rnum = GetObjRnum(item_vnum);
+				if (item_rnum < 0) {
+					mudlog(fmt::format("...incorrect item_vnum={}", item_vnum), CMP, kLvlImmortal, SYSLOG, true);
+					continue;
+				}
+				const auto item_price = price == 0 ? obj_proto[item_rnum]->get_cost() : price;
+				tmp_shop->add_item(item_vnum, item_price);
+			} else if (cname == "item_set") {
+				const std::string itemSetId = child.GetValue("id");
+				for (const auto &set : item_sets()) {
+					if (set->_id != itemSetId) {
+						continue;
+					}
+					for (const auto &entry : set->item_list) {
+						const int item_rnum = GetObjRnum(entry.item_vnum);
 						if (item_rnum < 0) {
-							snprintf(buf,
-									 kMaxStringLength,
-									 "...incorrect item_vnum=%d in item_set=%s",
-									 (int) (*it)->item_list[i].item_vnum,
-									 (*it)->_id.c_str());
-							mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-							return;
+							mudlog(fmt::format("...incorrect item_vnum={} in item_set={}", (int) entry.item_vnum, set->_id.c_str()), CMP, kLvlImmortal, SYSLOG, true);
+							continue;
 						}
-						// иним ее в магазе
-						const auto item_vnum = (*it)->item_list[i].item_vnum;
-						const int price = (*it)->item_list[i].item_price;
-						const auto item_price = price == 0 ? obj_proto[item_rnum]->get_cost() : price;
-						tmp_shop->add_item(item_vnum, item_price);
-						/*
-						Список инится но нигде не используется. к удалению
-						if (items_list_for_checks.count(item_vnum) != 1)
-						{
-							items_list_for_checks.insert(std::pair<int, int>(item_vnum, item_price));
-						}
-						else
-						{
-							if (items_list_for_checks[item_vnum] > item_price)
-								items_list_for_checks[item_vnum] = item_price;
-						}
-						*/
+						const auto item_price = entry.item_price == 0 ? obj_proto[item_rnum]->get_cost() : entry.item_price;
+						tmp_shop->add_item(entry.item_vnum, item_price);
 					}
 				}
 			}
 		}
 
 		if (tmp_shop->empty()) {
-			snprintf(buf, kMaxStringLength, "...item list empty (shop_id=%s)", shop_id.c_str());
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
-			return;
+			mudlog(fmt::format("...item list empty (shop_id={})", shop_id.c_str()), CMP, kLvlImmortal, SYSLOG, true);
+			continue;
 		}
 
 		const auto &items = tmp_shop->items_list();
@@ -344,118 +322,247 @@ void load(bool reload) {
 			}
 		}
 
+		// Assign the shop special only to keepers of a shop that actually loaded.
+		for (const auto &mob_vnum : tmp_shop->mob_vnums()) {
+			const auto keeper_rnum = GetMobRnum(mob_vnum);
+			if (keeper_rnum < 0) {
+				mudlog(fmt::format("...incorrect mob_vnum={}", mob_vnum), CMP, kLvlImmortal, SYSLOG, true);
+				continue;
+			}
+			if (mob_index[keeper_rnum].func && mob_index[keeper_rnum].func != shop_ext) {
+				mudlog(fmt::format("...shopkeeper already with special (mob_vnum={})", mob_vnum), CMP, kLvlImmortal, SYSLOG, true);
+				continue;
+			}
+			specials::RegisterMob(mob_vnum, specials::ESpecial::kShop);
+		}
+
 		shop_list.push_back(tmp_shop);
 	}
-
 	log_shop_load();
 }
 
-int get_spent_today() {
-	return spent_today;
+void ShopsLoader::Reload(parser_wrapper::DataNode data) {
+	Load(data);
+}
+
+std::string ShopsLoader::EditableWhat() const {
+	return "shop";
+}
+
+std::vector<cfg_manager::EditableElement> ShopsLoader::ListElements() const {
+	std::vector<cfg_manager::EditableElement> out;
+	for (const auto &shop : shop_list) {
+		out.push_back({shop->id, shop->id});
+	}
+	return out;
+}
+
+cfg_manager::ValidationResult ShopsLoader::Validate(parser_wrapper::DataNode &doc) const {
+	for (auto node : doc.Children()) {
+		if (std::string(node.GetName()) != "shop") {
+			continue;
+		}
+		if (std::string(node.GetValue("id")).empty()) {
+			return {false, "a <shop> has an empty id"};
+		}
+	}
+	return {true, ""};
+}
+
+std::string ShopsLoader::CanonicalElementId(const std::string &id) const {
+	return IsValidShopId(id) ? id : "";   // CamelCase: letters/digits, starts with a letter
+}
+
+parser_wrapper::DataNode ShopsLoader::CreateElementNode(parser_wrapper::DataNode root, const std::string &id) const {
+	auto node = root.AddChild("shop");
+	node.SetValue("id", id);
+	node.SetValue("currency", "kKuna");
+	node.SetValue("profit", "0");
+	node.SetValue("waste_time_min", "180");
+	node.SetValue("can_buy", "false");
+	return node;   // keeper mobs and stock are added afterwards in the editor
+}
+
+// Thin entry points: route through cfg_manager so boot, `reload shop` and the item-set
+// editor share one path (cfg_manager supplies the DataNode).
+//
+// Перезагрузка каталога наборов сюда НЕ входит, и это принципиально:
+// ShopItemSetsLoader::Reload сам зовет load(true), чтобы правка каталога сразу доехала до
+// магазинов. Если добавить сюда ReloadCfg("shop_item_sets"), получится бесконечная
+// рекурсия -- мад висит и умирает (issue #3700, откат правки из #3701). Точка входа,
+// которой нужны обе части, -- ReloadCfg("shop_item_sets"): каталог, а следом магазины.
+//
+// На буте рекурсии нет: там LoadCfg, а не Reload, поэтому обе части читаются здесь.
+void load(bool reload) {
+	if (reload) {
+		MUD::CfgManager().ReloadCfg("shops");
+	} else {
+		MUD::CfgManager().LoadCfg("shop_item_sets");
+		MUD::CfgManager().LoadCfg("shops");
+	}
+}
+
+int get_spent_since_boot() {
+	return spent_since_boot;
 }
 
 } // namespace ShopExt
 
 using namespace ShopExt;
 
-int shop_ext(CharData *ch, void *me, int cmd, char *argument) {
+namespace {
+// issue.specials: shop subcommands. One function per action; the resolver maps the synonym words to
+// these handlers and auto-generates the "Чего желаете" tooltip from the same list. The legacy steal
+// override is gone (shops are entity-verb "магазин <действие>" now).
+enum class EShopCmd { kList, kBuy, kSell, kValue, kRepair, kFilter, kExamine, kIdentify };
+
+shop_node::shared_ptr ShopOf(CharData *ch, CharData *keeper) {
+	for (const auto &s : shop_list) {
+		if (std::find(s->mob_vnums().begin(), s->mob_vnums().end(), GET_MOB_VNUM(keeper)) != s->mob_vnums().end()) {
+			return s;
+		}
+	}
+	log("SYSERROR : магазин не найден mob_vnum=%d (%s:%d)", GET_MOB_VNUM(keeper), __FILE__, __LINE__);
+	SendMsgToChar(specials::ShopMsg(specials::EShopMsg::kError) + "\r\n", ch);
+	return nullptr;
+}
+
+int ShopList(CharData *ch, void *me, char *rest) {
+	auto *const keeper = reinterpret_cast<CharData *>(me);
+	const auto shop = ShopOf(ch, keeper);
+	if (!shop) {
+		return 1;
+	}
+	std::string buffer = rest, buffer2;
+	GetOneParam(buffer, buffer2);
+	shop->print_shop_list(ch, buffer2, GET_MOB_VNUM(keeper));
+	return 1;
+}
+
+int ShopFilter(CharData *ch, void *me, char *rest) {
+	auto *const keeper = reinterpret_cast<CharData *>(me);
+	const auto shop = ShopOf(ch, keeper);
+	if (!shop) {
+		return 1;
+	}
+	shop->filter_shop_list(ch, rest, GET_MOB_VNUM(keeper));
+	return 1;
+}
+
+int ShopBuy(CharData *ch, void *me, char *rest) {
+	auto *const keeper = reinterpret_cast<CharData *>(me);
+	const auto shop = ShopOf(ch, keeper);
+	if (!shop) {
+		return 1;
+	}
+	shop->process_buy(ch, keeper, rest);
+	return 1;
+}
+
+int ShopSell(CharData *ch, void *me, char *rest) {
+	auto *const keeper = reinterpret_cast<CharData *>(me);
+	const auto shop = ShopOf(ch, keeper);
+	if (!shop) {
+		return 1;
+	}
+	shop->process_cmd(ch, keeper, rest, "Продать");
+	return 1;
+}
+
+int ShopValue(CharData *ch, void *me, char *rest) {
+	auto *const keeper = reinterpret_cast<CharData *>(me);
+	const auto shop = ShopOf(ch, keeper);
+	if (!shop) {
+		return 1;
+	}
+	shop->process_cmd(ch, keeper, rest, "Оценить");
+	return 1;
+}
+
+int ShopRepair(CharData *ch, void *me, char *rest) {
+	auto *const keeper = reinterpret_cast<CharData *>(me);
+	const auto shop = ShopOf(ch, keeper);
+	if (!shop) {
+		return 1;
+	}
+	shop->process_cmd(ch, keeper, rest, "Чинить");
+	return 1;
+}
+
+int ShopExamine(CharData *ch, void *me, char *rest) {
+	auto *const keeper = reinterpret_cast<CharData *>(me);
+	const auto shop = ShopOf(ch, keeper);
+	if (!shop) {
+		return 1;
+	}
+	shop->process_ident(ch, keeper, rest, "Рассмотреть");
+	return 1;
+}
+
+int ShopIdentify(CharData *ch, void *me, char *rest) {
+	auto *const keeper = reinterpret_cast<CharData *>(me);
+	const auto shop = ShopOf(ch, keeper);
+	if (!shop) {
+		return 1;
+	}
+	shop->process_ident(ch, keeper, rest, "Характеристики");
+	return 1;
+}
+
+const SubCmdResolver kShopCmds([] { return specials::ShopMsg(specials::EShopMsg::kGreeting); }, {
+	{{"список", "list"}, static_cast<int>(EShopCmd::kList), ShopList},
+	{{"купить", "buy"}, static_cast<int>(EShopCmd::kBuy), ShopBuy},
+	{{"продать", "sell"}, static_cast<int>(EShopCmd::kSell), ShopSell},
+	{{"оценить", "value"}, static_cast<int>(EShopCmd::kValue), ShopValue},
+	{{"чинить", "repair"}, static_cast<int>(EShopCmd::kRepair), ShopRepair},
+	{{"фильтровать", "filter"}, static_cast<int>(EShopCmd::kFilter), ShopFilter},
+	{{"рассмотреть", "examine"}, static_cast<int>(EShopCmd::kExamine), ShopExamine},
+	{{"характеристики", "identify"}, static_cast<int>(EShopCmd::kIdentify), ShopIdentify},
+});
+} // namespace
+
+int shop_ext(CharData *ch, void *me, int /*cmd*/, char *argument) {
 	if (!ch->desc
 		|| ch->IsNpc()) {
 		return 0;
 	}
+	return kShopCmds.Dispatch(ch, me, argument);
+}
 
-	if (!(CMD_IS("список")
-		|| CMD_IS("list")
-		|| CMD_IS("купить")
-		|| CMD_IS("buy")
-		|| CMD_IS("продать")
-		|| CMD_IS("sell")
-		|| CMD_IS("оценить")
-		|| CMD_IS("value")
-		|| CMD_IS("чинить")
-		|| CMD_IS("repair")
-		|| CMD_IS("украсть")
-		|| CMD_IS("steal")
-		|| CMD_IS("фильтровать")
-		|| CMD_IS("filter")
-		|| CMD_IS("рассмотреть")
-		|| CMD_IS("examine")
-		|| CMD_IS("характеристики")
-		|| CMD_IS("identify"))) {
-		return 0;
+namespace {
+
+// Куда торговца ставить не надо. Комната бралась случайно из всего диапазона зоны, без единой
+// проверки, и торговец попадал то в смерть-комнату, то на верхушку дуба (комната 9052 в зоне 90:
+// выходов нет вовсе, лезут туда командным триггером). Оттуда он уже не уйдет -- будет стоять,
+// пока за ним не залезет игрок (issue #3770).
+bool IsGoodRoomForShopKeeper(RoomRnum room_rn) {
+	// Виртуальная комната зоны: служебка, в нее прячут сезонных мобов, игроку она не видна.
+	if (GET_ROOM_VNUM(room_rn) % 100 == 99) {
+		return false;
 	}
-
-	char argm[kMaxInputLength];
-	CharData *const keeper = reinterpret_cast<CharData *>(me);
-	shop_node::shared_ptr shop;
-	for (const auto &s : shop_list) {
-		const auto found =
-			std::find(s->mob_vnums().begin(), s->mob_vnums().end(), GET_MOB_VNUM(keeper)) != s->mob_vnums().end();
-		if (found) {
-			shop = s;
-			break;
+	if (ROOM_FLAGGED(room_rn, ERoomFlag::kNoEntryMob)
+		|| ROOM_FLAGGED(room_rn, ERoomFlag::kDeathTrap)
+		|| ROOM_FLAGGED(room_rn, ERoomFlag::kSlowDeathTrap)
+		|| ROOM_FLAGGED(room_rn, ERoomFlag::kIceTrap)
+		|| ROOM_FLAGGED(room_rn, ERoomFlag::kGodsRoom)
+		|| ROOM_FLAGGED(room_rn, ERoomFlag::kHouse)
+		|| ROOM_FLAGGED(room_rn, ERoomFlag::kHouseEntry)
+		|| ROOM_FLAGGED(room_rn, ERoomFlag::kArena)) {
+		return false;
+	}
+	if (Clan::GetClanByRoom(room_rn)) {
+		return false;
+	}
+	// Ногами в комнату не войти и из нее не выйти -- торговцу там делать нечего.
+	for (int dir = 0; dir < EDirection::kMaxDirNum; ++dir) {
+		if (world[room_rn]->dir_option[dir]) {
+			return true;
 		}
 	}
-
-	if (!shop) {
-		log("SYSERROR : магазин не найден mob_vnum=%d (%s:%d)", GET_MOB_VNUM(keeper), __FILE__, __LINE__);
-		SendMsgToChar("Ошибочка вышла.\r\n", ch);
-
-		return 1;
-	}
-
-	if (CMD_IS("steal")
-		|| CMD_IS("украсть")) {
-		sprintf(argm, "$N вскричал$G '%s'", MSG_NO_STEAL_HERE);
-		sprintf(buf, "ругать %s", GET_NAME(ch));
-		do_social(keeper, buf);
-		act(argm, false, ch, 0, keeper, kToChar);
-		return 1;
-	}
-
-	if (CMD_IS("список")
-		|| CMD_IS("list")) {
-		std::string buffer = argument, buffer2;
-		GetOneParam(buffer, buffer2);
-		shop->print_shop_list(ch, buffer2, GET_MOB_VNUM(keeper));
-		return 1;
-	}
-
-	if (CMD_IS("фильтровать")
-		|| CMD_IS("filter")) {
-		shop->filter_shop_list(ch, argument, GET_MOB_VNUM(keeper));
-		return 1;
-	}
-
-	if (CMD_IS("купить")
-		|| CMD_IS("buy")) {
-		shop->process_buy(ch, keeper, argument);
-		return 1;
-	}
-	if (CMD_IS("характеристики") || CMD_IS("identify")) {
-		shop->process_ident(ch, keeper, argument, "Характеристики");
-		return 1;
-	}
-
-	if (CMD_IS("value") || CMD_IS("оценить")) {
-		shop->process_cmd(ch, keeper, argument, "Оценить");
-		return 1;
-	}
-	if (CMD_IS("продать") || CMD_IS("sell")) {
-		shop->process_cmd(ch, keeper, argument, "Продать");
-		return 1;
-	}
-	if (CMD_IS("чинить") || CMD_IS("repair")) {
-		shop->process_cmd(ch, keeper, argument, "Чинить");
-		return 1;
-	}
-	if (CMD_IS("рассмотреть") || CMD_IS("examine")) {
-		shop->process_ident(ch, keeper, argument, "Рассмотреть");
-		return 1;
-	}
-
-	return 0;
+	return false;
 }
+
+} // namespace
 
 // * Лоад странствующих продавцов в каждой ренте.
 void town_shop_keepers() {
@@ -463,7 +570,7 @@ void town_shop_keepers() {
 	std::set<int> zone_list;
 
 	for (const auto &ch : character_list) {
-		if (IS_RENTKEEPER(ch)
+		if (specials::IsRentkeeper(ch.get())
 			&& ch->in_room > 0
 			&& !Clan::GetClanByRoom(ch->in_room)
 			&& !ROOM_FLAGGED(ch->in_room, ERoomFlag::kArena)
@@ -472,9 +579,21 @@ void town_shop_keepers() {
 			&& zone_list.find(world[ch->in_room]->zone_rn) == zone_list.end()) {
 			int rnum_start, rnum_end;
 			if (GetZoneRooms(world[ch->in_room]->zone_rn, &rnum_start, &rnum_end)) {
-				CharData *mob = ReadMobile(1901, kVirtual);
-				if (mob) {
-					PlaceCharToRoom(mob, number(rnum_start, rnum_end));
+				std::vector<RoomRnum> rooms;
+				for (int rnum = rnum_start; rnum <= rnum_end; ++rnum) {
+					if (IsGoodRoomForShopKeeper(rnum)) {
+						rooms.push_back(rnum);
+					}
+				}
+				if (rooms.empty()) {
+					mudlog(fmt::format("Зона {}: странствующего торговца некуда поставить, пропущена.",
+									   zone_table[world[ch->in_room]->zone_rn].vnum).c_str(),
+						   CMP, kLvlGod, SYSLOG, true);
+				} else {
+					CharData *mob = ReadMobile(1901, kVirtual);
+					if (mob) {
+						PlaceCharToRoom(mob, rooms[number(0, static_cast<int>(rooms.size()) - 1)]);
+					}
 				}
 			}
 			zone_list.insert(world[ch->in_room]->zone_rn);
@@ -492,10 +611,11 @@ void DoStoreShop(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("Чего хотим? Могу пока только характерстики.\r\n", ch);
 		return;
 	}
-	char *stufina = one_argument(argument, arg);
+	char mode[kMaxInputLength];
+	char *stufina = one_argument(argument, mode);
 
-	if (utils::IsAbbr(arg, "характеристики") || utils::IsAbbr(arg, "identify") || utils::IsAbbr(arg, "опознать")) {
-		if ((ch->get_bank() < kChestIdentPay) && (GetRealLevel(ch) < kLvlImplementator)) {
+	if (utils::IsAbbr(mode, "характеристики") || utils::IsAbbr(mode, "identify") || utils::IsAbbr(mode, "опознать")) {
+		if ((currencies::GetBank(*ch, currencies::kGold) < kChestIdentPay) && (GetRealLevel(ch) < kLvlImplementator)) {
 			SendMsgToChar("У вас недостаточно денег в банке для такого исследования.\r\n", ch);
 			return;
 		}
@@ -507,14 +627,14 @@ void DoStoreShop(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 					continue;
 				}
 				const auto obj = shop->GetObjFromShop(item_list.node(i)->uid());
-				if (isname(stufina, obj->get_PName(ECase::kNom))) {
+				if (isname(stufina, obj->get_PName(grammar::ECase::kNom))) {
 					SendMsgToChar(ch, "Характеристики предмета: %s\r\n", stufina);
-					mort_show_obj_values(obj, ch, 200);
-					ch->remove_bank(kChestIdentPay);
+					MortShowObjValues(obj, ch, 200);
+					currencies::RemoveBank(*ch, currencies::kGold, kChestIdentPay);
 					SendMsgToChar(ch,
 								  "&GЗа информацию о предмете с вашего банковского счета сняли %d %s&n\r\n",
 								  kChestIdentPay,
-								  GetDeclensionInNumber(kChestIdentPay, EWhat::kMoneyU));
+								  MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(kChestIdentPay, grammar::ECase::kNom).c_str());
 					return;
 				}
 			}

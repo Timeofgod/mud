@@ -8,6 +8,9 @@
 ************************************************************************ */
 
 #include "liquid.h"
+#include "administration/privilege.h"
+#include "utils/grammar/gender.h"
+#include "utils/grammar/declensions.h"
 
 #include "engine/entities/obj_data.h"
 #include "engine/entities/char_data.h"
@@ -17,12 +20,15 @@
 #include "engine/db/global_objects.h"
 #include "poison.h"
 
-#include <cmath>
+#include "utils/utils_string.h"
 
-const int kDrunked = 10;
-const int kMortallyDrunked = 18;
-const int kMaxCondition = 48;
-const int kNormCondition = 22;
+#include <fmt/format.h>
+
+#include <cmath>
+#include <limits>
+
+#include "gameplay/magic/magic_utils.h"
+
 
 const char *drinks[] = {"воды",
 						"пива",
@@ -184,35 +190,48 @@ namespace drinkcon {
 
 ObjVal::EValueKey init_spell_num(int num) {
 	return num == 1
-		   ? ObjVal::EValueKey::POTION_SPELL1_NUM
+		   ? ObjVal::EValueKey::kSpell1Num
 		   : (num == 2
-			  ? ObjVal::EValueKey::POTION_SPELL2_NUM
-			  : ObjVal::EValueKey::POTION_SPELL3_NUM);
+			  ? ObjVal::EValueKey::kSpell2Num
+			  : ObjVal::EValueKey::kSpell3Num);
 }
 
 ObjVal::EValueKey init_spell_lvl(int num) {
 	return num == 1
-		   ? ObjVal::EValueKey::POTION_SPELL1_LVL
+		   ? ObjVal::EValueKey::kPotionSpell1Lvl
 		   : (num == 2
-			  ? ObjVal::EValueKey::POTION_SPELL2_LVL
-			  : ObjVal::EValueKey::POTION_SPELL3_LVL);
+			  ? ObjVal::EValueKey::kPotionSpell2Lvl
+			  : ObjVal::EValueKey::kPotionSpell3Lvl);
 }
 
 void reset_potion_values(CObjectPrototype *obj) {
-	obj->SetPotionValueKey(ObjVal::EValueKey::POTION_SPELL1_NUM, -1);
-	obj->SetPotionValueKey(ObjVal::EValueKey::POTION_SPELL1_LVL, -1);
-	obj->SetPotionValueKey(ObjVal::EValueKey::POTION_SPELL2_NUM, -1);
-	obj->SetPotionValueKey(ObjVal::EValueKey::POTION_SPELL2_LVL, -1);
-	obj->SetPotionValueKey(ObjVal::EValueKey::POTION_SPELL3_NUM, -1);
-	obj->SetPotionValueKey(ObjVal::EValueKey::POTION_SPELL3_LVL, -1);
-	obj->SetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kSpell1Num, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kPotionSpell1Lvl, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kSpell2Num, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kPotionSpell2Lvl, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kSpell3Num, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kPotionSpell3Lvl, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kPotionPotency, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kPotionBrewRoll, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kMakerSkill, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kMakerStat, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kLiquidTimer, -1);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kLiquidPoison, -1);
 }
 
 /// уровень в зельях (GET_OBJ_VAL(from_obj, 0)) пока один на все заклы
 bool copy_value(const CObjectPrototype *from_obj, CObjectPrototype *to_obj, int num) {
-	if (GET_OBJ_VAL(from_obj, num) > 0) {
-		to_obj->SetPotionValueKey(init_spell_num(num), GET_OBJ_VAL(from_obj, num));
-		to_obj->SetPotionValueKey(init_spell_lvl(num), GET_OBJ_VAL(from_obj, 0));
+	// issue.magic-items: заклинание зелья лежит в extra_values (kSpell<num>Num), сырой val[num]
+	// после миграции обнулён. Читали val -> при переливе в сосуд заклинание терялось ("у зелья
+	// отсутствуют заклинания"). Берём из ключа.
+	const int spell = from_obj->GetPotionValueKey(init_spell_num(num));
+	if (spell > 0) {
+		to_obj->SetPotionValueKey(init_spell_num(num), spell);
+		const int lvl = from_obj->GetPotionValueKey(init_spell_lvl(num));
+		if (lvl > 0) {
+			to_obj->SetPotionValueKey(init_spell_lvl(num), lvl);
+		}
 		return true;
 	}
 	return false;
@@ -230,7 +249,17 @@ void copy_potion_values(const CObjectPrototype *from_obj, CObjectPrototype *to_o
 	}
 
 	if (copied) {
-		to_obj->SetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM, GET_OBJ_VNUM(from_obj));
+		to_obj->SetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum, GET_OBJ_VNUM(from_obj));
+		// issue.potion-hotfix: the brewed-in strength is one per potion (not per spell), so carry the
+		// potency + frozen noise roll once, letting a poured container cast exactly like the source.
+		to_obj->SetPotionValueKey(ObjVal::EValueKey::kPotionPotency,
+								  from_obj->GetPotionValueKey(ObjVal::EValueKey::kPotionPotency));
+		to_obj->SetPotionValueKey(ObjVal::EValueKey::kPotionBrewRoll,
+								  from_obj->GetPotionValueKey(ObjVal::EValueKey::kPotionBrewRoll));
+		to_obj->SetPotionValueKey(ObjVal::EValueKey::kMakerSkill,
+								  from_obj->GetPotionValueKey(ObjVal::EValueKey::kMakerSkill));
+		to_obj->SetPotionValueKey(ObjVal::EValueKey::kMakerStat,
+								  from_obj->GetPotionValueKey(ObjVal::EValueKey::kMakerStat));
 	}
 }
 
@@ -238,27 +267,35 @@ void copy_potion_values(const CObjectPrototype *from_obj, CObjectPrototype *to_o
 
 using namespace drinkcon;
 
-int cast_potion_spell(CharData *ch, ObjData *obj, int num) {
+ECastResult cast_potion_spell(CharData *ch, ObjData *obj, int num) {
 	const auto spell_id = static_cast<ESpell>(obj->GetPotionValueKey(init_spell_num(num)));
-	const int level = -obj->GetPotionValueKey(init_spell_lvl(num));
-
-	if (spell_id > ESpell::kUndefined) {
-		return CallMagic(ch, ch, nullptr, world[ch->in_room], spell_id, level);
+	if (spell_id <= ESpell::kUndefined) {
+		return ECastResult::kSuccess;
 	}
-	return 1;
+	// issue.potion-hotfix P3: strength is brewed in, not taken from the drinker -- the crafted
+	// kPotionPotency, or (non-crafted) the value a fixed-skill potion-maker would brew (MagicItemPotency).
+	// kPotionBrewRoll is the frozen brew-luck z replayed by CalcNoisyAmount; absent (non-crafted) ->
+	// NaN -> drawn at cast. One potency + roll for the whole potion.
+	const float potency = MagicItemPotency(obj, spell_id);
+	const int brew_roll = obj->GetPotionValueKey(ObjVal::EValueKey::kPotionBrewRoll);
+	const double noise_z = (brew_roll > 0)
+		? static_cast<double>(brew_roll) / ObjVal::kBrewRollScale - ObjVal::kBrewRollBias
+		: std::numeric_limits<double>::quiet_NaN();
+	return CallMagic(ch, ch, nullptr, world[ch->in_room], spell_id, 0, potency, noise_z, MagicItemSkill(obj));
 }
 
 int TryCastSpellsFromLiquid(CharData *ch, ObjData *jar) {
-	if (is_potion(jar) && jar->GetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM) >= 0) {
+	if (is_potion(jar) && jar->GetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum) >= 0) {
 		act("$n выпил$g зелья из $o1.", true, ch, jar, 0, kToRoom);
-		SendMsgToChar(ch, "Вы выпили зелья из %s.\r\n", OBJN(jar, ch, ECase::kGen));
+		SendMsgToChar(ch, "Вы выпили зелья из %s.\r\n", OBJN(jar, ch, grammar::ECase::kGen));
 
 		//не очень понятно, но так было
+		// issue.potion-hotfix: all three slots are spells again (potency/roll live in their own keys)
 		for (int i = 1; i <= 3; ++i)
-			if (cast_potion_spell(ch, jar, i) <= 0)
+			if (cast_potion_spell(ch, jar, i) != ECastResult::kSuccess)
 				break;
 
-		SetWaitState(ch, kBattleRound);
+		SetBattleLag(ch, 1);
 		jar->dec_weight();
 		// все выпито
 		jar->dec_val(1);
@@ -361,11 +398,12 @@ int check_potion_spell(ObjData *from_obj, ObjData *to_obj, int num) {
 	const auto spell = init_spell_num(num);
 	const auto level = init_spell_lvl(num);
 
-	if (GET_OBJ_VAL(from_obj, num) != to_obj->GetPotionValueKey(spell)) {
+	// issue.magic-items: заклинание и уровень зелья -- в extra_values, сырой val обнулён миграцией
+	if (from_obj->GetPotionValueKey(spell) != to_obj->GetPotionValueKey(spell)) {
 		// не совпали заклы
 		return 0;
 	}
-	if (GET_OBJ_VAL(from_obj, 0) < to_obj->GetPotionValueKey(level)) {
+	if (from_obj->GetPotionValueKey(level) < to_obj->GetPotionValueKey(level)) {
 		// переливаемое зелье ниже уровня закла в емкости
 		return -1;
 	}
@@ -377,13 +415,13 @@ int check_potion_spell(ObjData *from_obj, ObjData *to_obj, int num) {
 ///        -1 - попытка перелить зелье с меньшим уровнем закла
 int drinkcon::check_equal_potions(ObjData *from_obj, ObjData *to_obj) {
 	// емкость с уже перелитым ранее зельем
-	if (to_obj->GetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM) > 0
-		&& GET_OBJ_VNUM(from_obj) != to_obj->GetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM)) {
+	if (to_obj->GetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum) > 0
+		&& GET_OBJ_VNUM(from_obj) != to_obj->GetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum)) {
 		return 0;
 	}
 	// совпадение заклов и не меньшего уровня
 	for (int i = 1; i <= 3; ++i) {
-		if (GET_OBJ_VAL(from_obj, i) > 0) {
+		if (from_obj->GetPotionValueKey(init_spell_num(i)) > 0) {
 			int result = check_potion_spell(from_obj, to_obj, i);
 			if (result <= 0) {
 				return result;
@@ -417,7 +455,9 @@ int check_drincon_spell(ObjData *from_obj, ObjData *to_obj, int num) {
 int drinkcon::check_equal_drinkcon(ObjData *from_obj, ObjData *to_obj) {
 	// совпадение заклов и не меньшего уровня (и в том же порядке, ибо влом)
 	for (int i = 1; i <= 3; ++i) {
-		if (GET_OBJ_VAL(from_obj, i) > 0) {
+		// issue.magic-items: гейт по наличию заклинания в ключе, а не по сырому val (у сосуда это
+		// объём/тип/отрава). Иначе позиция 3 сверялась только при наличии отравы.
+		if (from_obj->GetPotionValueKey(init_spell_num(i)) > 0) {
 			int result = check_drincon_spell(from_obj, to_obj, i);
 			if (result <= 0) {
 				return result;
@@ -437,10 +477,75 @@ void drinkcon::spells_to_drinkcon(ObjData *from_obj, ObjData *to_obj) {
 		to_obj->SetPotionValueKey(level, from_obj->GetPotionValueKey(level));
 	}
 	// сохранение инфы о первоначальном источнике зелья
-	const int proto_vnum = from_obj->GetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM) > 0
-						   ? from_obj->GetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM)
+	const int proto_vnum = from_obj->GetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum) > 0
+						   ? from_obj->GetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum)
 						   : GET_OBJ_VNUM(from_obj);
-	to_obj->SetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM, proto_vnum);
+	to_obj->SetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum, proto_vnum);
+	// issue.potion-hotfix: carry the FULL brewed stats, not just the spells + proto vnum. A brewed
+	// potion's strength is its maker skill/stat (+ the frozen roll); the vnum alone can't recover it.
+	for (const auto key : {ObjVal::EValueKey::kMakerSkill, ObjVal::EValueKey::kMakerStat,
+						   ObjVal::EValueKey::kPotionPotency, ObjVal::EValueKey::kPotionBrewRoll}) {
+		to_obj->SetPotionValueKey(key, from_obj->GetPotionValueKey(key));
+	}
+}
+
+// issue.potion-hotfix: pouring one potion (n_from units) into another (n_to units) blends the two
+// makers' inputs by quantity -- e.g. 18 units at skill 100 mixed with 2 at skill 80 gives
+// (18*100 + 2*80)/20 = 98; the key stat blends the same way, and the re-derived potency follows.
+// The spells must already match (the caller checks). Uses each side's EFFECTIVE value so an authored
+// potion (no stored skill/stat) contributes its authored maker (80/25), not zero.
+void drinkcon::mix_potion_values(ObjData *to_obj, const ObjData *from_obj, int n_to, int n_from) {
+	if (n_to + n_from <= 0) {
+		return;
+	}
+	const int skill = (n_to * MagicItemSkill(to_obj) + n_from * MagicItemSkill(from_obj)) / (n_to + n_from);
+	const int stat  = (n_to * MagicItemStat(to_obj)  + n_from * MagicItemStat(from_obj))  / (n_to + n_from);
+	to_obj->SetPotionValueKey(ObjVal::EValueKey::kMakerSkill, std::max(1, skill));
+	to_obj->SetPotionValueKey(ObjVal::EValueKey::kMakerStat, std::max(1, stat));
+}
+
+int drinkcon::age_contents(ObjData *obj) {
+	if (!obj) {
+		return 0;
+	}
+	const auto type = obj->get_type();
+	if (type != EObjType::kLiquidContainer && type != EObjType::kFood) {
+		return 0;
+	}
+	int timer = obj->GetPotionValueKey(ObjVal::EValueKey::kLiquidTimer);
+	if (timer <= 0) {
+		return 0;    // 0 / unset -> no freshness clock (never spoils, or already spoiled)
+	}
+	timer -= 1;
+	obj->SetPotionValueKey(ObjVal::EValueKey::kLiquidTimer, timer);
+	if (timer == 0) {
+		spoil_potion(obj);
+	}
+	return timer;
+}
+
+void drinkcon::spoil_potion(ObjData *obj) {
+	if (!obj) {
+		return;
+	}
+	// Poison level = a fixed percentage of the power the potion has RIGHT NOW (before it is weakened),
+	// read from its primary spell's potency. Compute it first, then halve the power inputs so the next
+	// spoilage cycle leaves an even weaker -- eventually inert -- potion.
+	const auto spell = static_cast<ESpell>(obj->GetPotionValueKey(ObjVal::EValueKey::kSpell1Num));
+	float power = 0.0f;
+	if (spell > ESpell::kUndefined) {
+		power = MagicItemPotency(obj, spell);
+	}
+	int poison = 0;
+	if (power > 0.0f) {
+		poison = std::max(1, static_cast<int>(std::lround(power * kSpoiledPoisonPercent / 100.0)));
+	}
+	obj->SetPotionValueKey(ObjVal::EValueKey::kLiquidPoison, poison);
+
+	// Halve the effective maker skill/stat and store them EXPLICITLY. MagicItemSkill/Stat fall back to
+	// the authored default only when the key is ABSENT, so once stored a value keeps halving toward 0.
+	obj->SetPotionValueKey(ObjVal::EValueKey::kMakerSkill, MagicItemSkill(obj) / 2);
+	obj->SetPotionValueKey(ObjVal::EValueKey::kMakerStat,  MagicItemStat(obj)  / 2);
 }
 
 size_t find_liquid_name(const char *name) {
@@ -455,68 +560,84 @@ size_t find_liquid_name(const char *name) {
 	return result;
 }
 
+// Разделитель между названием ёмкости и названием жидкости: "древний череп" + " с " + "зельем".
+// Длину берём отсюда же -- в KOI8-R это три байта, в UTF-8 четыре, а зашитая тройка срезала
+// разделитель не целиком и оставляла в названии лишний пробел (issue #3681).
+static const std::string kLiquidSeparator = " с ";
+
+// Имена, которые прежняя обрезка успела испортить, оканчиваются пробелом -- он остался от
+// недорезанного разделителя и уехал в файлы вещей. Приписав к такому имени " с ", получаем
+// "огромная дубовая бочка  с черным колдовским зельем", и так при каждой загрузке. Поэтому
+// хвостовые пробелы срезаем с обеих сторон -- и когда название жидкости снимаем, и когда
+// добавляем: уже испорченные вещи чинятся сами, а описки билдеров не всплывают в игре.
+static std::string CutLiquidName(const std::string &name, size_t pos, size_t separator_len) {
+	return utils::TrimRightCopy(name.substr(0, pos - separator_len));
+}
+
+// Снять с одного поля название жидкости. Если снимать нечего -- всё равно срезать хвостовые
+// пробелы: у пустой ёмкости название жидкости уже снято, а пробел от старой обрезки в имени
+// остался, и "бросить" показывал "древний череп  ." с дырой перед точкой.
+static std::string StripLiquidName(const std::string &name, size_t separator_len) {
+	const size_t pos = find_liquid_name(name.c_str());
+	if (pos == std::string::npos || pos < separator_len) {
+		return utils::TrimRightCopy(name);
+	}
+	return CutLiquidName(name, pos, separator_len);
+}
+
 void name_from_drinkcon(ObjData *obj) {
-	char new_name[kMaxStringLength];
-	std::string tmp;
+	// Каждое поле обрабатываем независимо: раньше первое же поле без названия жидкости
+	// прерывало разбор остальных, и падежи расходились между собой.
+	obj->set_aliases(StripLiquidName(obj->get_aliases(), 1));
+	obj->set_short_description(StripLiquidName(obj->get_short_description(), kLiquidSeparator.length()));
 
-	size_t pos = find_liquid_name(obj->get_aliases().c_str());
-	if (pos == std::string::npos) return;
-	tmp = obj->get_aliases().substr(0, pos - 1);
-
-	sprintf(new_name, "%s", tmp.c_str());
-	obj->set_aliases(new_name);
-
-	pos = find_liquid_name(obj->get_short_description().c_str());
-	if (pos == std::string::npos) return;
-	tmp = obj->get_short_description().substr(0, pos - 3);
-
-	sprintf(new_name, "%s", tmp.c_str());
-	obj->set_short_description(new_name);
-
-	for (int c = ECase::kFirstCase; c <= ECase::kLastCase; c++) {
-		auto name_case = static_cast<ECase>(c);
-		pos = find_liquid_name(obj->get_PName(name_case).c_str());
-		if (pos == std::string::npos) return;
-		tmp = obj->get_PName(name_case).substr(0, pos - 3);
-		sprintf(new_name, "%s", tmp.c_str());
-		obj->set_PName(name_case, new_name);
+	for (int c = grammar::ECase::kFirstCase; c <= grammar::ECase::kLastCase; c++) {
+		auto name_case = static_cast<grammar::ECase>(c);
+		obj->set_PName(name_case, StripLiquidName(obj->get_PName(name_case), kLiquidSeparator.length()));
 	}
 }
 
 void name_to_drinkcon(ObjData *obj, int type) {
-	int c;
-	char new_name[kMaxInputLength], potion_name[kMaxInputLength];
-	if (type >= NUM_LIQ_TYPES) {
-		snprintf(potion_name, kMaxInputLength, "%s", "непонятной бормотухой, сообщите БОГАМ");
-	} else {
-		snprintf(potion_name, kMaxInputLength, "%s", drinknames[type]);
-	}
+	const std::string potion_name = (type < 0 || type >= NUM_LIQ_TYPES)
+									? "непонятной бормотухой, сообщите БОГАМ"
+									: drinknames[type];
 
-	snprintf(new_name, kMaxInputLength, "%s %s", obj->get_aliases().c_str(), potion_name);
-	obj->set_aliases(new_name);
-	snprintf(new_name, kMaxInputLength, "%s с %s", obj->get_short_description().c_str(), potion_name);
-	obj->set_short_description(new_name);
+	obj->set_aliases(fmt::format("{} {}", utils::TrimRightCopy(obj->get_aliases()), potion_name));
+	obj->set_short_description(fmt::format("{}{}{}",
+										   utils::TrimRightCopy(obj->get_short_description()),
+										   kLiquidSeparator, potion_name));
 
-	for (c = ECase::kFirstCase; c <= ECase::kLastCase; c++) {
-		auto name_case = static_cast<ECase>(c);
-		snprintf(new_name, kMaxInputLength, "%s с %s", obj->get_PName(name_case).c_str(), potion_name);
-		obj->set_PName(name_case, new_name);
+	for (int c = grammar::ECase::kFirstCase; c <= grammar::ECase::kLastCase; c++) {
+		auto name_case = static_cast<grammar::ECase>(c);
+		obj->set_PName(name_case, fmt::format("{}{}{}",
+											  utils::TrimRightCopy(obj->get_PName(name_case)),
+											  kLiquidSeparator, potion_name));
 	}
+	// issue #3620: имя сосуда больше не совпадает с прототипом -- без этой пометки olc при правке
+	// прототипа восстановит исходное имя, и сосуд перестанет показывать свое содержимое.
+	obj->set_is_rename(true);
 }
 
 std::string print_spell(const ObjData *obj, int num) {
 	const auto spell = init_spell_num(num);
-	const auto level = init_spell_lvl(num);
+	const auto spell_id = static_cast<ESpell>(obj->GetPotionValueKey(spell));
 
-	if (obj->GetPotionValueKey(spell) == -1) {
+	if (obj->GetPotionValueKey(spell) == -1 || !MUD::Spell(spell_id).IsValid()) {
 		return "";
 	}
 
+	// issue.potion-olc-values: a magic drink shows the same maker-derived potency
+	// (сила) as a potion, not the retired per-spell level.
+	const int potency = static_cast<int>(MagicItemPotency(obj, spell_id) + 0.5f);
 	char buf_[kMaxInputLength];
-	snprintf(buf_, sizeof(buf_), "Содержит заклинание: %s%s (%d ур.)%s\r\n",
+	// issue #3611: у вещи из прототипа сила посчитана по зашитым умолчаниям, а не по умению
+	// мастера -- помечаем так же, как у свитков, зелий, посохов и жезлов.
+	snprintf(buf_, sizeof(buf_), "%sСодержит заклинание:%s %s%s (сила %d%s)%s\r\n",
+			 kColorGrn, kColorNrm,
 			 kColorCyn,
-			 MUD::Spell(static_cast<ESpell>(obj->GetPotionValueKey(spell))).GetCName(),
-			 obj->GetPotionValueKey(level),
+			 MUD::Spell(spell_id).GetCName(),
+			 potency,
+			 IsPotencyFromProto(obj) ? ", базовая" : "",
 			 kColorNrm);
 
 	return buf_;
@@ -553,31 +674,31 @@ void identify(CharData *ch, const ObjData *obj) {
 
 	snprintf(buf_, sizeof(buf_), "Может вместить зелья: %s%d %s%s\r\n",
 			 kColorCyn,
-			 volume, GetDeclensionInNumber(volume, EWhat::kGulp),
+			 volume, grammar::GetDeclensionInNumber(volume, grammar::EWhat::kGulp),
 			 kColorNrm);
 	out += buf_;
 
 	// емкость не пуста
 	if (amount > 0) {
 		// есть какие-то заклы
-		if (obj->GetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM) >= 0) {
-			if (IS_IMMORTAL(ch)) {
+		if (obj->GetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum) >= 0) {
+			if (privilege::IsImmortal(ch)) {
 				snprintf(buf_, sizeof(buf_), "Содержит %d %s %s (VNUM: %d).\r\n",
 						 amount,
-						 GetDeclensionInNumber(amount, EWhat::kGulp),
+						 grammar::GetDeclensionInNumber(amount, grammar::EWhat::kGulp),
 						 drinks[GET_OBJ_VAL(obj, 2)],
-						 obj->GetPotionValueKey(ObjVal::EValueKey::POTION_PROTO_VNUM));
+						 obj->GetPotionValueKey(ObjVal::EValueKey::kPotionProtoVnum));
 			} else {
 				snprintf(buf_, sizeof(buf_), "Содержит %d %s %s.\r\n",
 						 amount,
-						 GetDeclensionInNumber(amount, EWhat::kGulp),
+						 grammar::GetDeclensionInNumber(amount, grammar::EWhat::kGulp),
 						 drinks[GET_OBJ_VAL(obj, 2)]);
 			}
 			out += buf_;
 			out += print_spells(obj);
 		} else {
 			snprintf(buf_, sizeof(buf_), "Заполнен%s %s на %d%%\r\n",
-					 GET_OBJ_SUF_6(obj),
+					 grammar::ObjSexEnding((obj)->get_sex(), 6),
 					 drinknames[GET_OBJ_VAL(obj, 2)],
 					 amount * 100 / (volume ? volume : 1));
 			out += buf_;
@@ -589,41 +710,40 @@ void identify(CharData *ch, const ObjData *obj) {
 	}
 	if (amount > 0) //если что-то плескается
 	{
-		sprintf(buf1, "Качество: %s \r\n", diag_liquid_timer(obj)); // состояние жижки
-		out += buf1;
+		out += fmt::format("Качество: {} \r\n", diag_liquid_timer(obj)); // состояние жижки
 	}
 	SendMsgToChar(out, ch);
 }
 
-char *daig_filling_drink(const ObjData *obj, const CharData *ch) {
+// Возвращала указатель на глобальный buf1: следующий вызов затирал ответ предыдущего,
+// а вызывающий в sight.cpp ещё и правил эту память на месте (#3814).
+std::string daig_filling_drink(const ObjData *obj, const CharData *ch) {
 	char tmp[256];
 	if (GET_OBJ_VAL(obj, 1) <= 0) {
-		sprintf(buf1, "Пусто");
-		return buf1;
+		return "Пусто";
 	}
 	else {
 		if (GET_OBJ_VAL(obj, 0) <= 0 || GET_OBJ_VAL(obj, 1) > GET_OBJ_VAL(obj, 0)) {
-			sprintf(buf1, "Заполнен%s вакуумом?!", GET_OBJ_SUF_6(obj));    // BUG
-			return buf1;
+			return fmt::format("Заполнен{} вакуумом?!", grammar::ObjSexEnding((obj)->get_sex(), 6));    // BUG
 		}
 		else {
-			const char *msg = AFF_FLAGGED(ch, EAffect::kDetectPoison) && obj->get_val(3) == 1 ? " *отравленной*" : "";
+			const char *msg = AFF_FLAGGED(ch, EAffect::kDetectPoison)
+				&& obj->GetPotionValueKey(ObjVal::EValueKey::kLiquidPoison) > 0 ? " *отравленной*" : "";
 			int amt = (GET_OBJ_VAL(obj, 1) * 5) / GET_OBJ_VAL(obj, 0);
 			sprinttype(GET_OBJ_VAL(obj, 2), color_liquid, tmp);
-			snprintf(buf1, kMaxStringLength,
-					 "Наполнен%s %s%s%s жидкостью", GET_OBJ_SUF_6(obj), fullness[amt], tmp, msg);
-			return buf1;
+			return fmt::format("Наполнен{} {}{}{} жидкостью",
+							   grammar::ObjSexEnding((obj)->get_sex(), 6), fullness[amt], tmp, msg);
 		}
 	}
 }
 
 const char *diag_liquid_timer(const ObjData *obj) {
-	int tm;
-	if (GET_OBJ_VAL(obj, 3) == 1)
+	// issue.potion-hotfix: freshness now lives in kLiquidTimer (a countdown), spoilage in kLiquidPoison.
+	if (obj->GetPotionValueKey(ObjVal::EValueKey::kLiquidPoison) > 0)
 		return "испортилось!";
-	if (GET_OBJ_VAL(obj, 3) == 0)
+	const int tm = obj->GetPotionValueKey(ObjVal::EValueKey::kLiquidTimer);
+	if (tm <= 0)   // 0 / absent -> no spoilage clock running
 		return "идеальное.";
-	tm = (GET_OBJ_VAL(obj, 3));
 	if (tm < 1440) // сутки
 		return "скоро испортится!";
 	else if (tm < 10080) //неделя

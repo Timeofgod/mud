@@ -1,12 +1,17 @@
 #include "top.h"
+#include "administration/privilege.h"
+#include "utils/grammar/declensions.h"
 
-#include "gameplay/classes/classes.h"
+#include "gameplay/classes/pc_classes.h"
 #include "engine/ui/color.h"
 #include "gameplay/mechanics/glory_const.h"
 #include "engine/entities/char_data.h"
+#include "engine/core/comm.h"
+#include "engine/network/descriptor_data.h"
 #include "engine/db/global_objects.h"
 #include "engine/ui/table_wrapper.h"
 #include "utils/utils_time.h"
+#include "gameplay/core/remort.h"
 
 
 PlayerChart TopPlayer::chart_(kNumPlayerClasses);
@@ -31,7 +36,7 @@ void TopPlayer::Refresh(CharData *short_ch, bool reboot) {
 	if (short_ch->IsNpc()
 		|| short_ch->IsFlagged(EPlrFlag::kFrozen)
 		|| short_ch->IsFlagged(EPlrFlag::kDeleted)
-		|| IS_IMMORTAL(short_ch)) {
+		|| privilege::IsImmortal(short_ch)) {
 		return;
 	}
 	if (!reboot) {
@@ -41,8 +46,8 @@ void TopPlayer::Refresh(CharData *short_ch, bool reboot) {
 	std::list<TopPlayer>::iterator it_exp;
 	for (it_exp = TopPlayer::chart_[short_ch->GetClass()].begin();
 		 it_exp != TopPlayer::chart_[short_ch->GetClass()].end(); ++it_exp) {
-		if (it_exp->remort_ < GetRealRemort(short_ch)
-			|| (it_exp->remort_ == GetRealRemort(short_ch) && it_exp->exp_ < GET_EXP(short_ch))) {
+		if (it_exp->remort_ < remort::GetRealRemort(short_ch)
+			|| (it_exp->remort_ == remort::GetRealRemort(short_ch) && it_exp->exp_ < short_ch->get_exp())) {
 			break;
 		}
 	}
@@ -50,12 +55,80 @@ void TopPlayer::Refresh(CharData *short_ch, bool reboot) {
 	if (short_ch->get_name().empty()) {
 		return; // у нас все может быть
 	}
-	TopPlayer temp_player(GET_UID(short_ch), GET_NAME(short_ch), GET_EXP(short_ch), GetRealRemort(short_ch), 0);
+	TopPlayer temp_player(short_ch->get_uid(), GET_NAME(short_ch), short_ch->get_exp(), remort::GetRealRemort(short_ch), 0);
 
 	if (it_exp != TopPlayer::chart_[short_ch->GetClass()].end()) {
 		TopPlayer::chart_[short_ch->GetClass()].insert(it_exp, temp_player);
 	} else {
 		TopPlayer::chart_[short_ch->GetClass()].push_back(temp_player);
+	}
+}
+
+// Periodic batch refresh of online players' chart entries. Wired into the
+// heartbeat once per RL hour -- see heartbeat.cpp.
+//
+// Наивный вариант (Refresh per player) делал O(N) скан chart_ для каждого
+// онлайн-игрока -- O(M*N), где M=онлайн, N=размер chart_. На проде 100
+// онлайн * ~1000 в chart_ заведомо вылазит из пульса.
+//
+// Сейчас:
+//   1) один проход по descriptor_list -- собираем snapshot {uid -> (exp,
+//      remort)} только по подключённым в kPlaying не-NPC/не-Frozen/
+//      не-Deleted/не-Immortal;
+//   2) один проход по chart_ -- для записей, чьи uid в snapshot, правим
+//      exp_/remort_ in-place и помечаем класс грязным;
+//   3) сортируем только дёртные классы один раз (list::sort, O(N log N)).
+//
+// Итоговая сложность O(M + N + S*N log N), где S -- число классов с
+// изменениями. Оффлайн-игроки остаются на боковых записях с буткового
+// прохода (их состояние всё равно не меняется, пока они не в игре).
+void TopPlayer::RefreshAll() {
+	// Phase 1: snapshot online players.
+	std::unordered_map<long, std::pair<long, int>> online;
+	for (DescriptorData *d = descriptor_list; d; d = d->next) {
+		if (d->state != EConState::kPlaying || !d->character) {
+			continue;
+		}
+		CharData *ch = d->character.get();
+		if (ch->IsNpc()
+			|| ch->IsFlagged(EPlrFlag::kFrozen)
+			|| ch->IsFlagged(EPlrFlag::kDeleted)
+			|| privilege::IsImmortal(ch)) {
+			continue;
+		}
+		online[ch->get_uid()] = {ch->get_exp(), remort::GetRealRemort(ch)};
+	}
+
+	// Early exit: пустой snapshot значит обновлять нечего, нет смысла
+	// перебирать весь chart_ (десятки тысяч записей в std::list -- куча
+	// кэш-промахов).
+	if (online.empty()) {
+		return;
+	}
+
+	// Phase 2: walk chart_, update in place, mark dirty classes.
+	for (auto &class_entry : chart_) {
+		auto &list = class_entry.second;
+		bool dirty = false;
+		for (auto &entry : list) {
+			auto it = online.find(entry.unique_);
+			if (it == online.end()) {
+				continue;
+			}
+			const auto new_exp = it->second.first;
+			const auto new_remort = it->second.second;
+			if (entry.exp_ != new_exp || entry.remort_ != new_remort) {
+				entry.exp_ = new_exp;
+				entry.remort_ = new_remort;
+				dirty = true;
+			}
+		}
+		if (dirty) {
+			list.sort([](const TopPlayer &a, const TopPlayer &b) {
+				if (a.remort_ != b.remort_) return a.remort_ > b.remort_;
+				return a.exp_ > b.exp_;
+			});
+		}
 	}
 }
 
@@ -71,7 +144,7 @@ void TopPlayer::PrintPlayersChart(CharData *ch) {
 		table
 			<< it.second.begin()->name_
 			<< it.second.begin()->remort_
-			<< GetDeclensionInNumber(it.second.begin()->remort_, EWhat::kRemort)
+			<< grammar::GetDeclensionInNumber(it.second.begin()->remort_, grammar::EWhat::kRemort)
 			<< MUD::Class(it.first).GetName() << table_wrapper::kEndRow;
 	}
 	table_wrapper::DecorateNoBorderTable(ch, table);
@@ -97,7 +170,7 @@ void TopPlayer::PrintClassChart(CharData *ch, ECharClass id) {
 		table << it.number_
 			<< it.name_
 			<< it.remort_
-			<< GetDeclensionInNumber(it.remort_, EWhat::kRemort) << table_wrapper::kEndRow;
+			<< grammar::GetDeclensionInNumber(it.remort_, grammar::EWhat::kRemort) << table_wrapper::kEndRow;
 		if (table.row_count() >= kPlayerChartSize) {
 			break;
 		}
@@ -124,7 +197,7 @@ void TopPlayer::PrintClassChart(CharData *ch, ECharClass id) {
 	}
 	table_wrapper::Table table3;
 	for (auto &it : upper) {
-		table3 << it.number_ << it.name_ << it.remort_ << GetDeclensionInNumber(it.remort_, EWhat::kRemort) << table_wrapper::kEndRow;
+		table3 << it.number_ << it.name_ << it.remort_ << grammar::GetDeclensionInNumber(it.remort_, grammar::EWhat::kRemort) << table_wrapper::kEndRow;
 	}
 	table_wrapper::DecorateNoBorderTable(ch, table3);
 	table_wrapper::PrintTableToStream(out, table3);
@@ -134,7 +207,7 @@ void TopPlayer::PrintClassChart(CharData *ch, ECharClass id) {
 	for (const auto &it: TopPlayer::chart_[id]) {
 		if (deep == 0) {
 			if (it.unique_ == ch->get_uid()) {
-				out << "\r\n" << " Ваш текущий рейтинг: " << it.number_ << " - " << it.remort_ << " " << GetDeclensionInNumber(it.remort_, EWhat::kRemort) << "\r\n";
+				out << "\r\n" << " Ваш текущий рейтинг: " << it.number_ << " - " << it.remort_ << " " << grammar::GetDeclensionInNumber(it.remort_, grammar::EWhat::kRemort) << "\r\n";
 				out  << "\r\n После вас:\r\n";
 				deep = 1;
 				continue;
@@ -142,7 +215,7 @@ void TopPlayer::PrintClassChart(CharData *ch, ECharClass id) {
 		} else {
 			if (deep++ == 4)
 				break;
-			table4 << it.number_ << it.name_ << it.remort_ << GetDeclensionInNumber(it.remort_, EWhat::kRemort) << table_wrapper::kEndRow;
+			table4 << it.number_ << it.name_ << it.remort_ << grammar::GetDeclensionInNumber(it.remort_, grammar::EWhat::kRemort) << table_wrapper::kEndRow;
 		}
 	}
 	table_wrapper::DecorateNoBorderTable(ch, table4);
@@ -159,7 +232,7 @@ void TopPlayer::PrintClassChart(CharData *ch, ECharClass id) {
 		for (auto &it : upper) {
 			table2 << it.name_
 				<< it.remort_
-				<< GetDeclensionInNumber(it.remort_, EWhat::kRemort) << table_wrapper::kEndRow;
+				<< grammar::GetDeclensionInNumber(it.remort_, grammar::EWhat::kRemort) << table_wrapper::kEndRow;
 		}
 		table_wrapper::DecorateNoBorderTable(ch, table2);
 		table_wrapper::PrintTableToStream(out, table2);

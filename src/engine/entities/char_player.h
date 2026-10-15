@@ -5,6 +5,7 @@
 #ifndef CHAR_PLAYER_HPP_INCLUDED
 #define CHAR_PLAYER_HPP_INCLUDED
 
+#include <set>
 #include <string>
 #include <array>
 #include <vector>
@@ -19,11 +20,10 @@
 #include "gameplay/communication/remember.h"
 #include "char_data.h"
 #include "gameplay/statistics/dps.h"
-#include "engine/ui/mapsystem.h"
+#include "engine/ui/map_options.h"
 #include "gameplay/core/reset_stats.h"
 #include "gameplay/communication/boards/boards_types.h"
 #include "engine/ui/cmd/do_mercenary.h"
-#include "gameplay/economics/ext_money.h"
 
 // кол-во сохраняемых стартовых статов в файле
 const int START_STATS_TOTAL = 6;
@@ -34,6 +34,8 @@ enum {
 	DIS_EXCHANGE_MESSAGE,
 	DIS_TOTAL_NUM
 };
+
+class BufferedFileWriter;
 
 class Player : public CharData {
  public:
@@ -75,14 +77,14 @@ class Player : public CharData {
 	bool quested_get(int vnum) const;
 	std::string quested_get_text(int vnum) const;
 	std::string quested_print() const;
-	void quested_save(FILE *saved) const; // TODO мб убрать
+	void quested_save(BufferedFileWriter &saved) const;
 
 	// обертка на MobMax
 	int mobmax_get(int vnum) const;
 	void mobmax_add(CharData *ch, int vnum, int count, int level);
 	void mobmax_load(CharData *ch, int vnum, int count, int level);
 	void mobmax_remove(int vnum);
-	void mobmax_save(FILE *saved) const; ///< TODO мб убрать
+	void mobmax_save(BufferedFileWriter &saved) const;
 	void show_mobmax();
 
 	// обертка на Dps
@@ -95,7 +97,7 @@ class Player : public CharData {
 	void dps_end_round(int type, CharData *ch = nullptr);
 	void dps_add_exp(int exp, bool battle = false);
 
-	void save_char();
+	void save_char(bool update_save_time = true);
 	int load_char_ascii(const char *name, int load_flags) override;
 
 	bool get_disposable_flag(int num);
@@ -113,21 +115,12 @@ class Player : public CharData {
 	void map_text_olc(const char *arg);
 	const MapSystem::Options *get_map_options() const;
 
-	int get_ext_money(unsigned type) const;
-	void set_ext_money(unsigned type, int num, bool write_log = true);
-	int get_today_torc();
-	void add_today_torc(int num);
-
 	int get_reset_stats_cnt(stats_reset::Type type) const;
 	void inc_reset_stats_cnt(stats_reset::Type type);
 
 	time_t get_board_date(Boards::BoardTypes type) const;
 	void set_board_date(Boards::BoardTypes type, time_t date);
 
-	int get_ice_currency();
-	void set_ice_currency(int value);
-	void add_ice_currency(int value);
-	void sub_ice_currency(int value);
 
 	int death_player_count();
 
@@ -141,24 +134,15 @@ class Player : public CharData {
 	int get_spent_hryvn();
 	void reset_daily_quest();
 
-	void add_value_cities(bool v);
 	void str_to_cities(std::string str);
 	std::string cities_to_str();
-	bool check_city(const size_t index);
-	void mark_city(const size_t index);
+	bool check_city(const std::string &id);
+	void mark_city(const std::string &id);
 	/*void touch_stigma(char *arg);
 	void add_stigma(int wear, int id_stigma);
 	int get_stigma(int wear);*/
-	int get_hryvn();
-	void set_hryvn(int value);
-	void sub_hryvn(int value);
-	void add_hryvn(int value);
 	void dquest(int id) override;
 	void complete_quest(int id);
-	int get_nogata();
-	void set_nogata(int value);
-	void sub_nogata(int value);
-	void add_nogata(int value);
 
 	std::shared_ptr<Account> get_account();
 	// добавить/обновить чармиса в историю игрока
@@ -208,16 +192,11 @@ class Player : public CharData {
 	bool motion_;
 	// опции отрисовки режима карты
 	MapSystem::Options map_options_;
-	// доп. валюты (гривны)
-	std::array<int, ExtMoney::kTotalTypes> ext_money_;
-	// сколько гривн, в пересчете на бронзу, сегодня уже собрано
-	std::pair<uint8_t /* day 1-31 */, int> today_torc_;
 	// кол-во сбросов характеристик через меню
 	std::array<int, stats_reset::Type::TOTAL_NUM> reset_stats_cnt_;
 	// временнЫе отметки о прочитанных сообщениях на досках
 	std::array<time_t, Boards::TYPES_NUM> board_date_;
 	// лед (доп. валюта)
-	int ice_currency;
 	// список зон, где чар умер и в каком количестве
 	std::map<int, int> count_death_zone;
 	// время, когда были выполнены все дейлики
@@ -225,15 +204,13 @@ class Player : public CharData {
 	// сколько дней подряд выполнялись дейлики
 	int count_daily_quest;
 	// Отметка о том, в каких городах был наш чар
-	std::vector<bool> cities_visited_;
+	std::set<std::string> cities_visited_;
 	// здесь храним инфу о татуировках
 	//std::map<unsigned int, StigmaWear> stigmas;
 	// режим !бот
 	bool setmode_dontbot;
 	// гривны
-	int hryvn;
 	// ногаты
-	int nogata;
 	// id задания и сколько раз было выполненно задание
 	std::map<int, int> daily_quest;
 	// сколько гривен было потрачено в магазине

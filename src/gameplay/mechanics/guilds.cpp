@@ -6,13 +6,14 @@
 
 //#include "guilds.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include "engine/ui/color.h"
 #include "glory_const.h"
 #include "gameplay/magic/magic_utils.h"
 #include "gameplay/magic/magic_temp_spells.h"
 #include "engine/db/global_objects.h"
+#include "engine/structs/info_container.h"   // info_container::kUndefinedVnum
 
 typedef int special_f(CharData *, void *, int, char *);
 extern void ASSIGNMASTER(MobVnum mob, special_f, int learn_info);
@@ -35,6 +36,67 @@ void GuildsLoader::AssignGuildsToTrainers() {
 	for (const auto &guild: MUD::Guilds()) {
 		guild.AssignToTrainers();
 	}
+}
+
+// issue.thing-names: Vedun editable surface for guilds. Guilds are keyed by an integer vnum (no
+// enum, no `id` attribute), so the element id handed to/from the editor is the vnum as a string;
+// text_id + name go in the label so a guild can also be found by either of those.
+std::string GuildsLoader::EditableWhat() const {
+	return "guild";
+}
+
+std::vector<cfg_manager::EditableElement> GuildsLoader::ListElements() const {
+	std::vector<cfg_manager::EditableElement> out;
+	for (const auto &guild : MUD::Guilds()) {
+		if (guild.GetId() < 0) {   // skip the kUndefined sentinel
+			continue;
+		}
+		out.push_back({std::to_string(guild.GetId()), guild.GetTextId() + " " + guild.GetName()});
+	}
+	return out;
+}
+
+cfg_manager::ValidationResult GuildsLoader::Validate(parser_wrapper::DataNode &doc) const {
+	if (MUD::Guilds().Validate(doc.Children())) {
+		return {true, ""};
+	}
+	return {false, "Guild data failed to parse (see syslog for the offending guild)."};
+}
+
+parser_wrapper::DataNode GuildsLoader::FindElementNode(parser_wrapper::DataNode root,
+														  const std::string &id) const {
+	// A <guild> carries no `id` attribute; its key is the integer `vnum`. Iterate ALL children with
+	// a name check rather than Children("guild"): a node copied out of a keyed range would otherwise
+	// carry that range's filter, breaking its own later Children() (it would stop after the 1st child).
+	for (auto &child : root.Children()) {
+		if (std::string(child.GetName()) == "guild" && id == child.GetValue("vnum")) {
+			return child;
+		}
+	}
+	return parser_wrapper::DataNode{};
+}
+
+std::string GuildsLoader::CanonicalElementId(const std::string &id) const {
+	// Only a non-negative integer is a valid (new) guild key. Existing guilds are already resolved
+	// by ListElements (by vnum, text_id or name) before this create-path hook is consulted.
+	if (id.empty()) {
+		return "";
+	}
+	for (const char c : id) {
+		if (c < '0' || c > '9') {
+			return "";
+		}
+	}
+	return id;
+}
+
+parser_wrapper::DataNode GuildsLoader::CreateElementNode(parser_wrapper::DataNode root,
+															const std::string &id) const {
+	auto node = root.AddChild("guild");
+	node.SetValue("vnum", id);
+	node.SetValue("text_id", "kUndefined");
+	node.SetValue("name", "новая гильдия");
+	return node;
 }
 
 ItemPtr GuildInfoBuilder::Build(DataNode &node) {
@@ -60,6 +122,14 @@ ItemPtr GuildInfoBuilder::ParseGuild(DataNode node) {
 
 	auto guild_info = std::make_shared<GuildInfo>(vnum, text_id, name, mode);
 
+	if (node.GoToChild("currency")) {
+		try {
+			guild_info->default_currency_vnum_ = MUD::Currencies().FindAvailableItem(parse::ReadAsStr(node.GetValue("val"))).GetId();
+		} catch (std::exception &e) {
+			err_log("guild currency error (%s) in guild '%s'.", e.what(), guild_info->GetName().c_str());
+		}
+		node.GoToParent();
+	}
 	if (node.GoToChild("trainers")) {
 		try {
 			parse::ReadAsIntSet(guild_info->trainers_, node.GetValue("vnums"));
@@ -89,48 +159,27 @@ void GuildInfoBuilder::ParseTalents(ItemPtr &info, DataNode &node) {
 			err_log("talent format error (%s) in guild '%s'.", e.what(), info->GetName().c_str());
 		}
 	}
+	// Talents without their own currency inherit the guild-wide default; if the guild sets none either,
+	// fall back to gold so the price still renders (legacy behaviour).
+	const Vnum guild_currency = info->default_currency_vnum_ != info_container::kUndefinedVnum
+		? info->default_currency_vnum_
+		: currencies::kGoldVnum;
+	for (auto &talent : info->learning_talents_) {
+		talent->ApplyDefaultCurrency(guild_currency);
+	}
 }
 
 const std::string &GuildInfo::GetMsg(EMsg msg_id) {
-	static const std::unordered_map<EMsg, std::string> guild_msgs = {
-		{EMsg::kGreeting, "$N сказал$G: 'Я могу научить тебя следующему:'"},
-		{EMsg::kDischarge, "$N сказал$G : 'Извини, $n, я уже в отставке.'"},
-		{EMsg::kDidNotTeach, "$N уставил$U на $n3 и прорычал$G: 'Я никогда и никого ЭТОМУ не учил$G!'"},
-		{EMsg::kInquiry, "$n о чем-то спросил$g $N3."},
-		{EMsg::kCannotToChar, "$N сказал$G: 'Я не могу тебя этому научить'."},
-		{EMsg::kCannotToRoom, "$N сказал$G $n2: 'Я не могу тебя этому научить'."},
-		{EMsg::kAskToChar, "Вы попросились в обучение к $N2."},
-		{EMsg::kAskToRoom, "$n попросил$u в ученики к $N2."},
-		{EMsg::kLearnToChar, "Вы получили несколько уроков и мудрых советов от $N1."},
-		{EMsg::kLearnToRoom, "$N дал$G $n2 несколько наставлений."},
-		{EMsg::kAllSkills, "$N сказал$G: '$n, нельзя научиться всем умениям или способностям сразу. Выбери необходимые!'"},
-		{EMsg::kTalentEarned, "Под наставничеством $N1 вы изучили {} {}'{}'{}."},
-		{EMsg::kNothingLearned, "$N ничему новому вас не научил$G."},
-		{EMsg::kListEmpty, "$N сказал$G : 'Похоже, $n, я не смогу тебе помочь'."},
-		{EMsg::kIsInsolvent, "$N сказал$G : 'Вот у меня забот нет - голодранцев наставлять! Иди-ка, $n, подзаработай сначала!"},
-		{EMsg::kFree, "бесплатно"},
-		{EMsg::kTemporary, "временно"},
-		{EMsg::kYouGiveMoney, "Вы дали {} $N2."},
-		{EMsg::kSomeoneGivesMoney, "$n дал$g {} $N2."},
-		{EMsg::kFailToChar, "...но все уроки влетели вам в одно ухо, да вылетели в другое."},
-		{EMsg::kFailToRoom, "...но, судя по осовелому взгляду $n1, наука $N1 не пошла $m впрок."},
-		{EMsg::kError, "У кодера какие-то проблемы."},
-	};
-
-	if (guild_msgs.contains(msg_id)) {
-		return guild_msgs.at(msg_id);
-	} else {
-		return guild_msgs.at(EMsg::kError);
-	}
+	// issue.thing-names: guild messages live in guild_msg.xml (the default sheaf of the vnum-keyed
+	// guild message container), not a hardcoded table.
+	return MUD::GuildMessages().GetMessage(info_container::kUndefinedVnum, msg_id);
 }
 
-int GuildInfo::DoGuildLearn(CharData *ch, void *me, int cmd, char *argument) {
+int GuildInfo::DoGuildLearn(CharData *ch, void *me, int /*cmd*/, char *argument) {
 	if (ch->IsNpc()) {
 		return 0;
 	}
-	if (!CMD_IS("учить") && !CMD_IS("practice")) {
-		return 0;
-	}
+	// dispatched via do_specproc(kGuild); the command word is always учить/practice.
 
 	/*
 	 *  Это не слишком красиво, потому что кто-нибудь может затереть поле stored в индексе и гильдия перестанет работать,
@@ -170,11 +219,14 @@ void GuildInfo::Process(CharData *trainer, CharData *ch, std::string &argument) 
 
 	act(GetMsg(EMsg::kInquiry), false, ch, nullptr, trainer, kToRoom);
 
-	if (utils::IsAbbrev(argument, "все") || utils::IsAbbrev(argument, "all")) {
+	if (utils::IsAbbr(argument, "все") || utils::IsAbbr(argument, "all")) {
 		LearnAll(trainer, ch);
 		return;
 	}
-
+	if (argument.size() > 100) {
+		SendMsgToChar("Превышена максимальная длина строки.", ch);
+		return;
+	}
 	try {
 		std::size_t talent_num = std::stoi(argument);
 		LearnWithTalentNum(trainer, ch, talent_num);
@@ -222,6 +274,9 @@ void GuildInfo::DisplayMenu(CharData *trainer, CharData *ch) const {
 }
 
 void GuildInfo::LearnWithTalentNum(CharData *trainer, CharData *ch, std::size_t talent_num) const {
+	if (learning_talents_.empty()) {
+		return;   // issue #3631: нечему учить -- иначе clamp(1, size=0) с lo>hi
+	}
 	talent_num = std::clamp(talent_num, size_t(1), learning_talents_.size());
 
 	for (const auto &talent : learning_talents_) {
@@ -247,7 +302,7 @@ void GuildInfo::LearnWithTalentName(CharData *trainer, CharData *ch, const std::
 								   if (talent->IsUnlearnable(ch)) {
 									   return false;
 								   }
-								   if (IsEquivalent(talent_name,
+								   if (utils::IsEquivalent(talent_name,
 													static_cast<std::string>(talent->GetName()))) {
 									   return true;
 								   }
@@ -310,7 +365,10 @@ void GuildInfo::Learn(CharData *trainer, CharData *ch, const TalentPtr &talent) 
 		act(GetMsg(EMsg::kFailToRoom), false, ch, nullptr, trainer, kToRoom);
 	} else {
 		auto out = fmt::format(fmt::runtime(GetMsg(EMsg::kTalentEarned)),
-							   talent->GetTalentTypeName(), kColorBoldYel, talent->GetName(), kColorNrm);
+							   fmt::arg("talent_type", talent->GetTalentTypeName()),
+							   fmt::arg("color", kColorBoldYel),
+							   fmt::arg("name", talent->GetName()),
+							   fmt::arg("nocolor", kColorNrm));
 		act(out, false, ch, nullptr, trainer, kToChar);
 		talent->SetTalent(ch);
 	}
@@ -325,10 +383,10 @@ bool GuildInfo::ProcessPayment(CharData *trainer, CharData *ch, const TalentPtr 
 
 	auto price = talent->CalcPrice(ch);
 	if (price > 0) {
-		auto description = MUD::Currency(talent->GetCurrencyId()).GetObjName(price, ECase::kAcc);
-		act(fmt::format(fmt::runtime(GetMsg(EMsg::kYouGiveMoney)), description),
+		auto description = MUD::Currency(talent->GetCurrencyId()).GetObjName(price, grammar::ECase::kAcc);
+		act(fmt::format(fmt::runtime(GetMsg(EMsg::kYouGiveMoney)), fmt::arg("money", description)),
 			false, ch, nullptr, trainer, kToChar);
-		act(fmt::format(fmt::runtime(GetMsg(EMsg::kSomeoneGivesMoney)), description),
+		act(fmt::format(fmt::runtime(GetMsg(EMsg::kSomeoneGivesMoney)), fmt::arg("money", description)),
 			false, ch, nullptr, trainer, kToRoom);
 	}
 
@@ -419,8 +477,16 @@ GuildInfo::IGuildTalent::IGuildTalent(ETalent talent_type, DataNode &node) {
 
 	if (node.GoToChild("price")) {
 		try {
-			auto currency_text_id = parse::ReadAsStr(node.GetValue("currency"));
-			currency_vnum_ = MUD::Currencies().FindAvailableItem(currency_text_id).GetId();
+			// An absent (or kUndefined/invalid) currency leaves currency_vnum_ at kUndefinedVnum so the
+			// talent inherits the guild-wide default (applied by ApplyDefaultCurrency); only an explicit,
+			// valid currency overrides it.
+			const char *currency_text_id = parse::ReadAsStr(node.GetValue("currency"));
+			if (currency_text_id != nullptr && *currency_text_id != '\0') {
+				const auto id = MUD::Currencies().FindAvailableItem(currency_text_id).GetId();
+				if (id >= 0) {
+					currency_vnum_ = id;
+				}
+			}
 			start_price_ = parse::ReadAsInt(node.GetValue("start"));
 			remort_percemt_ = parse::ReadAsInt(node.GetValue("remort_percent"));
 		} catch (std::exception &e) {
@@ -442,14 +508,12 @@ std::string GuildInfo::IGuildTalent::GetPriceCurrencyStr(long price) const {
 	}
 }
 
-bool HasEnoughCurrency(CharData *ch, Vnum currency_id, long amount);
-void WithdrawCurrency(CharData *ch, Vnum currency_id, long amount);
 
 bool GuildInfo::IGuildTalent::TakePayment(CharData *ch) const {
 	auto price = CalcPrice(ch);
 
-	if (HasEnoughCurrency(ch, currency_vnum_, price)) {
-		WithdrawCurrency(ch, currency_vnum_, price);
+	if (currencies::GetHand(*ch, currency_vnum_) >= price) {
+		currencies::RemoveHand(*ch, currency_vnum_, price);
 		return true;
 	}
 
@@ -484,12 +548,12 @@ std::string_view GuildInfo::GuildSkill::GetName() const {
 }
 
 int GuildInfo::GuildSkill::CalcGuildSkillCap(CharData *ch) const {
-	return std::min(ch->GetTrainedSkill(id_) + practices_,
+	return std::min(GetTrainedSkill(ch, id_) + practices_,
 					std::min(CalcSkillHardCap(ch, id_), max_skill_));
 }
 
 int GuildInfo::GuildSkill::CalcPracticesQuantity(CharData *ch) const {
-	return std::clamp(CalcGuildSkillCap(ch) - ch->GetTrainedSkill(id_), 1, practices_);
+	return std::clamp(CalcGuildSkillCap(ch) - GetTrainedSkill(ch, id_), 1, std::max(1, practices_));   // issue #3631: hi>=lo
 }
 
 long GuildInfo::GuildSkill::CalcPrice(CharData *buyer) const {
@@ -497,13 +561,13 @@ long GuildInfo::GuildSkill::CalcPrice(CharData *buyer) const {
 };
 
 bool GuildInfo::GuildSkill::IsAvailable(CharData *ch) const {
-	auto skill = ch->GetTrainedSkill(id_);
+	auto skill = GetTrainedSkill(ch, id_);
 	return CanGetSkill(ch, id_) && skill >= min_skill_ &&
 		skill < max_skill_ && skill < CalcSkillHardCap(ch, id_);
 }
 
 void GuildInfo::GuildSkill::SetTalent(CharData *ch) const {
-	ch->set_skill(id_, ch->GetTrainedSkill(id_) + CalcPracticesQuantity(ch));
+	SetSkill(ch, id_, GetTrainedSkill(ch, id_) + CalcPracticesQuantity(ch));
 }
 
 std::string GuildInfo::GuildSkill::GetAnnotation(CharData *ch) const {
@@ -574,60 +638,6 @@ std::string GuildInfo::GuildFeat::GetAnnotation(CharData * /*ch*/) const {
 /*
  *  Костыльные функции для проверки/снятия валют, поскольку системы валют пока нет.
  */
-
-bool HasEnoughCurrency(CharData *ch, Vnum currency_id, long amount) {
-	switch (currency_id) {
-		case 0: { // куны
-			return ch->get_gold() >= amount;
-		}
-		case 1: { // слава
-			const auto total_glory = GloryConst::get_glory(GET_UID(ch));
-			return total_glory >= amount;
-		}
-		case 2: { // гривны
-			return ch->get_hryvn() >= amount;
-		}
-		case 3: { // лед
-			return ch->get_ice_currency() >= amount;
-		}
-		case 4: { // ногаты
-			return ch->get_nogata() >= amount;
-		}
-		default:
-			return false;
-	}
-}
-
-void WithdrawCurrency(CharData *ch, Vnum currency_id, long amount) {
-	amount = std::max(0L, amount);
-	switch (currency_id) {
-		case 0: { // куны
-			ch->remove_gold(amount);
-			break;
-		}
-		case 1: { // слава
-			GloryConst::add_total_spent(amount);
-			GloryConst::remove_glory(GET_UID(ch), amount);
-			GloryConst::transfer_log("%s spent %ld const glory in a guild.", GET_NAME(ch), amount);
-			break;
-		}
-		case 2: { // гривны
-			ch->sub_hryvn(amount);
-			ch->spent_hryvn_sub(amount);
-			break;
-		}
-		case 3: { // лед
-			ch->sub_ice_currency(amount);
-			break;
-		}
-		case 4: { // ногаты
-			ch->sub_nogata(amount);
-			break;
-		}
-		default:
-			return;
-	}
-}
 
 }
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

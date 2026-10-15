@@ -6,14 +6,21 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
+
 #include "do_gen_comm.h"
+#include "administration/privilege.h"
+#include "utils/native_text.h"
+#include "utils/grammar/gender.h"
+#include "gameplay/mechanics/sight.h"
 
 #include "engine/entities/char_data.h"
 #include "engine/network/descriptor_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_movement.h"
 #include "engine/ui/color.h"
 #include "gameplay/economics/auction.h"
 #include "gameplay/communication/remember.h"
+#include "gameplay/core/remort.h"
 
 struct communication_type {
   const char *muted_msg;
@@ -52,7 +59,7 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			{"Вы не можете орать.\r\n",    // holler
 			 "орать",
 			 "Вы вне видимости канала.",
-			 kColorBoldYel,
+			 "&Y",
 			 "заорали",
 			 "заорал$g",
 			 4,
@@ -62,7 +69,7 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			{"Вам запрещено кричать.\r\n",    // shout
 			 "кричать",
 			 "Вы вне видимости канала.\r\n",
-			 kColorBoldYel,
+			 "&Y",
 			 "закричали",
 			 "закричал$g",
 			 2,
@@ -72,7 +79,7 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			{"Вам недозволено болтать.\r\n",    // gossip
 			 "болтать",
 			 "Вы вне видимости канала.\r\n",
-			 kColorYel,
+			 "&y",
 			 "заметили",
 			 "заметил$g",
 			 3,
@@ -82,7 +89,7 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			{"Вам не к лицу торговаться.\r\n",    // auction
 			 "торговать",
 			 "Вы вне видимости канала.\r\n",
-			 kColorBoldYel,
+			 "&Y",
 			 "попробовали поторговаться",
 			 "вступил$g в торг",
 			 2,
@@ -96,7 +103,7 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		return;
 
 	if (AFF_FLAGGED(ch, EAffect::kSilence)) {
-		SendMsgToChar(SIELENCE, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kSilenced) + "\r\n", ch);
 		return;
 	}
 
@@ -111,15 +118,13 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	}
 	//if (ROOM_FLAGGED(ch->in_room, ERoomFlag::kSoundproof) || ROOM_FLAGGED(ch->in_room, ERoomFlag::kTribune))
 	if (ROOM_FLAGGED(ch->in_room, ERoomFlag::kSoundproof)) {
-		SendMsgToChar(SOUNDPROOF, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kSoundproof) + "\r\n", ch);
 		return;
 	}
 
-	if (GetRealLevel(ch) < com_msgs[subcmd].min_lev && !GetRealRemort(ch)) {
-		sprintf(buf1,
-				"Вам стоит достичь хотя бы %d уровня, чтобы вы могли %s.\r\n",
-				com_msgs[subcmd].min_lev, com_msgs[subcmd].action);
-		SendMsgToChar(buf1, ch);
+	if (GetRealLevel(ch) < com_msgs[subcmd].min_lev && !remort::GetRealRemort(ch)) {
+		SendMsgToChar(fmt::format("Вам стоит достичь хотя бы {} уровня, чтобы вы могли {}.\r\n",
+								  com_msgs[subcmd].min_lev, com_msgs[subcmd].action), ch);
 		return;
 	}
 
@@ -134,8 +139,7 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 
 	// make sure that there is something there to say!
 	if (!*argument && subcmd != kScmdAuction) {
-		sprintf(buf1, "ЛЕГКО! Но, Ярило вас побери, ЧТО %s???\r\n", com_msgs[subcmd].action);
-		SendMsgToChar(buf1, ch);
+		SendMsgToChar(fmt::format("ЛЕГКО! Но, Ярило вас побери, ЧТО {}???\r\n", com_msgs[subcmd].action), ch);
 		return;
 	}
 
@@ -147,22 +151,30 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 #define MAX_UPPERS_CHAR_PRC 30
 #define MAX_UPPERS_SEQ_CHAR 3
 
-	if ((subcmd != kScmdAuction) && (!IS_IMMORTAL(ch)) && (!ch->IsNpc())) {
+	if ((subcmd != kScmdAuction) && (!privilege::IsImmortal(ch)) && (!ch->IsNpc())) {
 		const unsigned int bad_smb_procent = MAX_UPPERS_CHAR_PRC;
 		int bad_simb_cnt = 0, bad_seq_cnt = 0;
 
 		// фильтруем верхний регистр
-		for (int k = 0; argument[k] != '\0'; k++) {
-			if (a_isupper(argument[k])) {
+		// Counted and folded per character (issue #3681): a byte-wise scan cannot see an
+		// uppercase Cyrillic letter at all, so the filter silently stopped working for Russian.
+		// The denominator is the character count for the same reason -- with byte lengths the
+		// percentage would be halved for Russian text.
+		const size_t total_chars = native_text::char_count(argument);
+		for (auto letter : native_text::chars(argument)) {
+			if (native_text::is_upper_char(letter.data())) {
 				bad_simb_cnt++;
 				bad_seq_cnt++;
 			} else
 				bad_seq_cnt = 0;
 
 			if ((bad_seq_cnt > 1) &&
-				(((bad_simb_cnt * 100 / strlen(argument)) > bad_smb_procent) ||
-					(bad_seq_cnt > MAX_UPPERS_SEQ_CHAR)))
-				argument[k] = a_lcc(argument[k]);
+				(((bad_simb_cnt * 100 / total_chars) > bad_smb_procent) ||
+					(bad_seq_cnt > MAX_UPPERS_SEQ_CHAR))) {
+				// letter указывает внутрь argument; свёртка регистра не меняет длину.
+				char *at = argument + (letter.data() - argument);
+				native_text::copy_lower_char(at, at);
+			}
 		}
 		// фильтруем одинаковые сообщения в эфире
 		if (!str_cmp(ch->get_last_tell().c_str(), argument)) {
@@ -180,27 +192,25 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 
 	// first, set up strings to be given to the communicator
 	if (subcmd == kScmdAuction) {
-		*buf = '\0';
 		auction_drive(ch, argument);
 		return;
 	} else {
 		/* Непонятный запрет
 		if (ROOM_FLAGGED(ch->in_room, ERoomFlag::kTribune))
 		{
-			SendMsgToChar(SOUNDPROOF, ch);
+			SendMsgToChar(CommonMsg(ECommonMsg::kSoundproof) + "\r\n", ch);
 			return;
 		}
 		*/
 		if (ch->IsFlagged(EPrf::kNoRepeat))
-			SendMsgToChar(OK, ch);
+			SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 		else {
-			snprintf(buf1, kMaxStringLength, "%sВы %s : '%s'%s", color_on,
-					 com_msgs[subcmd].you_action, argument, kColorNrm);
-			act(buf1, false, ch, nullptr, nullptr, kToChar | kToSleep);
+			const std::string echo = fmt::format("{}Вы {} : '{}'{}", color_on,
+												 com_msgs[subcmd].you_action, argument, "&w");
+			act(echo, false, ch, nullptr, nullptr, kToChar | kToSleep);
 
 			if (!ch->IsNpc()) {
-				strcat(buf1, "\r\n");
-				ch->remember_add(buf1, Remember::ALL);
+				ch->remember_add(echo + "\r\n", Remember::ALL);
 			}
 		}
 		switch (subcmd) {
@@ -219,24 +229,13 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			default: ign_flag = 0;
 		}
 		snprintf(out_str, kMaxStringLength, "$n %s : '%s'", com_msgs[subcmd].hi_action, argument);
-		if (IS_FEMALE(ch)) {
-			if (!ch->IsNpc() && (subcmd == kScmdGossip)) {
-				snprintf(buf1, kMaxStringLength, "%s%s заметила :'%s'%s\r\n", color_on, GET_NAME(ch), argument, kColorNrm);
-				ch->remember_add(buf1, Remember::GOSSIP);
-			}
-			if (!ch->IsNpc() && (subcmd == kScmdHoller)) {
-				snprintf(buf1, kMaxStringLength, "%s%s заорала :'%s'%s\r\n", color_on, GET_NAME(ch), argument, kColorNrm);
-				ch->remember_add(buf1, Remember::GOSSIP);
-			}
-		} else {
-			if (!ch->IsNpc() && (subcmd == kScmdGossip)) {
-				snprintf(buf1, kMaxStringLength, "%s%s заметил :'%s'%s\r\n", color_on, GET_NAME(ch), argument, kColorNrm);
-				ch->remember_add(buf1, Remember::GOSSIP);
-			}
-			if (!ch->IsNpc() && (subcmd == kScmdHoller)) {
-				snprintf(buf1, kMaxStringLength, "%s%s заорал :'%s'%s\r\n", color_on, GET_NAME(ch), argument, kColorNrm);
-				ch->remember_add(buf1, Remember::GOSSIP);
-			}
+		if (!ch->IsNpc() && (subcmd == kScmdGossip || subcmd == kScmdHoller)) {
+			// Четыре почти одинаковые ветки (пол x канал) свёрнуты в одну: различаются
+			// только глагол и окончание.
+			const char *verb = subcmd == kScmdGossip ? "заметил" : "заорал";
+			ch->remember_add(fmt::format("{}{} {}{} :'{}'{}\r\n", color_on, GET_NAME(ch), verb,
+										 IsFemale(ch) ? "а" : "", argument, "&w"),
+							 Remember::GOSSIP);
 		}
 	}
 	// now send all the strings out
@@ -258,7 +257,7 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 
 			SendMsgToChar(color_on, i->character.get());
 			act(out_str, false, ch, nullptr, i->character.get(), kToVict | kToSleep | kToNotDeaf);
-			SendMsgToChar(kColorNrm, i->character.get());
+			SendMsgToChar("&w", i->character.get());
 			const std::string text = format_gossip(ch, i->character.get(), subcmd, argument);
 			i->character->remember_add(text, Remember::ALL);
 		}
@@ -271,12 +270,12 @@ void do_gen_comm(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 */
 std::string format_gossip(CharData *ch, CharData *vict, int cmd, const char *argument) {
 	return fmt::format("{}{} {}{} : '{}'{}\r\n",
-					   (cmd == kScmdGossip ? kColorYel : kColorBoldYel),
+					   (cmd == kScmdGossip ? "&y" : "&Y"),
 					   format_gossip_name(ch, vict).c_str(),
 					   (cmd == kScmdGossip ? "заметил" : "заорал"),
-					   GET_CH_VIS_SUF_1(ch, vict),
+					   grammar::VisSexEnding(sight::CanSee((vict), (ch)), (ch)->get_sex(), 1),
 					   argument,
-					   kColorNrm);
+					   "&w");
 }
 
 /**
@@ -288,8 +287,8 @@ std::string format_gossip_name(CharData *ch, CharData *vict) {
 		log("SYSERROR: мы не должны были сюда попасть, func: %s", __func__);
 		return "";
 	}
-	std::string name = IS_IMMORTAL(ch) ? GET_NAME(ch) : PERS(ch, vict, 0);
-	name[0] = UPPER(name[0]);
+	std::string name = privilege::IsImmortal(ch) ? GET_NAME(ch) : sight::PersonName(ch, vict, 0);
+	native_text::capitalize_first(name);
 	return name;
 }
 

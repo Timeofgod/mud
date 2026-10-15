@@ -1,4 +1,5 @@
 #include "do_inspect.h"
+#include "administration/privilege.h"
 
 #include <memory>
 #include <iostream>
@@ -11,6 +12,8 @@
 #include "fmt/format.h"
 #include "fmt/chrono.h"
 #include "utils/utils_time.h"
+#include "engine/db/player_index.h"
+#include "utils/native_text.h"
 
 const int kMaxRequestLength{65};
 const int kMinRequestLength{3};
@@ -19,10 +22,14 @@ const int kRequestKindPos{0};
 const int kRequestTextPos{1};
 
 const char *kUndefined{"undefined"};
+// Адрес последнего входа не сохранялся до 2008 года -- у старых персонажей его нет вовсе.
+const char *kIpNotTracked{"НеВедется"};
 const std::set<std::string_view> kIgnoredIpChecklist = {"135.181.219.76"};
 
 const PlayerIndexElement &GetCharIndex(std::string_view char_name) {
-	auto vict_uid = GetUniqueByName(char_name);
+	std::string name {char_name};
+
+	auto vict_uid = GetUniqueByName(name);
 	if (vict_uid <= 0) {
 		throw std::runtime_error(fmt::format("Неизвестное имя персонажа '{}'.\r\n", char_name));
 	} else {
@@ -37,12 +44,13 @@ CharData::shared_ptr GetCharPtr(const PlayerIndexElement &index) {
 		return d_vict->character;
 	} else {
 		auto player_ptr = std::make_shared<Player>();
-		if (LoadPlayerCharacter(index.name(), player_ptr.get(), ELoadCharFlags::kFindId | ELoadCharFlags::kNoCrcCheck) > -1) {
+		if (LoadPlayerCharacter(index.name().c_str(), player_ptr.get(), ELoadCharFlags::kFindId | ELoadCharFlags::kNoCrcCheck) > -1) {
 			return player_ptr;
 		}
 	}
+	auto char_name = index.name();
 	const auto error_msg = fmt::format("Не удалось загрузить файл персонажа '{}'.\r\n",
-				(index.name() ? index.name() : "unknown"));
+				(char_name.empty() ? "unknown" : char_name));
 	mudlog(error_msg, DEF, kLvlImplementator, ERRLOG, true);
 	return {};
 }
@@ -76,9 +84,9 @@ class ExtractedCharacterInfo {
   int last_logon_time_{0};
   std::string clan_abbrev_;
   std::string class_name_;
-  std::string_view name_;
-  std::string_view mail_;
-  std::string_view last_ip_;
+  std::string name_;
+  std::string mail_;
+  std::string last_ip_;
   std::ostringstream punishments_;
   std::ostringstream extra_info_;
 
@@ -93,9 +101,9 @@ class ExtractedCharacterInfo {
 
 void ExtractedCharacterInfo::ExtractDataFromIndex(const PlayerIndexElement &index) {
 	online_ = (DescriptorByUid(index.uid()) != nullptr);
-	name_ = (index.name() ? index.name() : kUndefined);
-	mail_ = (index.mail ? index.mail : kUndefined);
-	last_ip_ = (index.last_ip ? index.last_ip : kUndefined);
+	name_ = (index.name().empty() ? kUndefined : index.name());
+	mail_ = (index.mail.empty() ? kUndefined : index.mail);
+	last_ip_ = (index.last_ip.empty() ? kIpNotTracked : index.last_ip);
 	class_name_ = MUD::Class(index.plr_class).GetName();
 	level_ = index.level;
 	remort_ = index.remorts;
@@ -120,19 +128,19 @@ void ExtractedCharacterInfo::ExtractClanAbbrev(const CharData::shared_ptr &playe
 
 void ExtractedCharacterInfo::ExtractPunishmenstsInfo(const CharData::shared_ptr &player_ptr) {
 	if (player_ptr->IsFlagged(EPlrFlag::kFrozen)) {
-		ExtractPunishmentInfo("FROZEN", player_ptr->player_specials->pfreeze);
+		ExtractPunishmentInfo("FROZEN", punishments::Get(player_ptr, punishments::EType::kFreeze));
 	}
 	if (player_ptr->IsFlagged(EPlrFlag::kMuted)) {
-		ExtractPunishmentInfo("MUTED", player_ptr->player_specials->pmute);
+		ExtractPunishmentInfo("MUTED", punishments::Get(player_ptr, punishments::EType::kMute));
 	}
 	if (player_ptr->IsFlagged(EPlrFlag::kDumbed)) {
-		ExtractPunishmentInfo("DUMBED", player_ptr->player_specials->pdumb);
+		ExtractPunishmentInfo("DUMBED", punishments::Get(player_ptr, punishments::EType::kDumb));
 	}
 	if (player_ptr->IsFlagged(EPlrFlag::kHelled)) {
-		ExtractPunishmentInfo("HELLED", player_ptr->player_specials->phell);
+		ExtractPunishmentInfo("HELLED", punishments::Get(player_ptr, punishments::EType::kHell));
 	}
 	if (!player_ptr->IsFlagged(EPlrFlag::kRegistred)) {
-		ExtractPunishmentInfo("UNREGISTERED", player_ptr->player_specials->punreg);
+		ExtractPunishmentInfo("UNREGISTERED", punishments::Get(player_ptr, punishments::EType::kUnreg));
 	}
 }
 
@@ -141,7 +149,7 @@ void ExtractedCharacterInfo::ExtractPunishmentInfo(std::string_view punish_text,
 		punishments_ << fmt::format(" {}{}{} until {:%R %e-%b-%Y} [{}].\r\n",
 									kColorBoldRed, punish_text, kColorNrm,
 									std::chrono::system_clock::from_time_t(punish.duration),
-									(punish.reason ? punish.reason : "-"));
+									(punish.reason.empty() ? "-" : punish.reason.c_str()));
 	}
 }
 
@@ -184,7 +192,7 @@ void ExtractedCharacterInfo::Clear() {
 	last_logon_time_ = 0;
 	level_ = 0;
 	remort_ = 0;
-	name_ = kUndefined;
+	name_.clear();
 	mail_ = kUndefined;
 	last_ip_ = kUndefined;
 	class_name_.clear();
@@ -285,7 +293,7 @@ class InspectRequest {
   InspectRequest &operator=(const InspectRequest &) = delete;
   InspectRequest &operator=(InspectRequest &&) = delete;
   virtual ~InspectRequest() = default;
-  int GetAuthorUid() const { return author_uid_; }
+  long GetAuthorUid() const { return author_uid_; }
   bool IsActive() { return status_; };
   void Execute();
 
@@ -302,7 +310,7 @@ class InspectRequest {
   virtual void ProcessMatchedIndex(const PlayerIndexElement &index);
 
  private:
-  int author_uid_{0};
+  long author_uid_{0};
   int author_level_{0};
   std::size_t current_player_table_pos_{0};
   std::string request_text_;
@@ -397,7 +405,7 @@ InspectRequestIp::InspectRequestIp(const CharData *author, const std::vector<std
 }
 
 bool InspectRequestIp::IsIndexMatched(const PlayerIndexElement &index) {
-	return (index.last_ip && strstr(index.last_ip, GetRequestText().data()));
+	return (!index.last_ip.empty() && index.last_ip.find(GetRequestText()) != std::string::npos);
 }
 
 // =======================================  INSPECT MAIL  ============================================
@@ -419,7 +427,7 @@ InspectRequestMail::InspectRequestMail(const CharData *author, const std::vector
 }
 
 bool InspectRequestMail::IsIndexMatched(const PlayerIndexElement &index) {
-	return (index.mail && strstr(index.mail, GetRequestText().data()));
+	return (!index.mail.empty() && index.mail.find(GetRequestText()) != std::string::npos);
 }
 
 // =======================================  INSPECT CHAR  ============================================
@@ -429,8 +437,8 @@ class InspectRequestChar : public InspectRequest {
   explicit InspectRequestChar(const CharData *author, const std::vector<std::string> &args);
 
  private:
-  std::string_view mail_;
-  std::string_view last_ip_;
+  std::string mail_;
+  std::string last_ip_;
 
   void NoteVictimInfo(const PlayerIndexElement &index);
   bool IsIndexMatched(const PlayerIndexElement &index) final;
@@ -448,8 +456,8 @@ InspectRequestChar::InspectRequestChar(const CharData *author, const std::vector
 }
 
 void InspectRequestChar::NoteVictimInfo(const PlayerIndexElement &index) {
-	mail_ = (index.mail ? index.mail : kUndefined);
-	last_ip_ = (index.last_ip ? index.last_ip : kUndefined);
+	mail_ = (index.mail.empty() ? kUndefined : index.mail);
+	last_ip_ = (index.last_ip.empty() ? kIpNotTracked : index.last_ip);
 	report_generator_.SetReportHeader(fmt::format(
 		"Incpecting character (e-mail or last IP): {}{}{}. E-mail: {} Last IP: {}\r\n",
 		kColorWht,
@@ -460,7 +468,7 @@ void InspectRequestChar::NoteVictimInfo(const PlayerIndexElement &index) {
 }
 
 bool InspectRequestChar::IsIndexMatched(const PlayerIndexElement &index) {
-	return ((index.mail && (mail_ == index.mail)) || (index.last_ip && (last_ip_ == index.last_ip)));
+	return ((!index.mail.empty() && (mail_ == index.mail)) || (!index.last_ip.empty() && (last_ip_ == index.last_ip)));
 }
 
 // =======================================  INSPECT ALL  ============================================
@@ -470,12 +478,12 @@ class InspectRequestAll : public InspectRequest {
   explicit InspectRequestAll(const CharData *author, const std::vector<std::string> &args);
 
  private:
-  int vict_uid_{0};
+  long vict_uid_{0};
   std::set<std::string> victim_ip_log_;
   std::ostringstream current_char_intercesting_logons_;
 
   void NoteVictimInfo(const CharData::shared_ptr &vict);
-  bool IsIpMatched(const char *ip);
+  bool IsIpMatched(const std::string &ip);
   bool IsLogonsIntersect(const CharData::shared_ptr &player);
   void NoteLogonInfo(const network::Logon &logon);
   void FlushLogonsBufferToReportGenerator();
@@ -487,7 +495,7 @@ class InspectRequestAll : public InspectRequest {
 
 InspectRequestAll::InspectRequestAll(const CharData *author, const std::vector<std::string> &args)
 	: InspectRequest(author, args) {
-	if (!IS_GRGOD(author)) {
+	if (!privilege::IsGrGod(author)) {
 		SendMsgToChar("Вы не столь божественны, как вам кажется.\r\n", author);
 		status_ = kFinished;
 		return;
@@ -510,7 +518,7 @@ void InspectRequestAll::NoteVictimInfo(const CharData::shared_ptr &vict) {
 												  kColorNrm));
 	vict_uid_ = vict->get_uid();
 	for (const auto &logon : LOGON_LIST(vict)) {
-		if (logon.ip && !kIgnoredIpChecklist.contains(logon.ip)) {
+		if (!logon.ip.empty() && !kIgnoredIpChecklist.contains(logon.ip)) {
 			victim_ip_log_.insert(logon.ip);
 		}
 	}
@@ -559,8 +567,8 @@ bool InspectRequestAll::IsLogonsIntersect(const CharData::shared_ptr &player) {
 	return result;
 }
 
-bool InspectRequestAll::IsIpMatched(const char *ip) {
-	return (ip && !kIgnoredIpChecklist.contains(ip) && victim_ip_log_.contains(ip));
+bool InspectRequestAll::IsIpMatched(const std::string &ip) {
+	return (!ip.empty() && !kIgnoredIpChecklist.contains(ip) && victim_ip_log_.contains(ip));
 }
 
 void InspectRequestAll::NoteLogonInfo(const network::Logon &logon) {
@@ -602,11 +610,12 @@ bool InspectRequestDeque::IsBusy(const CharData *ch) {
 
 bool InspectRequestDeque::IsArgsValid(const CharData *ch, const std::vector<std::string> &args) {
 	auto &request_text = args[kRequestTextPos];
-	if (request_text.length() < kMinRequestLength) {
+	// Длина запроса -- в символах: по байтам русский текст считался вдвое длиннее (issue #3681).
+	if (native_text::char_count(request_text) < kMinRequestLength) {
 		SendMsgToChar("Слишком короткий запрос.\r\n", ch);
 		return false;
 	}
-	if (request_text.length() > kMaxRequestLength) {
+	if (native_text::char_count(request_text) > kMaxRequestLength) {
 		SendMsgToChar("Слишком длинный запрос.\r\n", ch);
 		return false;
 	}

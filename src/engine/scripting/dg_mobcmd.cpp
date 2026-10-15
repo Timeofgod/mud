@@ -24,10 +24,22 @@
  ***************************************************************************/
 
 #include "engine/entities/char_data.h"
+#include "gameplay/core/experience.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/mechanics/follow.h"
+#include "gameplay/mechanics/mount.h"
 #include "engine/ui/cmd/do_follow.h"
 #include "gameplay/fight/fight.h"
 #include "gameplay/fight/fight_hit.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_equip_flags.h"
+#include "engine/core/char_handler.h"
+#include "engine/ui/cmd/do_stand.h"
+#include "gameplay/affects/affect_data.h"
+#include "engine/core/obj_handler.h"
+#include "gameplay/mechanics/equipment.h"
+#include "gameplay/mechanics/inventory.h"
+#include "engine/core/target_resolver.h"
 #include "engine/db/obj_prototypes.h"
 #include "gameplay/magic/magic_utils.h"
 #include "gameplay/skills/townportal.h"
@@ -38,33 +50,34 @@
 #include "gameplay/core/game_limits.h"
 #include "gameplay/mechanics/damage.h"
 
+#include <fmt/format.h>
+
 struct mob_command_info {
 	const char *command;
 	EPosition minimum_position;
 	typedef void(*handler_f)(CharData *ch, char *argument, int cmd, int subcmd, Trigger *trig);
 	handler_f command_pointer;
 	int subcmd;                ///< Subcommand. See SCMD_* constants.
-	bool use_in_lag;
+	bool use_in_stoped;
 };
 
 extern int reloc_target;
 extern Trigger *cur_trig;
 
-void sub_write(char *arg, CharData *ch, byte find_invis, int targets);
+void sub_write(char *arg, CharData *ch, int find_invis, int targets);
 RoomData *get_room(const char *name);
 ObjData *get_obj_by_char(CharData *ch, char *name);
 // * Local functions.
 void mob_command_interpreter(CharData *ch, char *argument, Trigger *trig);
 bool mob_script_command_interpreter(CharData *ch, char *argument, Trigger *trig);
-void send_to_zone(char *messg, int zone_rnum);
+void send_to_zone(const char *messg, int zone_rnum);
 
 // attaches mob's name and vnum to msg_set and sends it to script_log
-void mob_log(CharData *mob, Trigger *trig, const char *msg, LogMode type = LogMode::OFF) {
-	char small_buf[kMaxInputLength + 100];
-
-	snprintf(small_buf,kMaxInputLength + 100, "(Mob: '%s', VNum: %d, trig: %d): %s [строка: %d]", 
-			GET_SHORT(mob), GET_MOB_VNUM(mob), trig_index[(trig)->get_rnum()]->vnum, msg, last_trig_line_num);
-	script_log(small_buf, type);
+void mob_log(CharData *mob, Trigger *trig, const std::string &msg, LogMode type = LogMode::OFF) {
+	script_log(fmt::format("(Mob: '{}', VNum: {}, trig: {}): {} [строка: {}]",
+						   GET_SHORT(mob), GET_MOB_VNUM(mob),
+						   trig_index[(trig)->get_rnum()]->vnum, msg, last_trig_line_num).c_str(),
+			   type);
 }
 
 //returns the real room number, or kNowhere if not found or invalid
@@ -76,8 +89,7 @@ RoomRnum dg_find_target_room(CharData *ch, Trigger *trig,char *rawroomstr) {
 	one_argument(rawroomstr, roomstr);
 
 	if (!*roomstr) {
-		sprintf(buf, "Undefined mteleport room: %s", rawroomstr);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("Undefined mteleport room: {}", rawroomstr));
 		return kNowhere;
 	}
 
@@ -85,8 +97,7 @@ RoomRnum dg_find_target_room(CharData *ch, Trigger *trig,char *rawroomstr) {
 	if (tmp > 0) {
 		location = GetRoomRnum(tmp);
 	} else {
-		sprintf(buf, "Undefined mteleport room: %s", roomstr);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("Undefined mteleport room: {}", roomstr));
 		return kNowhere;
 	}
 
@@ -171,13 +182,11 @@ void do_mkill(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger
 
 	if (*arg == UID_CHAR) {
 		if (!(victim = get_char(arg))) {
-			sprintf(buf, "mkill: victim (%s) not found, команда: %s", arg + 1, argument);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mkill: victim ({}) not found, команда: {}", arg + 1, argument));
 			return;
 		}
-	} else if (!(victim = get_char_room_vis(ch, arg))) {
-		sprintf(buf, "mkill: victim (%s) not found, , команда: %s", arg, argument);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInRoomOrSelf(ch, arg))) {
+		mob_log(ch, trig, fmt::format("mkill: victim ({}) not found, , команда: {}", arg, argument));
 		return;
 	}
 
@@ -241,21 +250,17 @@ void do_mechoaround(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, T
 	}
 	if (*arg == UID_CHAR) {
 		if (!(victim = get_char(arg))) {
-			sprintf(buf, "mechoaround: victim (%s) UID does not exist, команда: %s", arg + 1, argument);
-			mob_log(ch, trig, buf, LGH);
+			mob_log(ch, trig, fmt::format("mechoaround: victim ({}) UID does not exist, команда: {}", arg + 1, argument), LGH);
 			return;
 		}
-	} else if (!(victim = get_char_room_vis(ch, arg))) {
-		sprintf(buf, "mechoaround: victim (%s) does not exist, команда: %s", arg, argument);
-		mob_log(ch, trig, buf, LGH);
+	} else if (!(victim = target_resolver::FindCharInRoomOrSelf(ch, arg))) {
+		mob_log(ch, trig, fmt::format("mechoaround: victim ({}) does not exist, команда: {}", arg, argument), LGH);
 		return;
 	}
 
 	if (reloc_target != -1 && reloc_target != victim->in_room) {
-		sprintf(buf,
-				"&YВНИМАНИЕ&G Неверное использование команды wat в триггере %s (VNUM=%d).",
-				GET_TRIG_NAME(cur_trig), GET_TRIG_VNUM(cur_trig));
-		mudlog(buf, BRF, kLvlBuilder, ERRLOG, true);
+		mob_log(ch, trig, fmt::format("&YВНИМАНИЕ&G Неверное использование команды mat, target room {}. vict room  {}",
+							  world[reloc_target]->vnum, world[victim->in_room]->vnum));
 	}
 
 	sub_write(p, victim, true, kToRoom);
@@ -284,17 +289,14 @@ void do_msend(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger
 //			mob_log(ch, buf, LGH);
 			return;
 		}
-	} else if (!(victim = get_char_room_vis(ch, arg))) {
-		sprintf(buf, "msend: victim (%s) does not exist, команда: %s", arg, argument);
-		mob_log(ch, trig, buf, LGH);
+	} else if (!(victim = target_resolver::FindCharInRoomOrSelf(ch, arg))) {
+		mob_log(ch, trig, fmt::format("msend: victim ({}) does not exist, команда: {}", arg, argument), LGH);
 		return;
 	}
 
 	if (reloc_target != -1 && reloc_target != victim->in_room) {
-		sprintf(buf,
-				"&YВНИМАНИЕ&G Неверное использование команды wat в триггере %s (VNUM=%d).",
-				GET_TRIG_NAME(cur_trig), GET_TRIG_VNUM(cur_trig));
-		mudlog(buf, BRF, kLvlBuilder, ERRLOG, true);
+		mob_log(ch, trig, fmt::format("&YВНИМАНИЕ&G Неверное использование команды mat, target room {}, vict room  {}",
+							  world[reloc_target]->vnum, world[victim->in_room]->vnum));
 	}
 
 	sub_write(p, victim, true, kToChar);
@@ -315,10 +317,8 @@ void do_mecho(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger
 	skip_spaces(&p);
 
 	if (reloc_target != -1 && reloc_target != ch->in_room) {
-		sprintf(buf,
-				"&YВНИМАНИЕ&G Неверное использование команды wat в триггере %s (VNUM=%d).",
-				GET_TRIG_NAME(cur_trig), GET_TRIG_VNUM(cur_trig));
-		mudlog(buf, BRF, kLvlBuilder, ERRLOG, true);
+		mob_log(ch, trig, fmt::format("&YВНИМАНИЕ&G Неверное использование команды mat, target room {}, vict room  {}",
+							  world[reloc_target]->vnum, world[ch->in_room]->vnum));
 	}
 
 	sub_write(p, ch, true, kToRoom);
@@ -364,8 +364,7 @@ void do_mload(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger
 		}
 		if (GetObjMIW(object->get_rnum()) >= 0 && obj_proto.actual_count(object->get_rnum()) > GetObjMIW(object->get_rnum())) {
 			if (!stable_objs::IsTimerUnlimited(obj_proto[object->get_rnum()].get())) {
-				sprintf(buf, "mload: Попытка загрузить предмет больше чем в MIW для #%d.", number);
-				mob_log(ch, trig, buf);
+				mob_log(ch, trig, fmt::format("mload: Попытка загрузить предмет больше чем в MIW для #{}.", number));
 //				extract_obj(object.get());
 //				return;
 			}
@@ -410,7 +409,7 @@ void do_mpurge(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigge
 	if (*arg == UID_CHAR)
 		victim = get_char(arg);
 	else
-		victim = get_char_room_vis(ch, arg);
+		victim = target_resolver::FindCharInRoomOrSelf(ch, arg);
 
 	if (victim == nullptr) {
 		if ((obj = get_obj_by_char(ch, arg))) {
@@ -426,9 +425,9 @@ void do_mpurge(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigge
 		return;
 	}
 
-	if (victim->followers
+	if (!victim->followers.empty()
 		|| victim->has_master()) {
-		die_follower(victim);
+		follow::DieFollower(victim);
 	}
 	if(ch == victim) {
 		trig->halt();
@@ -516,8 +515,7 @@ void do_mteleport(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 	skip_spaces(&argument);
 
 	if (!*arg1 || !*arg2) {
-		sprintf(buf, "mteleport: bad syntax, arg: %s", textstr);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mteleport: bad syntax, arg: {}", textstr));
 		return;
 	}
 
@@ -541,7 +539,7 @@ void do_mteleport(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 			RemoveCharFromRoom(vict);
 			PlaceCharToRoom(vict, target);
 			if (!vict->IsNpc()) {
-				look_at_room(vict, true);
+				sight::look_at_room(vict, true);
 				lastchar = vict;
 			}
 		}
@@ -556,17 +554,17 @@ void do_mteleport(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 				mob_log(ch, trig, "mteleport transports allchar from kNowhere");
 				return;
 			}
-			if (vict->IsNpc() && !IS_CHARMICE(vict)) {
+			if (vict->IsNpc() && !IsCharmice(vict)) {
 				continue;
 			}
 			if (target == vict->in_room) {
 //				mob_log(ch, trig, "mteleport allchar: target is itself");
 				continue;
 			}
-			if (vict->get_horse()) {
-				if (vict->IsOnHorse() || vict->has_horse(true)) {
-					RemoveCharFromRoom(vict->get_horse());
-					PlaceCharToRoom(vict->get_horse(), target);
+			if (mount::GetHorse(vict)) {
+				if (mount::IsOnHorse(vict) || mount::HasHorse(vict, true)) {
+					RemoveCharFromRoom(mount::GetHorse(vict));
+					PlaceCharToRoom(mount::GetHorse(vict), target);
 					onhorse = true;
 				}
 			}
@@ -576,9 +574,9 @@ void do_mteleport(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 			RemoveCharFromRoom(vict);
 			PlaceCharToRoom(vict, target);
 			if (!onhorse)
-				vict->dismount();
+				mount::Dismount(vict);
 			if (!vict->IsNpc()) {
-				look_at_room(vict, true);
+				sight::look_at_room(vict, true);
 				lastchar = vict;
 			}
 		}
@@ -589,50 +587,47 @@ void do_mteleport(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 	} else {
 		if (*arg1 == UID_CHAR) {
 			if (!(vict = get_char(arg1))) {
-				sprintf(buf, "mteleport: victim (%s) UID does not exist", arg1 + 1);
-				mob_log(ch, trig, buf);
+				mob_log(ch, trig, fmt::format("mteleport: victim ({}) UID does not exist", arg1 + 1));
 				return;
 			}
-		} else if (!(vict = get_char_vis(ch, arg1, EFind::kCharInWorld))) {
-			sprintf(buf, "mteleport: victim (%s) does not exist", arg1);
-			mob_log(ch, trig, buf);
+		} else if (!(vict = target_resolver::FindCharInWorld(ch, arg1))) {
+			mob_log(ch, trig, fmt::format("mteleport: victim ({}) does not exist", arg1));
 			return;
 		}
 		if (target == vict->in_room) {
 //			mob_log(ch, trig, "mteleport: target is itself");
 			return;
 		}
-		if (IS_CHARMICE(vict) && vict->in_room == vict->get_master()->in_room)
+		if (IsCharmice(vict) && vict->in_room == vict->get_master()->in_room)
 			vict = vict->get_master();
 		const auto people_copy = world[vict->in_room]->people;
 		for (const auto charmee : people_copy) {
-			if (IS_CHARMICE(charmee) && charmee->get_master()  == vict) {
+			if (IsCharmice(charmee) && charmee->get_master()  == vict) {
 				RemoveCharFromRoom(charmee);
 				PlaceCharToRoom(charmee, target);
 			}
 		}
-		if (vict->get_horse()) {
-			if (vict->IsOnHorse() || vict->has_horse(true)) {
-				RemoveCharFromRoom(vict->get_horse());
-				PlaceCharToRoom(vict->get_horse(), target);
+		if (mount::GetHorse(vict)) {
+			if (mount::IsOnHorse(vict) || mount::HasHorse(vict, true)) {
+				RemoveCharFromRoom(mount::GetHorse(vict));
+				PlaceCharToRoom(mount::GetHorse(vict), target);
 				onhorse = true;
 			}
 		}
 		from_room = vict->in_room;
-		if (!str_cmp(argument, "followers") && vict->followers) {
-			FollowerType *ft;
-			for (ft = vict->followers; ft; ft = ft->next) {
-				if (ft->follower->in_room == from_room && ft->follower->IsNpc()) {
-					RemoveCharFromRoom(ft->follower);
-					PlaceCharToRoom(ft->follower, target);
+		if (!str_cmp(argument, "followers") && !vict->followers.empty()) {
+			for (auto *ft : vict->followers) {
+				if (ft->in_room == from_room && ft->IsNpc()) {
+					RemoveCharFromRoom(ft);
+					PlaceCharToRoom(ft, target);
 				}
 			}
 		}
 		RemoveCharFromRoom(vict);
 		PlaceCharToRoom(vict, target);
 		if (!onhorse)
-			vict->dismount();
-		look_at_room(vict, true);
+			mount::Dismount(vict);
+		sight::look_at_room(vict, true);
 		greet_mtrigger(vict, -1);
 		greet_otrigger(vict, -1);
 	}
@@ -665,11 +660,10 @@ void do_mforce(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigge
 
 	if (*arg == UID_CHAR) {
 		if (!(victim = get_char(arg))) {
-			sprintf(buf, "mforce: victim (%s) UID does not exist", arg + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mforce: victim ({}) UID does not exist", arg + 1));
 			return;
 		}
-	} else if ((victim = get_char_room_vis(ch, arg)) == nullptr) {
+	} else if ((victim = target_resolver::FindCharInRoomOrSelf(ch, arg)) == nullptr) {
 		mob_log(ch, trig, "mforce: no such victim");
 		return;
 	}
@@ -721,18 +715,15 @@ void do_mexp(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger 
 
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mexp: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mexp: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mexp: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mexp: victim ({}) does not exist", name));
 		return;
 	}
-	sprintf(buf, "mexp: victim (%s) получил опыт %d", name, atoi(amount));
-	mob_log(ch, trig, buf);
-	EndowExpToChar(victim, atoi(amount));
+	mob_log(ch, trig, fmt::format("mexp: victim ({}) получил опыт {}", name, atoi(amount)));
+	experience::EndowExpToChar(victim, atoi(amount));
 }
 
 // increases the target's gold
@@ -754,21 +745,19 @@ void do_mgold(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger
 
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mgold: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mgold: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mgold: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mgold: victim ({}) does not exist", name));
 		return;
 	}
 
 	int num = atoi(amount);
 	if (num >= 0) {
-		victim->add_gold(num);
+		currencies::AddHand(*victim, currencies::kGold, num);
 	} else {
-		num = victim->remove_gold(num);
+		num = currencies::RemoveHand(*victim, currencies::kGold, num);
 		if (num > 0) {
 			mob_log(ch, trig, "mgold subtracting more gold than character has");
 		}
@@ -782,7 +771,6 @@ void do_mtransform(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 	char arg[kMaxInputLength];
 	CharData *m;
 	bool keep_hp = true;    // new mob keeps the old mob's hp/max hp/exp
-	char buf[500];
 
 	if (AFF_FLAGGED(ch, EAffect::kCharmed))
 		return;
@@ -795,11 +783,9 @@ void do_mtransform(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 	one_argument(argument, arg);
 
 	if (!*arg) {
-		sprintf(buf, "mtransform: missing argument: %s", argument);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mtransform: missing argument: {}", argument));
 	} else if (!a_isdigit(*arg) && *arg != '-') {
-		sprintf(buf, "mtransform: bad argument: %s", argument);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mtransform: bad argument: {}", argument));
 	} else {
 		if (a_isdigit(*arg))
 			m = ReadMobile(atoi(arg), kVirtual);
@@ -842,12 +828,10 @@ void do_mtransform(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 			SetFighting(ch, m->GetEnemy());
 			m->SetEnemy(nullptr);
 		}
-		ch->followers = m->followers;
-		m->followers = nullptr;
-		for (struct FollowerType *l = ch->followers; l; l = l->next) {
-			l->follower->set_master(ch);
+		ch->followers = std::move(m->followers);
+		for (auto *l : ch->followers) {
+			l->set_master(ch);
 		}
-		ch->set_normal_morph();
 		for (const auto &af : m->affected) {
 			const auto &affect = *af;
 
@@ -867,9 +851,9 @@ void do_mtransform(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 		ch->set_wait(m->get_wait());  
 		ch->set_master(m->get_master());
 		if (m->get_master()) {
-			for (auto f = m->get_master()->followers; f; f = f->next) {
-				if (f->follower == m) {
-					f->follower = ch;
+			for (auto &f : m->get_master()->followers) {
+				if (f == m) {
+					f = ch;
 				}
 			}
 		}
@@ -879,7 +863,7 @@ void do_mtransform(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 			ch->set_max_hit(m->get_max_hit());
 			ch->set_exp(m->get_exp());
 		}
-		ch->set_gold(m->get_gold());
+		currencies::SetHand(*ch, currencies::kGold, currencies::GetHand(*m, currencies::kGold));
 		ch->SetPosition(m->GetPosition());
 		IS_CARRYING_W(ch) = IS_CARRYING_W(m);
 		IS_CARRYING_N(ch) = IS_CARRYING_N(m);
@@ -908,7 +892,10 @@ void do_mdoor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger
 	char field[kMaxInputLength], *value;
 	RoomData *rm;
 	int dir, fd, to_room, lock;
-	char error[kMaxInputLength];
+	// Раньше здесь был char error[kMaxInputLength], который нигде не заполнялся: все четыре
+	// сообщения об ошибке печатали неинициализированный стек ("mdoor argument:  !!\u04ceY").
+	// Логируем то, ради чего строка явно и задумывалась -- сами аргументы команды.
+	const std::string command_args = argument ? argument : "";
 	const char *door_field[] = {
 			"purge",
 			"description",
@@ -929,29 +916,25 @@ void do_mdoor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger
 
 	if (!*target || !*direction || !*field) {
 		mob_log(ch, trig, "mdoor called with too few args");
-		sprintf(buf, "mdoor argument: %s", error);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mdoor argument: {}", command_args));
 		return;
 	}
 
 	if ((rm = get_room(target)) == nullptr) {
 		mob_log(ch, trig, "mdoor: invalid target");
-		sprintf(buf, "mdoor argument: %s", error);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mdoor argument: {}", command_args));
 		return;
 	}
 
 	if ((dir = search_block(direction, dirs, false)) == -1) {
 		mob_log(ch, trig, "mdoor: invalid direction");
-		sprintf(buf, "mdoor argument: %s", error);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mdoor argument: {}", command_args));
 		return;
 	}
 
 	if ((fd = search_block(field, door_field, false)) == -1) {
 		mob_log(ch, trig, "mdoor: invalid field");
-		sprintf(buf, "mdoor argument: %s", error);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mdoor argument: {}", command_args));
 		return;
 	}
 
@@ -1048,13 +1031,11 @@ void do_mfeatturn(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mfeatturn: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mfeatturn: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mfeatturn: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mfeatturn: victim ({}) does not exist", name));
 		return;
 	};
 
@@ -1084,8 +1065,7 @@ void do_mskillturn(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 	if (MUD::Skills().IsValid(skill_id)) {
 		is_skill = true;
 	} else if ((recipenum = im_get_recipe_by_name(skill_name)) < 0) {
-		sprintf(buf, "mskillturn: %s skill not found", skill_name);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mskillturn: {} skill not found", skill_name));
 		return;
 	}
 
@@ -1100,13 +1080,11 @@ void do_mskillturn(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mskillturn: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mskillturn: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mskillturn: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mskillturn: victim ({}) does not exist", name));
 		return;
 	}
 
@@ -1114,8 +1092,7 @@ void do_mskillturn(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 		if (MUD::Class(victim->GetClass()).skills[skill_id].IsAvailable()) {
 			trg_skillturn(victim, skill_id, skilldiff, last_trig_vnum);
 		} else {
-			sprintf(buf, "mskillturn: skill and character class mismatch");
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, "mskillturn: skill and character class mismatch");
 		}
 	} else {
 		trg_recipeturn(victim, recipenum, skilldiff);
@@ -1143,8 +1120,7 @@ void do_mskilladd(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 	if (MUD::Skills().IsValid(skill_id)) {
 		isSkill = true;
 	} else if ((recipenum = im_get_recipe_by_name(skillname)) < 0) {
-		sprintf(buf, "mskilladd: %s skill/recipe not found", skillname);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mskilladd: {} skill/recipe not found", skillname));
 		return;
 	}
 
@@ -1152,13 +1128,11 @@ void do_mskilladd(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mskilladd: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mskilladd: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mskilladd: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mskilladd: victim ({}) does not exist", name));
 		return;
 	};
 
@@ -1206,13 +1180,11 @@ void do_mspellturn(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mspellturn: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mspellturn: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mspellturn: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mspellturn: victim ({}) does not exist", name));
 		return;
 	};
 
@@ -1250,13 +1222,11 @@ void do_mspellturntemp(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/
 
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mspellturntemp: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mspellturntemp: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mspellturntemp: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mspellturntemp: victim ({}) does not exist", name));
 		return;
 	};
 
@@ -1284,13 +1254,11 @@ void do_mspelladd(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 	CharData *victim;
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mspelladd: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mspelladd: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mspelladd: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mspelladd: victim ({}) does not exist", name));
 		return;
 	};
 
@@ -1346,13 +1314,11 @@ void do_mspellitem(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tr
 
 	if (*name == UID_CHAR) {
 		if (!(victim = get_char(name))) {
-			sprintf(buf, "mspellitem: victim (%s) UID does not exist", name + 1);
-			mob_log(ch, trig, buf);
+			mob_log(ch, trig, fmt::format("mspellitem: victim ({}) UID does not exist", name + 1));
 			return;
 		}
-	} else if (!(victim = get_char_vis(ch, name, EFind::kCharInWorld))) {
-		sprintf(buf, "mspellitem: victim (%s) does not exist", name);
-		mob_log(ch, trig, buf);
+	} else if (!(victim = target_resolver::FindCharInWorld(ch, name))) {
+		mob_log(ch, trig, fmt::format("mspellitem: victim ({}) does not exist", name));
 		return;
 	};
 
@@ -1376,8 +1342,7 @@ void do_mdamage(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigg
 	three_arguments(argument, name, amount, damage_type);
 
 	if (!*name || !*amount || !a_isdigit(*amount)) {
-		sprintf(buf, "mdamage: bad syntax, команда: %s", argument);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mdamage: bad syntax, команда: {}", argument));
 		return;
 	}
 
@@ -1388,7 +1353,7 @@ void do_mdamage(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigg
 			return;
 		}
 
-		if (IS_IMMORTAL(victim) && dam > 0) {
+		if (privilege::IsImmortal(victim) && dam > 0) {
 			SendMsgToChar("Будучи очень крутым, вы сделали шаг в сторону и не получили повреждений...\r\n", victim);
 			return;
 		}
@@ -1399,7 +1364,7 @@ void do_mdamage(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigg
 				mob_log(ch, trig, "mdamage: incorrect damage type.");
 				return;
 			}
-			Damage mdamage(SimpleDmg(kTypeTriggerdeath), dam, type);
+			Damage mdamage(SimpleDmg(fight::EDamageSource::kTriggerDeath), dam, type);
 			mdamage.Process(ch, victim);
 		} else {
 			victim->set_hit(victim->get_hit() - dam);
@@ -1411,10 +1376,14 @@ void do_mdamage(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigg
 			char_dam_message(dam, victim, victim, 0);
 			if (victim->GetPosition() == EPosition::kDead) {
 				if (!victim->IsNpc()) {
-					sprintf(buf2, "%s killed by mobdamage at %s [%d]",GET_NAME(victim),
-						victim->in_room == kNowhere ? "kNowhere" : world[victim->in_room]->name,
-						GET_ROOM_VNUM(victim->in_room));
-				mudlog(buf2, BRF, 0, SYSLOG, true);
+					mudlog(fmt::format("{} killed by mobdamage at {} [{}], trigger [{}]",
+									   GET_NAME(victim),
+									   // имя комнаты бывает нулевым (конструктор RoomData), а fmt на нуле
+									   // бросает исключение -- раньше printf печатал "(null)"
+									   victim->in_room == kNowhere || !world[victim->in_room]->name
+										   ? "kNowhere" : world[victim->in_room]->name,
+									   GET_ROOM_VNUM(victim->in_room), GET_TRIG_VNUM(trig)),
+						   BRF, 0, SYSLOG, true);
 				}
 				die(victim, ch);
 			}
@@ -1428,12 +1397,11 @@ void do_mzoneecho(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 	ZoneRnum zone;
 	char zone_name[kMaxInputLength], buf[kMaxInputLength], *msg;
 
-	msg = any_one_arg(argument, zone_name);
+	msg = one_argument(argument, zone_name);
 	skip_spaces(&msg);
 
 	if (!*zone_name || !*msg) {
-		sprintf(buf, "mzoneecho called with too few args, команда: %s", argument);
-		mob_log(ch, trig, buf);
+		mob_log(ch, trig, fmt::format("mzoneecho called with too few args, команда: {}", argument));
 	}
 	else if ((zone = get_zone_rnum_by_vnumum(atoi(zone_name))) < 0) {
 		std::stringstream str_log;
@@ -1447,10 +1415,8 @@ void do_mzoneecho(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Tri
 }
 // для команды mat
 void MobDgCast(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/, Trigger *trig) {
-	char *dg_arg = str_dup("DgCast ");
-	strcat(dg_arg, argument);
+	std::string dg_arg = std::string("dgcast ") + argument;
 	do_dg_cast(ch, trig, MOB_TRIGGER, dg_arg);
-	free(dg_arg);
 }
 
 const struct mob_command_info mob_cmd_info[] =
@@ -1459,7 +1425,9 @@ const struct mob_command_info mob_cmd_info[] =
 		{"RESERVED", EPosition::kDead, nullptr, 0, false},
 		{"masound", EPosition::kDead, do_masound, -1, false},
 		{"mkill", EPosition::kStand, do_mkill, -1, false},
-		{"mjunk", EPosition::kSit, do_mjunk, -1, true},
+		// issue #3646: cleanup command -- must run in ANY position (paired with mpurge=kDead),
+		// else a stun-lagged mob skips mjunk but still mpurges and leaks worn gear to the room.
+		{"mjunk", EPosition::kDead, do_mjunk, -1, true},
 		{"mdamage", EPosition::kDead, do_mdamage, -1, false},
 		{"mdoor", EPosition::kDead, do_mdoor, -1, false},
 		{"mecho", EPosition::kDead, do_mecho, -1, false},
@@ -1485,7 +1453,7 @@ const struct mob_command_info mob_cmd_info[] =
 		{"mzoneecho", EPosition::kDead, do_mzoneecho, -1, false},
 		{"asound", EPosition::kDead, do_masound, -1, false},
 		{"kill", EPosition::kStand, do_mkill, -1, false},
-		{"junk", EPosition::kSit, do_mjunk, -1, true},
+		{"junk", EPosition::kDead, do_mjunk, -1, true},
 		{"damage", EPosition::kDead, do_mdamage, -1, false},
 		{"door", EPosition::kDead, do_mdoor, -1, false},
 		{"echo", EPosition::kDead, do_mecho, -1, false},
@@ -1516,7 +1484,7 @@ const struct mob_command_info mob_cmd_info[] =
 
 bool mob_script_command_interpreter(CharData *ch, char *argument, Trigger *trig) {
 	char *line, arg[kMaxInputLength];
-	bool use_in_lag = false;
+	bool use_in_stoped = false;
 
 	// just drop to next line for hitting CR
 	skip_spaces(&argument);
@@ -1524,7 +1492,7 @@ bool mob_script_command_interpreter(CharData *ch, char *argument, Trigger *trig)
 	if (!*argument)
 		return false;
 
-	line = any_one_arg(argument, arg);
+	line = one_argument(argument, arg);
 
 	// find the command
 	int cmd = 0;
@@ -1532,7 +1500,7 @@ bool mob_script_command_interpreter(CharData *ch, char *argument, Trigger *trig)
 	while (*mob_cmd_info[cmd].command != '\n') {
 		if (arg[0] == '!') {
 			if (!strcmp(mob_cmd_info[cmd].command, arg + 1)) {
-				use_in_lag =  true;
+				use_in_stoped = true;
 				break;
 			}
 		}
@@ -1542,17 +1510,67 @@ bool mob_script_command_interpreter(CharData *ch, char *argument, Trigger *trig)
 		}
 		cmd++;
 	}
-// damage mtrigger срабатывает всегда
-	if (!(CheckScript(ch, MTRIG_DAMAGE))) {
-		if (!use_in_lag && !mob_cmd_info[cmd].use_in_lag
-				&& (AFF_FLAGGED(ch, EAffect::kHold)
-						|| AFF_FLAGGED(ch, EAffect::kStopFight)
-						|| AFF_FLAGGED(ch, EAffect::kMagicStopFight))
-				&& !trig->add_flag) {
-			if (!strcmp(mob_cmd_info[cmd].command, "mload") || (!strcmp(mob_cmd_info[cmd].command, "load"))) {
-				sprintf(buf, "command_interpreter: моб в стане, mload пропущен, команда: %s", argument);
-				mob_log(ch, trig, buf);
+	// issue #3658: HitPrcnt должен визуально среагировать, а не залипнуть на стан-гейте.
+	// Моб под контролем (и не при смерти) -> стряхиваем контроль с сообщением и поднимаем,
+	if (trig && IS_SET(GET_TRIG_TYPE(trig), MTRIG_HITPRCNT)
+			&& ch->GetPosition() >= EPosition::kStun   // issue #3658: выведен из строя
+			&& (AFF_FLAGGED(ch, EAffect::kHold)
+				|| AFF_FLAGGED(ch, EAffect::kStopFight)
+				|| AFF_FLAGGED(ch, EAffect::kMagicStopFight)
+				|| AFF_FLAGGED(ch, EAffect::kSleep)
+				|| ch->get_wait() > 0)) {
+		// issue #3658: RemoveAffectFromChar убирает аффект из списка ch->affected, но сводный
+		// битвектор affected_by не трогает -- его пересобирает affect_total (отработает в конце
+		// боевого раунда, гонять его отдельно тут незачем). До пересчета AFF_FLAGGED продолжает
+		// отвечать "да", условие блока остается истинным, и каждая следующая команда триггера
+		// снова шлет тени в комнату и строку в лог. Поэтому гасим бит сразу руками.
+		const auto strip_control = [ch](EAffect affect) {
+			if (AFF_FLAGGED(ch, affect)) {
+				RemoveAffectFromChar(ch, affect);
+				ch->remove_affect(affect);
 			}
+		};
+		strip_control(EAffect::kHold);
+		strip_control(EAffect::kStopFight);
+		strip_control(EAffect::kMagicStopFight);
+		strip_control(EAffect::kSleep);
+		// issue #3658: именно zero_wait(), а не set_wait(0) -- set_wait игнорирует ноль
+		// (guard "if (_ > 0)" в char_data.cpp), лаг оставался, и каждая следующая команда
+		// триггера снова входила сюда: тени в комнату и строка в лог на каждую.
+		ch->zero_wait();
+		act("Множество быстрых теней метнулись вокруг $n3.", false, ch, nullptr, nullptr, kToRoom | kToArenaListen);
+		if (ch->GetPosition() < EPosition::kFight) {   // сидел/спал/оглушён -> встаём
+			ch->SetPosition(EPosition::kSit);
+			char st[] = "";
+			do_stand(ch, st, 0, 0);
+		}
+		// issue #3719: под контролем моб мог ни разу не ударить в ответ, и GetEnemy() тут nullptr
+		// (HitPrcnt дергается из hit() по жертве, а не по атакующему) -- разыменовывать его нельзя.
+		const auto *enemy = ch->GetEnemy();
+		if (!enemy || !(enemy->IsNpc() && !IsCharmice(enemy))) {
+			mob_log(ch, trig,
+					fmt::format("mob command_interpreter: моб {} ({}) отжил из лага/стана в HitPercent, "
+								"проценты жизни {}, сражается с {}",
+								ch->get_name(), GET_MOB_VNUM(ch), GET_TRIG_NARG(trig),
+								enemy ? enemy->get_name().c_str() : "никем").c_str());
+		}
+	}
+// damage mtrigger срабатывает всегда
+	if (!(CheckScript(ch, MTRIG_DAMAGE) || CheckScript(ch, MTRIG_DEATH))) {
+		// issue #3740: add_flag ("выполнять команды моба в неподвижном состоянии") -- аварийный
+		// выход для триггеров, которым обязательно надо доработать до конца, даже если моба
+		// захолдили. Без него скрипт откладывается по кругу: hang_trig_wait перевешивает его
+		// каждую секунду, и пока группа держит моба, до конца триггера дело не доходит. Так
+		// освобожденные души в 756 зоне перестали доходить до mpurge и жили сотни тиков вместо
+		// двух. trig может быть nullptr, поэтому проверка через &&.
+		if (!use_in_stoped && !mob_cmd_info[cmd].use_in_stoped
+				&& (AFF_FLAGGED(ch, EAffect::kHold)
+				|| AFF_FLAGGED(ch, EAffect::kStopFight)
+				|| AFF_FLAGGED(ch, EAffect::kMagicStopFight))
+				&& !(trig && trig->add_flag)) {
+			// issue #3523: моб в стане -> команду не теряем: вешаем триггеру wait
+			// 0.025 RL sec, после стана script_driver повторит её (TRIG_FROM_LINE).
+			hang_trig_wait(ch, trig, MOB_TRIGGER, kPassesPerSec, true);
 			return false;
 		}
 	}

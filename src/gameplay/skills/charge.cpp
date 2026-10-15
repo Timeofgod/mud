@@ -3,30 +3,37 @@
 //
 
 #include "charge.h"
+#include "gameplay/mechanics/mount.h"
+
+#include "skill_messages.h"
+#include "engine/db/global_objects.h"
 
 #include "engine/core/char_movement.h"
 #include "engine/entities/char_data.h"
 #include "gameplay/fight/pk.h"
 #include "protect.h"
 #include "bash.h"
-#include "engine/core/action_targeting.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/fight/common.h"
 #include "gameplay/ai/mobact.h"
 #include "gameplay/mechanics/damage.h"
+#include "gameplay/mechanics/sight.h"
+#include "gameplay/mechanics/minions.h"
+#include "utils/utils_string.h"
 
 void DoCharge(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	int direction;
 
-	if (!ch->GetSkill(ESkill::kCharge)) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (!GetSkill(ch, ESkill::kCharge)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kCharge, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 	if (AFF_FLAGGED(ch, EAffect::kHold) || ch->get_wait() > 0) {
-		SendMsgToChar("Вы временно не в состоянии это сделать.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kCharge, ESkillMsg::kCantFightNow) + "\r\n", ch);
 		return;
 	}
-	if (ch->IsOnHorse()) {
-		SendMsgToChar("Верхом это сделать затруднительно.\r\n", ch);
+	if (mount::IsOnHorse(ch)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kCharge, ESkillMsg::kCantWhileMounted) + "\r\n", ch);
 		return;
 	}
 	if (ch->IsFlagged(EPrf::kIronWind)) {
@@ -34,16 +41,16 @@ void DoCharge(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		return;
 	}
 	if (ch->GetPosition() != EPosition::kStand) {
-		SendMsgToChar("Вы не можете ринуться в бой из этого положения!\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kCharge, ESkillMsg::kGetOnFeet) + "\r\n", ch);
 		return;
 	}
 
-	one_argument(argument, arg);
-	if ((direction = search_block(arg, dirs, false)) >= 0 ||
-		(direction = search_block(arg, dirs_rus, false)) >= 0) {
+	const std::string direction_name = utils::ExtractFirstArgumentLower(argument);
+	if ((direction = search_block(direction_name, dirs, false)) >= 0 ||
+		(direction = search_block(direction_name, dirs_rus, false)) >= 0) {
 		GoCharge(ch, direction);
 	} else {
-		SendMsgToChar("В каком направлении Вы желаете ринуться в бой?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kCharge, ESkillMsg::kNoTarget) + "\r\n", ch);
 	}
 }
 
@@ -65,7 +72,7 @@ void GoCharge(CharData *ch, int direction) {
 	if (ch->IsFlagged(EPrf::kAwake)) {
 		is_awake = true;
 	}
-	auto skill_charge = ch->GetSkill(ESkill::kCharge);
+	auto skill_charge = GetSkill(ch, ESkill::kCharge);
 	int dam = (number(ceil(skill_charge * 3 / 1.25), ceil(skill_charge * 3 * 1.25)) * GetRealLevel(ch)) / 30;
 
 	if (is_awake) {
@@ -74,31 +81,38 @@ void GoCharge(CharData *ch, int direction) {
 
 	int victims_amount = 2;
 	if (is_awake) {
-		victims_amount = 2 + ch->GetSkill(ESkill::kCharge) / 40;
+		victims_amount = 2 + GetSkill(ch, ESkill::kCharge) / 40;
 	}
 
 	Affect<EApply> af;
-	af.type = ESpell::kNoCharge;
 	af.duration = 4;
-	af.battleflag = kNone;
-	af.bitvector = to_underlying(EAffect::kNoCharge);
-	af.caster_id = GET_UID(ch);
+	af.battleflag.clear();
+	af.affect_type = EAffect::kNoCharge;
+	af.caster_id = ch->get_uid();
 
 	Affect<EApply> af2;
-	af2.type = ESpell::kUndefined;
 	af2.duration = 3;
-	af2.battleflag = kAfSameTime;
-	af2.bitvector = to_underlying(EAffect::kConfused);
+	af2.battleflag = {kAfSameTime};
+	af2.affect_type = EAffect::kConfused;
 	SetWait(ch, 1, false);
 
 	Damage dmg(SkillDmg(ESkill::kCharge), dam, fight::kPhysDmg, nullptr);
 
-	ActionTargeting::FoesRosterType roster{ch};
+	target_resolver::FoesRosterType roster{ch};
 	for (const auto target: roster) {
-		if (target->IsFlagged(EMobFlag::kProtect) || !may_kill_here(ch,target, arg) ||target == ch || !CAN_SEE(ch,target)) {
+//		if (target->purged() || target->in_room == kNowhere)
+//			continue;
+		// Натиск бьёт по площади: имени жертвы игрок не вводит, поэтому проверка чармисов
+		// "введите имя жертвы полностью" тут неприменима -- в неё уходил глобальный arg, то есть
+		// направление натиска, и чармис игрока просто всегда выпадал из целей (#3807). Оставляем
+		// это в силе, но прямо: без ложного сообщения игроку.
+		const bool is_player_charmice = IsCharmice(target)
+			&& target->has_master() && !target->get_master()->IsNpc();
+		if (target->IsFlagged(EMobFlag::kProtect) || is_player_charmice || target == ch
+			|| !sight::CanSee(ch, target)) {
 			--victims_amount;
 		} else {
-			if (IsAffectedBySpellWithCasterId(ch, target, ESpell::kNoCharge)) {
+			if (IsAffectedWithCasterId(ch, target, EAffect::kNoCharge)) {
 				act("$N0 уже на страже - вы не сможете повторно испугать $S своим натиском!",
 					false, ch, nullptr,target, kToChar);
 				dmg.dam = 0;
@@ -124,7 +138,7 @@ void GoCharge(CharData *ch, int direction) {
 					dmg.dam = 0;
 					dmg.Process(target, ch);
 				} else {
-					if (ch->GetSkill(ESkill::kShieldBash) && ch->GetSkill(ESkill::kBash) && (GET_EQ(ch, kShield)) && !is_awake) {
+					if (GetSkill(ch, ESkill::kShieldBash) && GetSkill(ch, ESkill::kBash) && (GET_EQ(ch, kShield)) && !is_awake) {
 						go_bash(ch,target);
 					} else {
 						act("Хорошенько разогнавшись Вы прописали $N2 роскошного тумака!",
@@ -144,5 +158,5 @@ void GoCharge(CharData *ch, int direction) {
 			break;
 		}
 	}
-	mob_ai::do_aggressive_room(ch,1);
+	mob_ai::do_aggressive_room(ch, true);
 }

@@ -1,4 +1,8 @@
 #include "bash.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/mount.h"
+
+#include "skill_messages.h"
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/common.h"
 #include "protect.h"
@@ -12,52 +16,53 @@
 
 // ************************* BASH PROCEDURES
 void do_bash(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (!ch->GetSkill(ESkill::kBash)) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (!GetSkill(ch, ESkill::kBash)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 
-	CharData *vict = FindVictim(ch, argument);
+	std::string target_name;
+	CharData *vict = FindVictim(ch, argument, target_name);
 	if (!vict) {
-		SendMsgToChar("Кого же вы так сильно желаете сбить?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 
 	if (!may_kill_here(ch, vict, argument))
 		return;
-	if (!check_pkill(ch, vict, arg))
+	if (!check_pkill(ch, vict, target_name))
 		return;
 	
 	do_bash(ch, vict);
 }
 
 void do_bash(CharData *ch, CharData *vict) {
-	if (!ch->GetSkill(ESkill::kBash)) {
+	if (!GetSkill(ch, ESkill::kBash)) {
 		log("ERROR: вызов баша для персонажа %s (%d) без проверки умения", ch->get_name().c_str(), GET_MOB_VNUM(ch));
 		return;
 	}
 
-	if (ch->HasCooldown(ESkill::kBash)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kBash)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	}
 
-	if (ch->HasCooldown(ESkill::kGlobalCooldown)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kGlobalCooldown)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	}
 
-	if (ch->IsOnHorse()) {
-		SendMsgToChar("Верхом это сделать затруднительно.\r\n", ch);
+	if (mount::IsOnHorse(ch)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kCantWhileMounted) + "\r\n", ch);
 		return;
 	}
 
 	if (vict == ch) {
-		SendMsgToChar("Ваш сокрушающий удар поверг вас наземь... Вы почувствовали себя глупо.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 
-	if (IS_IMPL(ch) || !ch->GetEnemy()) {
+	if (privilege::IsImpl(ch) || !ch->GetEnemy()) {
 		go_bash(ch, vict);
 	} else if (IsHaveNoExtraAttack(ch)) {
 		if (!ch->IsNpc())
@@ -74,44 +79,48 @@ void go_bash(CharData *ch, CharData *vict) {
 		return;
 	}
 	if (IsUnableToAct(ch) || AFF_FLAGGED(ch, EAffect::kStopLeft)) {
-		SendMsgToChar("Вы временно не в состоянии сражаться.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kCantFightNow) + "\r\n", ch);
 		return;
 	}
-	if (ch->HasCooldown(ESkill::kBash)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kBash)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	}
 
-	if (ch->HasCooldown(ESkill::kGlobalCooldown)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kGlobalCooldown)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	}
-	if (!(ch->IsNpc() || GET_EQ(ch, kShield) || IS_IMMORTAL(ch) || AFF_FLAGGED(vict, EAffect::kHold)
+	if (!(ch->IsNpc() || GET_EQ(ch, kShield) || privilege::IsImmortal(ch) || AFF_FLAGGED(vict, EAffect::kHold)
 		|| GET_GOD_FLAG(vict, EGf::kGodscurse))) {
 		SendMsgToChar("Вы не можете сделать этого без щита.\r\n", ch);
+      SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kWrongWeapon) + "\r\n", ch);
 		return;
 	}
 	if (ch->IsFlagged(EPrf::kIronWind)) {
 		SendMsgToChar("Вы не можете применять этот прием в таком состоянии!\r\n", ch);
 		return;
 	}
-	if (ch->IsHorsePrevents()) {
-		SendMsgToChar("Верхом это сделать затруднительно.\r\n", ch);
+	if (mount::IsBlockedByHorse(ch)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kCantWhileMounted) + "\r\n", ch);
 		return;
 	}
 	if (ch == vict) {
-		SendMsgToChar("Ваш сокрушающий удар поверг вас наземь... Вы почувствовали себя глупо.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 	if (ch->GetPosition() < EPosition::kFight) {
-		SendMsgToChar("Вам стоит встать на ноги.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kBash, ESkillMsg::kGetOnFeet) + "\r\n", ch);
 		return;
 	}
-
+//	if (vict->purged()) {
+//		return;
+//	}
 	int lag;
-	int damage = number(ch->GetSkill(ESkill::kBash) / 1.25, ch->GetSkill(ESkill::kBash) * 1.25);
+
+	int damage = number(GetSkill(ch, ESkill::kBash) / 1.25, GetSkill(ch, ESkill::kBash) * 1.25);
 	bool can_shield_bash = false;
-	if (ch->GetSkill(ESkill::kShieldBash) && GET_EQ(ch, kShield) && !ch->IsFlagged(kAwake)) {
+	if (GetSkill(ch, ESkill::kShieldBash) && GET_EQ(ch, kShield) && !ch->IsFlagged(kAwake)) {
 		can_shield_bash = true;
 	}
 	SkillRollResult result_shield_bash = MakeSkillTest(ch, ESkill::kShieldBash, vict);
@@ -122,15 +131,14 @@ void go_bash(CharData *ch, CharData *vict) {
 		if (shield_bash_success) {
 			//Описание аффекта "ошарашен" для умения "удар щитом":
 			Affect<EApply> af;
-			af.type = ESpell::kConfuse;
 			af.duration = 2;
-			af.battleflag = kAfSameTime;
-			af.bitvector = to_underlying(EAffect::kConfused);
+			af.battleflag = {kAfSameTime};
+			af.affect_type = EAffect::kConfused;
 			if (!vict->IsNpc()) {
 				af.duration *= 30;
 			}
 			affect_to_char(vict, af);
-			const auto shield_bash = ch->GetSkill(ESkill::kShieldBash);
+			const auto shield_bash = GetSkill(ch, ESkill::kShieldBash);
 			const auto char_size = GET_REAL_SIZE(ch);
 			const auto shield_weight = GET_EQ(ch, EEquipPos::kShield)->get_weight();
 			const auto skill_base = (char_size * shield_weight * 1.5) / 5 + shield_bash * 3 + shield_bash * 2;
@@ -157,13 +165,13 @@ void go_bash(CharData *ch, CharData *vict) {
 // Если баш - фейл. Немного нахуевертил. Смысл в том, чтобы оставаться на ногах даже при фейле баша и удара щитом, если удар щитом прокачан 200+.
 	if (!success) {
 		bool still_stands = true;
-		if (number(1, 100) > (ch->GetSkill(ESkill::kShieldBash) / 2)) {
+		if (number(1, 100) > (GetSkill(ch, ESkill::kShieldBash) / 2)) {
 			still_stands = false;
 		}
 //Полный фейл, падаем на жопу:
 		if (!can_shield_bash || (!shield_bash_success && !still_stands)) {
-			SetFighting(ch, vict);
-			SetFighting(vict, ch);
+			if (!ch->GetEnemy()) SetFighting(ch, vict);
+			if (!vict->GetEnemy()) SetFighting(vict, ch);
 			ch->SetPosition(EPosition::kSit);
 			SetWait(ch, 2, true);
 			act("&WВы попытались сбить $N3, но упали сами. Учитесь.&n",
@@ -180,7 +188,7 @@ void go_bash(CharData *ch, CharData *vict) {
 			SetSkillCooldownInFight(ch, ESkill::kBash, 1);
 //Фейл баша, фейл удара щитом, но удержались на ногах:
 		} else if (can_shield_bash && !shield_bash_success && still_stands) {
-			SetFighting(ch, vict);
+			if (!ch->GetEnemy()) SetFighting(ch, vict);
 			SetSkillCooldownInFight(ch, ESkill::kBash, 1);
 			act("&WНеуклюже попытавшись ударить $N3 щитом, Вы сами еле удержались на ногах!&n",
 				false, ch, nullptr, vict, kToChar);
@@ -196,15 +204,15 @@ void go_bash(CharData *ch, CharData *vict) {
 			|| (CanUseFeat(vict, EFeat::kDefender)
 				&& GET_EQ(vict, kShield)
 				&& vict->IsFlagged(EPrf::kAwake)
-				&& vict->GetSkill(ESkill::kAwake)
-				&& vict->GetSkill(ESkill::kShieldBlock)
+				&& GetSkill(vict, ESkill::kAwake)
+				&& GetSkill(vict, ESkill::kShieldBlock)
 				&& vict->GetPosition() > EPosition::kSit))
 			&& !AFF_FLAGGED(vict, EAffect::kStopFight)
 			&& !AFF_FLAGGED(vict, EAffect::kMagicStopFight)
 			&& !AFF_FLAGGED(vict, EAffect::kStopLeft)
 			&& vict->get_wait() <= 0
 			&& AFF_FLAGGED(vict, EAffect::kHold) == 0) {
-			if (!(GET_EQ(vict, kShield) || vict->IsNpc() || IS_IMMORTAL(vict) || GET_GOD_FLAG(vict, EGf::kGodsLike)))
+			if (!(GET_EQ(vict, kShield) || vict->IsNpc() || privilege::IsImmortal(vict) || GET_GOD_FLAG(vict, EGf::kGodsLike)))
 				SendMsgToChar("У вас нечем отразить атаку противника.\r\n", vict);
 			else {
 				int range, prob2;
@@ -241,10 +249,10 @@ void go_bash(CharData *ch, CharData *vict) {
 		dmg.flags.set(fight::kIgnoreBlink);
 		damage = dmg.Process(ch, vict);
 		// Сам баш:
-		if (!IS_IMPL(vict)) {
+		if (!privilege::IsImpl(vict)) {
 			if (vict->GetPosition() > EPosition::kSit) {
 				vict->SetPosition(EPosition::kSit);
-				vict->DropFromHorse();
+				mount::DropFromHorse(vict);
 			}
 			SetWait(vict, 3, true);
 		}
@@ -264,7 +272,7 @@ void go_bash(CharData *ch, CharData *vict) {
 
 	//разные типы лагов в зависимости от того, есть ли "удар щитом", а так же при фейле/успехе и т.д.
 	switch (lag) {
-		case 0: SetWait(ch, 0, true);
+		case 0: ch->zero_wait();
 			break;
 		case 1: SetSkillCooldownInFight(ch, ESkill::kBash, 1);
 			break;

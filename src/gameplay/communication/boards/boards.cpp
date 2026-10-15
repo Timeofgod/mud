@@ -3,6 +3,7 @@
 
 //#include "boards.h"
 
+#include "engine/core/target_resolver.h"
 #include "boards_changelog_loaders.h"
 #include "boards_constants.h"
 #include "boards_formatters.h"
@@ -13,10 +14,17 @@
 #include "engine/ui/modify.h"
 #include "engine/entities/zone.h"
 #include "engine/core/utils_char_obj.inl"
+#include "gameplay/ai/special_messages.h"
+#include "gameplay/core/remort.h"
 
-#include "third_party_libs/fmt/include/fmt/format.h"
+#include <fmt/format.h>
 
 namespace Boards {
+// issue.specials Phase 2: board player text lives in cfg/messages/ru/board_msg.xml. BoardMsg() returns
+// the raw line; callers add the trailing "\r\n" and fill named fmt args via fmt::format(fmt::runtime).
+using specials::BoardMsg;
+using EBM = specials::EBoardMsg;
+
 // общий список досок
 using boards_list_t = std::deque<Board::shared_ptr>;
 boards_list_t board_list;
@@ -30,7 +38,7 @@ void set_last_read(CharData *ch, BoardTypes type, time_t date) {
 }
 
 bool lvl_no_write(CharData *ch) {
-	if (GetRealLevel(ch) < MIN_WRITE_LEVEL && GetRealRemort(ch) <= 0) {
+	if (GetRealLevel(ch) < MIN_WRITE_LEVEL && remort::GetRealRemort(ch) <= 0) {
 		return true;
 	}
 	return false;
@@ -38,24 +46,22 @@ bool lvl_no_write(CharData *ch) {
 
 void message_no_write(CharData *ch) {
 	if (lvl_no_write(ch)) {
-		SendMsgToChar(ch,
-					  "Вам нужно достигнуть %d уровня, чтобы писать в этот раздел.\r\n",
-					  MIN_WRITE_LEVEL);
+		SendMsgToChar(fmt::format(fmt::runtime(BoardMsg(EBM::kNoWriteLevel)),
+				fmt::arg("level", MIN_WRITE_LEVEL)) + "\r\n", ch);
 	} else {
-		SendMsgToChar("У вас нет возможности писать в этот раздел.\r\n", ch);
+		SendMsgToChar(BoardMsg(EBM::kNoWriteAccess) + "\r\n", ch);
 	}
 }
 
 void message_no_read(CharData *ch, const Board &board) {
-	std::string out("У вас нет возможности читать этот раздел.\r\n");
+	std::string out = BoardMsg(EBM::kNoReadAccess) + "\r\n";
 	if (board.is_special()) {
 		std::string name = board.get_name();
 		utils::ConvertToLow(name);
-		out += "Для сообщения в формате обычной работы с доской используйте: " + name + " писать <заголовок>.\r\n";
+		out += fmt::format(fmt::runtime(BoardMsg(EBM::kSpecialUsage)), fmt::arg("board", name)) + "\r\n";
 		if (!board.get_alias().empty()) {
-			out += "Команда для быстрого добавления сообщения: "
-				+ board.get_alias()
-				+ " <текст сообщения в одну строку>.\r\n";
+			out += fmt::format(fmt::runtime(BoardMsg(EBM::kSpecialAlias)),
+					fmt::arg("alias", board.get_alias())) + "\r\n";
 		}
 	}
 	SendMsgToChar(out, ch);
@@ -119,10 +125,10 @@ void changelog_message() {
 }
 
 bool is_spamer(CharData *ch, const Board &board) {
-	if (IS_IMMORTAL(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
+	if (privilege::IsImmortal(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
 		return false;
 	}
-	if (board.get_lastwrite() != GET_UID(ch)) {
+	if (board.get_lastwrite() != ch->get_uid()) {
 		return false;
 	}
 	switch (board.get_type()) {
@@ -145,7 +151,7 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	}
 
 	if (AFF_FLAGGED(ch, EAffect::kBlind)) {
-		SendMsgToChar("Вы ослеплены!\r\n", ch);
+		SendMsgToChar(BoardMsg(EBM::kBlind) + "\r\n", ch);
 		return;
 	}
 
@@ -159,7 +165,7 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	}
 
 	if (!board_ptr) {
-		SendMsgToChar("Чаво?\r\n", ch);
+		SendMsgToChar(BoardMsg(EBM::kNoBoard) + "\r\n", ch);
 		return;
 	}
 	const Board &board = *board_ptr;
@@ -212,7 +218,7 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		set_last_read(ch, board.get_type(), last_date);
 		page_string(ch->desc, body.str());
 		if (last_date == date) {
-			SendMsgToChar("У вас нет непрочитанных сообщений.\r\n", ch);
+			SendMsgToChar(BoardMsg(EBM::kNoUnread) + "\r\n", ch);
 		}
 	} else if (is_number(buffer.c_str())
 		|| ((CompareParam(buffer, "читать") || CompareParam(buffer, "read"))
@@ -232,12 +238,15 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 
 		if (num <= 0
 			|| num > board.messages.size()) {
-			SendMsgToChar("Это сообщение может вам только присниться.\r\n", ch);
+			SendMsgToChar(BoardMsg(EBM::kNoSuchMessage) + "\r\n", ch);
 			return;
 		}
 		std::ostringstream out;
 		const auto messages_index = num - 1;
-		special_message_format(out, board.get_message(messages_index));
+		// ширина экрана читателя для переноса тела сообщения (0 -- лимит не задан)
+		const size_t width = (!ch->IsNpc() && ch->player_specials->saved.stringLength > 0)
+				? ch->player_specials->saved.stringLength : 0;
+		special_message_format(out, board.get_message(messages_index), width);
 		page_string(ch->desc, out.str());
 		set_last_read(ch, board.get_type(), board.messages[messages_index]->date);
 	} else if (CompareParam(buffer, "писать")
@@ -247,19 +256,19 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			return;
 		}
 		if (is_spamer(ch, board)) {
-			SendMsgToChar("Да вы ведь только что писали сюда.\r\n", ch);
+			SendMsgToChar(BoardMsg(EBM::kSpammer) + "\r\n", ch);
 			return;
 		}
 
 		if (subcmd == Boards::CLAN_BOARD) {
 			if (!CLAN(ch)->check_write_board(ch)) {
-				SendMsgToChar("Вам запретили сюда писать!\r\n", ch);
+				SendMsgToChar(BoardMsg(EBM::kClanWriteBan) + "\r\n", ch);
 				return;
 			}
 		}
 
 		if (board.is_special() && board.messages.size() >= MAX_REPORT_MESSAGES) {
-			SendMsgToChar(constants::OVERFLOW_MESSAGE, ch);
+			SendMsgToChar(BoardMsg(EBM::kOverflow) + "\r\n", ch);
 			return;
 		}
 		/// написание новостей от другого имени
@@ -269,7 +278,7 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 				|| board.get_type() == NOTICE_BOARD)) {
 			GetOneParam(buffer2, buffer);
 			if (buffer.empty()) {
-				SendMsgToChar("Впишите хотя бы имя, от кого будет опубликовано сообщение.\r\n", ch);
+				SendMsgToChar(BoardMsg(EBM::kNeedAuthorName) + "\r\n", ch);
 				return;
 			}
 			name = buffer;
@@ -277,7 +286,7 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		/// генерим мессагу
 		const auto tempMessage = std::make_shared<Message>();
 		tempMessage->author = name;
-		tempMessage->unique = GET_UID(ch);
+		tempMessage->unique = ch->get_uid();
 		// для досок кроме клановых и персональных пишем левел автора (для возможной очистки кем-то)
 		ch->IsFlagged(EPrf::kCoderinfo) ? tempMessage->level = kLvlImplementator : tempMessage->level = GetRealLevel(ch);
 
@@ -292,7 +301,8 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		utils::Trim(buffer2);
 		if (buffer2.length() > 40) {
 			buffer2.erase(40, std::string::npos);
-			SendMsgToChar(ch, "Тема сообщения укорочена до '%s'.\r\n", buffer2.c_str());
+			SendMsgToChar(fmt::format(fmt::runtime(BoardMsg(EBM::kSubjectTruncated)),
+					fmt::arg("subject", buffer2)) + "\r\n", ch);
 		}
 		// для ошибок опечаток впереди пишем комнату, где стоит отправитель
 		std::string subj;
@@ -309,26 +319,27 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		// дату номер и текст пишем уже по факту сохранения
 		ch->desc->message = tempMessage;
 		ch->desc->board = board_ptr;
-		SendMsgToChar(ch, "Вы пишете сообщение на доску объявлений: '%s'. (/s записать /h помощь)\r\n", board.get_name().c_str());
+		SendMsgToChar(fmt::format(fmt::runtime(BoardMsg(EBM::kWritingPrompt)),
+				fmt::arg("board", board.get_name())) + "\r\n", ch);
 		ch->desc->state = EConState::kWriteboard;
 		utils::AbstractStringWriter::shared_ptr writer(new utils::StdStringWriter());
 		string_write(ch->desc, writer, MAX_MESSAGE_LENGTH, 0, nullptr);
 	} else if (CompareParam(buffer, "очистить") || CompareParam(buffer, "remove")) {
 		if (!is_number(buffer2.c_str())) {
-			SendMsgToChar("Укажите корректный номер сообщения.\r\n", ch);
+			SendMsgToChar(BoardMsg(EBM::kRemoveNeedNumber) + "\r\n", ch);
 			return;
 		}
 		const size_t message_number = atoi(buffer2.c_str());
 		const auto messages_index = message_number - 1;
 		if (messages_index >= board.messages.size()) {
-			SendMsgToChar("Это сообщение может вам только присниться.\r\n", ch);
+			SendMsgToChar(BoardMsg(EBM::kNoSuchMessage) + "\r\n", ch);
 			return;
 		}
 		set_last_read(ch, board.get_type(), board.messages[messages_index]->date);
 		// или он может делетить любые мессаги (по левелу/рангу), или только свои
 		if (!Static::full_access(ch, board_ptr)) {
-			if (board.messages[messages_index]->unique != GET_UID(ch)) {
-				SendMsgToChar("У вас нет возможности удалить это сообщение.\r\n", ch);
+			if (board.messages[messages_index]->unique != ch->get_uid()) {
+				SendMsgToChar(BoardMsg(EBM::kRemoveNoAccess) + "\r\n", ch);
 				return;
 			}
 		} else if (board.get_type() != CLAN_BOARD
@@ -338,25 +349,25 @@ void DoBoard(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			&& GetRealLevel(ch) < board.messages[messages_index]->level) {
 			// для простых досок сверяем левела (для контроля иммов)
 			// клановые ниже, у персональных смысла нет
-			SendMsgToChar("У вас нет возможности удалить это сообщение.\r\n", ch);
+			SendMsgToChar(BoardMsg(EBM::kRemoveNoAccess) + "\r\n", ch);
 			return;
 		} else if (board.get_type() == CLAN_BOARD
 			|| board.get_type() == CLANNEWS_BOARD) {
 			// у кого привилегия на новости, те могут удалять везде чужие, если ранк автора такой же или ниже
 			if (CLAN_MEMBER(ch)->rank_num > board.messages[messages_index]->rank) {
-				SendMsgToChar("У вас нет возможности удалить это сообщение.\r\n", ch);
+				SendMsgToChar(BoardMsg(EBM::kRemoveNoAccess) + "\r\n", ch);
 				return;
 			}
 		}
 		// собственно делетим и проставляем сдвиг номеров
 		board_ptr->erase_message(messages_index);
-		if (board.get_lastwrite() == GET_UID(ch)) {
+		if (board.get_lastwrite() == ch->get_uid()) {
 			board_ptr->set_lastwrite_uid(0);
 		}
 		board_ptr->Save();
-		SendMsgToChar("Сообщение удалено.\r\n", ch);
+		SendMsgToChar(BoardMsg(EBM::kRemoved) + "\r\n", ch);
 	} else {
-		SendMsgToChar("Неверный формат команды, ознакомьтесь со 'справка доски'.\r\n", ch);
+		SendMsgToChar(BoardMsg(EBM::kBadCommand) + "\r\n", ch);
 	}
 }
 
@@ -443,9 +454,8 @@ int Static::Special(CharData *ch, void *me, int cmd, char *argument) {
 					return 0;
 				}
 				if (isname(buffer2, (*i)->get_name())) {
-					SendMsgToChar(ch,
-								  "Первое слово вашего заголовка совпадает с названием одной из досок сообщений,\r\n"
-								  "Во избежание недоразумений воспользуйтесь форматом '<имя-доски> писать <заголовок>'.\r\n");
+					SendMsgToChar(BoardMsg(EBM::kNameCollision1) + "\r\n"
+								  + BoardMsg(EBM::kNameCollision2) + "\r\n", ch);
 					return 1;
 				}
 			}
@@ -469,7 +479,7 @@ int Static::Special(CharData *ch, void *me, int cmd, char *argument) {
 bool Static::LoginInfo(CharData *ch) {
 	std::ostringstream buffer, news;
 	bool has_message = 0;
-	buffer << "\r\nВас ожидают сообщения:\r\n";
+	buffer << "\r\n" << BoardMsg(EBM::kLoginHeader) << "\r\n";
 
 	for (auto board = board_list.begin(); board != board_list.end(); ++board) {
 		// доска не видна или можно только писать, опечатки тож не спамим
@@ -485,11 +495,15 @@ bool Static::LoginInfo(CharData *ch) {
 			if ((*board)->get_type() == NEWS_BOARD
 				|| (*board)->get_type() == GODNEWS_BOARD
 				|| (*board)->get_type() == CLANNEWS_BOARD) {
-				news << std::setw(4) << unread << " в разделе '" << (*board)->get_description() << "' "
-					 << kColorWht << "(" << (*board)->get_name() << ")" << kColorNrm << ".\r\n";
+				news << fmt::format(fmt::runtime(BoardMsg(EBM::kLoginRow)),
+						fmt::arg("count", unread), fmt::arg("desc", (*board)->get_description()),
+						fmt::arg("color", kColorWht), fmt::arg("name", (*board)->get_name()),
+						fmt::arg("nocolor", kColorNrm)) << "\r\n";
 			} else {
-				buffer << std::setw(4) << unread << " в разделе '" << (*board)->get_description() << "' "
-					   << kColorWht << "(" << (*board)->get_name() << ")" << kColorNrm << ".\r\n";
+				buffer << fmt::format(fmt::runtime(BoardMsg(EBM::kLoginRow)),
+						fmt::arg("count", unread), fmt::arg("desc", (*board)->get_description()),
+						fmt::arg("color", kColorWht), fmt::arg("name", (*board)->get_name()),
+						fmt::arg("nocolor", kColorNrm)) << "\r\n";
 			}
 		}
 	}
@@ -542,14 +556,15 @@ void Static::do_list(CharData *ch, const Board::shared_ptr board_ptr) {
 	}
 
 	std::ostringstream body;
-	body << "Это доска, на которой всякие разные личности оставили свои IMHO.\r\n"
-		 << "Формат: ЧИТАТЬ/ОЧИСТИТЬ <номер сообщения>, ПИСАТЬ <тема сообщения>.\r\n";
+	body << BoardMsg(EBM::kListIntro1) << "\r\n"
+		 << BoardMsg(EBM::kListIntro2) << "\r\n";
 	if (board_ptr->empty()) {
-		body << "Никто ниче не накарябал, слава Богам.\r\n";
+		body << BoardMsg(EBM::kListEmpty) << "\r\n";
 		SendMsgToChar(body.str(), ch);
 		return;
 	} else {
-		body << "Всего сообщений: " << board_ptr->messages_count() << "\r\n";
+		body << fmt::format(fmt::runtime(BoardMsg(EBM::kListTotal)),
+				fmt::arg("count", board_ptr->messages_count())) << "\r\n";
 	}
 
 	const auto date = ch->get_board_date(board_ptr->get_type());
@@ -590,10 +605,10 @@ void Static::new_message_notify(const Board::shared_ptr board) {
 		&& !board->empty()) {
 		const Message &msg = *board->get_last_message();
 		char buf_[kMaxInputLength];
-		snprintf(buf_, sizeof(buf_),
-				 "Новое сообщение в разделе '%s' от %s, тема: %s\r\n",
-				 board->get_name().c_str(), msg.author.c_str(),
-				 msg.subject.c_str());
+		snprintf(buf_, sizeof(buf_), "%s\r\n",
+				 fmt::format(fmt::runtime(BoardMsg(EBM::kNewMessage)),
+						 fmt::arg("board", board->get_name()), fmt::arg("author", msg.author),
+						 fmt::arg("subject", msg.subject)).c_str());
 		// оповещаем весь мад кто с правами чтения
 		for (DescriptorData *f = descriptor_list; f; f = f->next) {
 			if (f->character
@@ -612,17 +627,17 @@ void Static::new_message_notify(const Board::shared_ptr board) {
 void Static::BoardInit() {
 	board_list.clear();
 
-	create_board(GENERAL_BOARD, "Вече", "Базарная площадь", ETC_BOARD"general.board");
-	create_board(NEWS_BOARD, "Новости", "Анонсы и новости Былин", ETC_BOARD"news.board");
-	create_board(IDEA_BOARD, "Идеи", "Идеи и их обсуждение", ETC_BOARD"idea.board");
-	create_board(ERROR_BOARD, "Баги", "Сообщения об ошибках в мире", ETC_BOARD"error.board");
-	create_board(GODNEWS_BOARD, "GodNews", "Божественные новости", ETC_BOARD"god-news.board");
-	create_board(GODGENERAL_BOARD, "Божества", "Божественная базарная площадь", ETC_BOARD"god-general.board");
-	create_board(GODBUILD_BOARD, "Билдер", "Заметки билдеров", ETC_BOARD"god-build.board");
-	create_board(GODPUNISH_BOARD, "Наказания", "Комментарии к наказаниям", ETC_BOARD"god-punish.board");
-	create_board(NOTICE_BOARD, "Анонсы", "Сообщения от администрации", ETC_BOARD"notice.board");
-	create_board(MISPRINT_BOARD, "Очепятки", "Опечатки в игровых локациях", ETC_BOARD"misprint.board");
-	create_board(SUGGEST_BOARD, "Придумки", "Для идей в приватном режиме", ETC_BOARD"suggest.board");
+	create_board(GENERAL_BOARD, "Вече", "Базарная площадь", BOARDS_DIR"general.board");
+	create_board(NEWS_BOARD, "Новости", "Анонсы и новости Былин", BOARDS_DIR"news.board");
+	create_board(IDEA_BOARD, "Идеи", "Идеи и их обсуждение", BOARDS_DIR"idea.board");
+	create_board(ERROR_BOARD, "Баги", "Сообщения об ошибках в мире", BOARDS_DIR"error.board");
+	create_board(GODNEWS_BOARD, "GodNews", "Божественные новости", BOARDS_DIR"god-news.board");
+	create_board(GODGENERAL_BOARD, "Божества", "Божественная базарная площадь", BOARDS_DIR"god-general.board");
+	create_board(GODBUILD_BOARD, "Билдер", "Заметки билдеров", BOARDS_DIR"god-build.board");
+	create_board(GODPUNISH_BOARD, "Наказания", "Комментарии к наказаниям", BOARDS_DIR"god-punish.board");
+	create_board(NOTICE_BOARD, "Анонсы", "Сообщения от администрации", BOARDS_DIR"notice.board");
+	create_board(MISPRINT_BOARD, "Очепятки", "Опечатки в игровых локациях", BOARDS_DIR"misprint.board");
+	create_board(SUGGEST_BOARD, "Придумки", "Для идей в приватном режиме", BOARDS_DIR"suggest.board");
 	create_board(CODER_BOARD, "Кодер", "Изменения в коде Былин", "");
 
 	dg_script_message();
@@ -652,7 +667,7 @@ void Static::ClanInit() {
 			description += clan->GetAbbrev();
 			board->set_description(description);
 			board->set_clan_rent(clan->GetRent());
-			board->set_file_name(LIB_HOUSE + name + "/" + name + ".board");
+			board->set_file_name(LIB_CLANS + name + "/" + name + ".board");
 			board->Load();
 			board_list.push_back(board);
 		}
@@ -665,7 +680,7 @@ void Static::ClanInit() {
 			description += clan->GetAbbrev();
 			board->set_description(description);
 			board->set_clan_rent(clan->GetRent());
-			board->set_file_name(LIB_HOUSE + name + "/" + name + "-news.board");
+			board->set_file_name(LIB_CLANS + name + "/" + name + "-news.board");
 			board->Load();
 			board_list.push_back(board);
 		}
@@ -690,7 +705,7 @@ void Static::init_god_board(long uid, std::string name) {
 	// генерим имя и лоадим по возможности
 	std::string tmp_name = name;
 	CreateFileName(tmp_name);
-	board->set_file_name(ETC_BOARD + tmp_name + ".board");
+	board->set_file_name(BOARDS_DIR + tmp_name + ".board");
 	board->Load();
 	board_list.push_back(board);
 }
@@ -709,7 +724,7 @@ std::string Static::print_stats(CharData *ch, const Board::shared_ptr board, int
 	}
 
 	std::string out;
-	if (IS_IMMORTAL(ch)
+	if (privilege::IsImmortal(ch)
 		|| ch->IsFlagged(EPrf::kCoderinfo)
 		|| !board->get_blind()) {
 		const int unread = board->count_unread(ch->get_board_date(board->get_type()));
@@ -734,7 +749,7 @@ std::bitset<ACCESS_NUM> Static::get_access(CharData *ch, const Board::shared_ptr
 		case GENERAL_BOARD:
 		case IDEA_BOARD:
 			// все читают, пишут с мин.левела, 32 и по привилегии полный
-			if (IS_GOD(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
+			if (privilege::IsGod(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
 				access.set();
 			} else {
 				access.set(ACCESS_CAN_SEE);
@@ -745,19 +760,19 @@ std::bitset<ACCESS_NUM> Static::get_access(CharData *ch, const Board::shared_ptr
 		case ERROR_BOARD:
 		case MISPRINT_BOARD:
 			// все пишут с мин.левела, 34 и по привилегии полный
-			if (IS_IMPL(ch)
+			if (privilege::IsImpl(ch)
 				|| privilege::CheckFlag(ch, privilege::kBoards)
 				|| privilege::CheckFlag(ch, privilege::kMisprint)) {
 				access.set();
 			} else {
 				access.set(ACCESS_CAN_SEE);
 				access.set(ACCESS_CAN_WRITE);
-				if (IS_GOD(ch)) access.set(ACCESS_CAN_READ);
+				if (privilege::IsGod(ch)) access.set(ACCESS_CAN_READ);
 			}
 			break;
 		case NEWS_BOARD:
 			// все читают, 34 и по привилегии полный
-			if (IS_IMPL(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
+			if (privilege::IsImpl(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
 				access.set();
 			} else {
 				access.set(ACCESS_CAN_SEE);
@@ -766,9 +781,9 @@ std::bitset<ACCESS_NUM> Static::get_access(CharData *ch, const Board::shared_ptr
 			break;
 		case GODNEWS_BOARD:
 			// 32 читают, 34 и по привилегии полный
-			if (IS_IMPL(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
+			if (privilege::IsImpl(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
 				access.set();
-			} else if (IS_GOD(ch)) {
+			} else if (privilege::IsGod(ch)) {
 				access.set(ACCESS_CAN_SEE);
 				access.set(ACCESS_CAN_READ);
 			}
@@ -776,9 +791,9 @@ std::bitset<ACCESS_NUM> Static::get_access(CharData *ch, const Board::shared_ptr
 		case GODGENERAL_BOARD:
 		case GODPUNISH_BOARD:
 			// 32 читают/пишут, 34 полный
-			if (IS_IMPL(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
+			if (privilege::IsImpl(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
 				access.set();
-			} else if (IS_GOD(ch)) {
+			} else if (privilege::IsGod(ch)) {
 				access.set(ACCESS_CAN_SEE);
 				access.set(ACCESS_CAN_READ);
 				access.set(ACCESS_CAN_WRITE);
@@ -787,16 +802,16 @@ std::bitset<ACCESS_NUM> Static::get_access(CharData *ch, const Board::shared_ptr
 		case GODBUILD_BOARD:
 		case GODCODE_BOARD:
 			// 33 читают/пишут, 34 и по привилегии полный
-			if (IS_IMPL(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
+			if (privilege::IsImpl(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
 				access.set();
-			} else if (IS_GRGOD(ch)) {
+			} else if (privilege::IsGrGod(ch)) {
 				access.set(ACCESS_CAN_SEE);
 				access.set(ACCESS_CAN_READ);
 				access.set(ACCESS_CAN_WRITE);
 			}
 			break;
 		case PERS_BOARD:
-			if (IS_GOD(ch) && board->get_pers_uniq() == GET_UID(ch)
+			if (privilege::IsGod(ch) && board->get_pers_uniq() == ch->get_uid()
 				&& CompareParam(board->get_pers_name(), GET_NAME(ch), 1)) {
 				access.set();
 			}
@@ -827,9 +842,9 @@ std::bitset<ACCESS_NUM> Static::get_access(CharData *ch, const Board::shared_ptr
 			break;
 		case NOTICE_BOARD:
 			// 34+ и по привилегии полный, 32+ пишут/читают, остальные только читают
-			if (IS_IMPL(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
+			if (privilege::IsImpl(ch) || privilege::CheckFlag(ch, privilege::kBoards)) {
 				access.set();
-			} else if (IS_GOD(ch)) {
+			} else if (privilege::IsGod(ch)) {
 				access.set(ACCESS_CAN_SEE);
 				access.set(ACCESS_CAN_READ);
 				access.set(ACCESS_CAN_WRITE);
@@ -840,7 +855,7 @@ std::bitset<ACCESS_NUM> Static::get_access(CharData *ch, const Board::shared_ptr
 			break;
 		case SUGGEST_BOARD:
 			// по привилегии boards/suggest и 34 полный, остальным только запись с мин левела/морта
-			if (IS_IMPL(ch)
+			if (privilege::IsImpl(ch)
 				|| privilege::CheckFlag(ch, privilege::kBoards)
 				|| privilege::CheckFlag(ch, privilege::kSuggest)) {
 				access.set();
@@ -857,7 +872,7 @@ std::bitset<ACCESS_NUM> Static::get_access(CharData *ch, const Board::shared_ptr
 	}
 
 	// категории граждан, которые писать могут только на клан-доски
-	if (!IS_IMMORTAL(ch)
+	if (!privilege::IsImmortal(ch)
 		&& (ch->IsFlagged(EPlrFlag::kHelled)
 			|| ch->IsFlagged(EPlrFlag::kNameDenied)
 			|| ch->IsFlagged(EPlrFlag::kDumbed)
@@ -896,12 +911,14 @@ void DoBoardList(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/)
 }
 
 void report_on_board(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
+	RoomVnum rvn;
+
 	if (ch->IsNpc()) return;
 	skip_spaces(&argument);
 	delete_doubledollar(argument);
 
 	if (!*argument) {
-		SendMsgToChar("Пустое сообщение пропущено.\r\n", ch);
+		SendMsgToChar(BoardMsg(EBM::kReportEmpty) + "\r\n", ch);
 		return;
 	}
 
@@ -909,7 +926,7 @@ void report_on_board(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	auto board = std::find_if(board_list.begin(), board_list.end(), predicate);
 
 	if (board == board_list.end()) {
-		SendMsgToChar("Доска тупо не найдена... :/\r\n", ch);
+		SendMsgToChar(BoardMsg(EBM::kReportNoBoard) + "\r\n", ch);
 		return;
 	}
 	if (!Static::can_write(ch, *board)) {
@@ -918,28 +935,33 @@ void report_on_board(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	}
 	if ((*board)->is_special()
 		&& (*board)->messages.size() >= MAX_REPORT_MESSAGES) {
-		SendMsgToChar(constants::OVERFLOW_MESSAGE, ch);
+		SendMsgToChar(BoardMsg(EBM::kOverflow) + "\r\n", ch);
 		return;
 	}
 	// генерим мессагу (TODO: копипаст с написания на доску, надо бы вынести)
 	const auto temp_message = std::make_shared<Message>();
 	temp_message->author = GET_NAME(ch) ? GET_NAME(ch) : "неизвестен";
-	temp_message->unique = GET_UID(ch);
+	temp_message->unique = ch->get_uid();
 	// для досок кроме клановых и персональных пишет левел автора (для возможной очистки кем-то)
 	temp_message->level = GetRealLevel(ch);
 	temp_message->rank = 0;
-	temp_message->subject = fmt::format("[{}]", GET_ROOM_VNUM(ch->in_room));
+
+	if (zone_table[world[ch->in_room]->zone_rn].copy_from_zone > 0) {
+		rvn = zone_table[world[ch->in_room]->zone_rn].copy_from_zone * 100 + world[ch->in_room]->vnum % 100;
+	} else {
+		rvn =  world[ch->in_room]->vnum;
+	}
+	temp_message->subject = fmt::format("[{}]", rvn);
 	temp_message->text = argument;
 	temp_message->date = time(nullptr);
 
 	(*board)->write_message(temp_message);
 //	(*board)->renumerate_messages();
 //	(*board)->Save();
-	SendMsgToChar(ch,
-				  "Текст сообщения:\r\n"
-				  "%s\r\n\r\n"
-				  "Записали. Заранее благодарны.\r\n"
-				  "                        Боги.\r\n", argument);
+	SendMsgToChar(BoardMsg(EBM::kReportSaved1) + "\r\n"
+				  + argument + "\r\n\r\n"
+				  + BoardMsg(EBM::kReportSaved2) + "\r\n"
+				  + BoardMsg(EBM::kReportSaved3) + "\r\n", ch);
 }
 
 } // namespace Boards

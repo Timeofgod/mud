@@ -27,7 +27,13 @@
  * if it is a client or server problem.
  */
 
-#define __COMM_C__
+#include "engine/core/sysdep_net.h"
+#include "administration/privilege.h"
+#include "utils/grammar/gender.h"
+#include "gameplay/fight/arena.h"
+#include "utils/grammar/declensions.h"
+#include "gameplay/mechanics/magic_item.h"
+#include "utils/native_text.h"
 
 #include "comm.h"
 
@@ -37,10 +43,17 @@
 #include "engine/db/world_characters.h"
 #include "engine/entities/entities_constants.h"
 #include "administration/shutdown_parameters.h"
+#include "engine/observability/provider.h"
+#include "utils/timestamp.h"
 #include "external_trigger.h"
-#include "handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/mechanics/illumination.h"
 #include "gameplay/clans/house.h"
 #include "engine/olc/olc.h"
+#include "engine/scripting/lua/lua_formatter.h"
+#include "engine/olc/vedun/vedun.h"
 #include "administration/ban.h"
 #include "administration/proxy.h"
 #include "gameplay/economics/exchange.h"
@@ -61,15 +74,25 @@
 #include "engine/network/msdp/msdp_constants.h"
 #include "engine/entities/zone.h"
 #include "engine/db/db.h"
+#ifdef HAVE_SQLITE
+#include "engine/db/sqlite_world_data_source.h"
+#endif
+#include "engine/db/world_data_source_manager.h"
 #include "utils/utils.h"
+#include <cstring>
+#include <cerrno>
+#ifndef _WIN32
+#include <sys/resource.h>  // RLIMIT_CORE -- только для unix-сборок
+#endif
 #include "engine/core/conf.h"
 #include "engine/ui/modify.h"
+#include "engine/ui/login.h"
 #include "gameplay/statistics/money_drop.h"
 #include "gameplay/statistics/zone_exp.h"
 #include "engine/core/iosystem.h"
 #include "engine/ui/alias.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #if defined WITH_SCRIPTING
 #include "scripting.hpp"
@@ -77,6 +100,13 @@
 
 #ifdef HAS_EPOLL
 #include <sys/epoll.h>
+#endif
+
+#ifdef ENABLE_ADMIN_API
+#include "engine/network/admin_api.h"
+#include <sys/un.h>
+#include <sys/stat.h>
+#include <filesystem>
 #endif
 
 #ifdef CIRCLE_MACINTOSH        // Includes for the Macintosh
@@ -120,7 +150,7 @@
 #define SOCKET_ERROR (-1)
 #endif
 
-//#include <third_party_libs/fmt/include/fmt/format.h>
+//#include <fmt/format.h>
 //#include <sys/stat.h>
 
 #include <string>
@@ -164,6 +194,10 @@ extern void log_zone_count_reset();
 //extern int perform_move(CharData *ch, int dir, int following, int checkmob, CharData *leader);
 extern const char* build_datetime;
 extern const char* revision;
+extern const char* build_compiler;
+extern const char* build_features;
+extern const char* engine_name;
+extern const char* engine_version;
 
 // flags for show_list_to_char
 
@@ -347,10 +381,11 @@ void our_terminate() {
 }
 
 // externs
-extern int num_invalid;
 extern char *greetings;
 extern const char *circlemud_version;
 extern int circle_restrict;
+extern bool enable_world_checksum;
+extern const char *g_force_world_source;
 extern FILE *player_fl;
 extern ush_int DFLT_PORT;
 extern const char *DFLT_DIR;
@@ -358,20 +393,21 @@ extern const char *DFLT_IP;
 extern const char *LOGNAME;
 extern int max_playing;
 extern int nameserver_is_slow;    // see config.cpp
-extern int mana[];
 extern const char *save_info_msg[];    // In olc.cpp
-extern CharData *combat_list;
 extern void tact_auction();
-extern void log_code_date();
+extern void LogBuildInfo();
 
 // local globals
 DescriptorData *descriptor_list = nullptr;    // master desc list
+#ifdef ENABLE_ADMIN_API
+static socket_t admin_socket = -1;
+#endif
 
 
 int no_specials = 0;        // Suppress ass. of special routines
 int max_players = 0;        // max descriptors available
 int tics = 0;            // for extern checkpointing
-int scheck = 0;            // for syntax checking mode
+int scheck = 0;
 struct timeval null_time;    // zero-valued time structure
 int dg_act_check;        // toggle for act_trigger
 unsigned long cmd_cnt = 0;
@@ -505,7 +541,6 @@ RETSIGTYPE checkpointing(int sig);
 RETSIGTYPE hupsig(int sig);
 ssize_t perform_socket_read(socket_t desc, char *read_point, size_t space_left);
 ssize_t perform_socket_write(socket_t desc, const char *txt, size_t length);
-void sanity_check(void);
 void circle_sleep(struct timeval *timeout);
 void stop_game(ush_int port);
 void signal_setup(void);
@@ -518,6 +553,9 @@ int new_descriptor(socket_t s);
 #endif
 
 socket_t init_socket(ush_int port);
+#ifdef ENABLE_ADMIN_API
+socket_t init_unix_socket(const char *path);
+#endif
 
 int get_max_players();
 void timeadd(struct timeval *sum, struct timeval *a, struct timeval *b);
@@ -537,7 +575,6 @@ void medit_save_to_disk(int zone_num);
 void zedit_save_to_disk(int zone_num);
 void Crash_ldsave(CharData *ch);
 void Crash_save_all_rent();
-long GetExpUntilNextLvl(CharData *ch, int level);
 unsigned long TxtToIp(const char *text);
 
 #ifdef __CXREF__
@@ -581,6 +618,7 @@ void gettimeofday(struct timeval *t, void *dummy)
 #endif                // CIRCLE_WINDOWS || CIRCLE_MACINTOSH
 
 #include <iostream>
+#include "gameplay/mechanics/sight.h"
 
 int main_function(int argc, char **argv) {
 #ifdef TEST_BUILD
@@ -600,13 +638,9 @@ int main_function(int argc, char **argv) {
 	ush_int port;
 	int pos = 1;
 	const char *dir;
+	const char *save_target = nullptr;
+	const char *save_format = nullptr;
 	char cwd[256];
-
-	// Initialize these to check for overruns later.
-	plant_magic(buf);
-	plant_magic(buf1);
-	plant_magic(buf2);
-	plant_magic(arg);
 
 	port = DFLT_PORT;
 	dir = "lib";
@@ -633,7 +667,46 @@ int main_function(int argc, char **argv) {
 				break;
 
 			case 's': no_specials = 1;
-				puts("Suppressing assignment of special routines.");
+		puts("Suppressing assignment of special routines.");
+		break;
+	case 'S':
+		if (*(argv[pos] + 2))
+			save_target = argv[pos] + 2;
+		else if (++pos < argc)
+			save_target = argv[pos];
+		else {
+			puts("SYSERR: Output directory arg expected after option -S.");
+			exit(1);
+		}
+		printf("Resave-and-exit mode enabled, target='%s'.\n", save_target);
+		break;
+	case 'T':
+		if (*(argv[pos] + 2))
+			save_format = argv[pos] + 2;
+		else if (++pos < argc)
+			save_format = argv[pos];
+		else {
+			puts("SYSERR: Format arg expected after option -T (legacy|yaml|sqlite).");
+			exit(1);
+		}
+		printf("Resave target format: '%s'.\n", save_format);
+		break;
+	case 'W':
+		enable_world_checksum = true;
+		puts("World checksum calculation enabled.");
+				break;
+			case 'F':
+				if (*(argv[pos] + 2))
+					g_force_world_source = argv[pos] + 2;
+				else if (++pos < argc)
+					g_force_world_source = argv[pos];
+				else {
+					puts("SYSERR: Source kind arg expected after option -F (e.g. sqlite).");
+					exit(1);
+				}
+				printf("Forcing world source '%s' for this boot -- every other configured\n"
+					   "source will be unconditionally rebuilt from it (not a freshness cache).\n",
+					   g_force_world_source);
 				break;
 			case 'd':
 				if (*(argv[pos] + 2))
@@ -653,7 +726,16 @@ int main_function(int argc, char **argv) {
 					   "  -h             Print this command line argument help.\n"
 					   "  -o <file>      Write log to <file> instead of stderr.\n"
 					   "  -r             Restrict MUD -- no new players allowed.\n"
-					   "  -s             Suppress special procedure assignments.\n", argv[0]);
+					   "  -s             Suppress special procedure assignments.\n"
+					   "  -S <out_dir>   Load world, re-emit it via the configured backend\n"
+					   "                 into <out_dir> and exit (round-trip diagnostic).\n"
+					   "  -T <format>   Override -S target format: legacy|yaml|sqlite\n"
+					   "                 (default = compile-time backend).\n"
+					   "  -F <kind>     Force this boot to read from world source <kind> (e.g.\n"
+					   "                 sqlite) unconditionally, ignoring per-zone freshness, and\n"
+					   "                 rebuild every other configured source from it. Requires a\n"
+					   "                 composite <world_loader> with 2+ sources. Combine with -c\n"
+					   "                 to rebuild and exit without serving.\n", argv[0]);
 				exit(0);
 
 			default: printf("SYSERR: Unknown option -%c in argument string.\n", *(argv[pos] + 1));
@@ -663,7 +745,16 @@ int main_function(int argc, char **argv) {
 					   "  -h             Print this command line argument help.\n"
 					   "  -o <file>      Write log to <file> instead of stderr.\n"
 					   "  -r             Restrict MUD -- no new players allowed.\n"
-					   "  -s             Suppress special procedure assignments.\n", argv[0]);
+					   "  -s             Suppress special procedure assignments.\n"
+					   "  -S <out_dir>   Load world, re-emit it via the configured backend\n"
+					   "                 into <out_dir> and exit (round-trip diagnostic).\n"
+					   "  -T <format>   Override -S target format: legacy|yaml|sqlite\n"
+					   "                 (default = compile-time backend).\n"
+					   "  -F <kind>     Force this boot to read from world source <kind> (e.g.\n"
+					   "                 sqlite) unconditionally, ignoring per-zone freshness, and\n"
+					   "                 rebuild every other configured source from it. Requires a\n"
+					   "                 composite <world_loader> with 2+ sources. Combine with -c\n"
+					   "                 to rebuild and exit without serving.\n", argv[0]);
 				exit(1);
 			break;
 		}
@@ -684,28 +775,44 @@ int main_function(int argc, char **argv) {
 	 * Moved here to distinguish command line options and to show up
 	 * in the log if stderr is redirected to a file.
 	 */
-	printf("%s\r\n", circlemud_version);
-	printf("%s\r\n", DG_SCRIPT_VERSION);
+	printf("[%s] %s\r\n", utils::NowTs().c_str(), circlemud_version);
+	printf("[%s] %s\r\n", utils::NowTs().c_str(), DG_SCRIPT_VERSION);
 	if (getcwd(cwd, sizeof(cwd))) {};
-	printf("Current directory '%s' using '%s' as data directory.\r\n", cwd, dir);
-	runtime_config.load();
+	printf("[%s] Current directory '%s' using '%s' as data directory.\r\n", utils::NowTs().c_str(), cwd, dir);
+	{
+		std::string config_path = std::string(dir) + "/cfg/configuration.xml";
+		runtime_config.load(config_path.c_str());
+	}
 	if (runtime_config.msdp_debug()) {
 		msdp::debug(true);
 	}
 	// All arguments have been parsed, try to open log file.
+	// setup_logs() must be called before chdir() so that log/ and log/perslog/
+	// directories are created in the working directory (next to the binary),
+	// not inside the data directory.
 	runtime_config.setup_logs();
+	runtime_config.setup_telemetry(port);
 	logfile = runtime_config.logs(SYSLOG).handle();
-	log_code_date();
 	if (chdir(dir) < 0) {
 		perror("\r\nSYSERR: Fatal error changing to data directory");
 		exit(1);
 	}
-	printf("Code version %s, revision: %s\r\n", build_datetime, revision);
-	if (scheck) {
-		world_loader.BootWorld();
+	LogBuildInfo();
+	printf("[%s] %s %s, build from %s, revision: %s\r\nCompiler: %s\r\nEnabled features: %s\r\n",
+		utils::NowTs().c_str(), engine_name, engine_version, build_datetime, revision, build_compiler, build_features);
+	if (save_target) {
+		GameLoader::BootWorld();
+		// target_dir is interpreted relative to the world data directory
+		// (we chdir'd there above), so callers see the path they passed.
+		int errors = GameLoader::ResaveWorld(save_target,
+			save_format ? std::string(save_format) : std::string());
+		printf("Resave finished, errors=%d\n", errors);
+		return errors == 0 ? 0 : 2;
+	} else if (scheck) {
+		GameLoader::BootWorld();
 		printf("Done.");
 	} else {
-		printf("Running game on port %d.\r\n", port);
+		printf("[%s] Running game on port %d.\r\n", utils::NowTs().c_str(), port);
 
 		// стль и буст юзаются уже немало где, а про их экспешены никто не думает
 		// пока хотя бы стльные ловить и просто логировать факт того, что мы вышли
@@ -733,6 +840,22 @@ void stop_game(ush_int port) {
 
 	log("Opening mother connection.");
 	mother_desc = init_socket(port);
+	if (mother_desc < 0) {
+		log("SYSERR: Failed to bind to port %d. Server cannot start.", port);
+		fatal_log("Please check if another instance is running or if you have permission to use this port.");
+	}
+
+#ifdef ENABLE_ADMIN_API
+	if (runtime_config.admin_api_enabled()) {
+		const char *socket_path = runtime_config.admin_socket_path().c_str();
+		log("Admin API enabled, socket_path: %s", socket_path);
+		// Current working directory is the world directory after chdir(dir) above
+		admin_socket = init_unix_socket(socket_path);
+	} else {
+		log("Admin API disabled in configuration");
+	}
+#endif
+
 #if defined WITH_SCRIPTING
 	scripting::init();
 #endif
@@ -769,10 +892,29 @@ void stop_game(ush_int port) {
 		return;
 	}
 
-	game_loop(epoll, mother_desc);
+
+#ifdef ENABLE_ADMIN_API
+	if (admin_socket >= 0) {
+		DescriptorData *admin_d = (DescriptorData *) calloc(1, sizeof(DescriptorData));
+		admin_d->descriptor = admin_socket;
+		event.data.ptr = admin_d;
+		event.events = EPOLLIN;
+		if (epoll_ctl(epoll, EPOLL_CTL_ADD, admin_socket, &event) == -1) {
+			perror("EPOLL: epoll_ctl() failed on EPOLL_CTL_ADD admin_socket");
+			log("Warning: Admin API socket not added to epoll");
+		}
+	}
+#endif
+	{
+		lua_scripting::LuaFormatterShutdownGuard lua_formatter_shutdown_guard;
+		game_loop(epoll, mother_desc);
+	}
 #else
 	log("Polling using select().");
-	game_loop(mother_desc);
+	{
+		lua_scripting::LuaFormatterShutdownGuard lua_formatter_shutdown_guard;
+		game_loop(mother_desc);
+	}
 #endif
 
 	FlushPlayerIndex();
@@ -839,26 +981,23 @@ void stop_game(ush_int port) {
 		for (entry = olc_save_list; entry; entry = next_entry) {
 			next_entry = entry->next;
 			if (entry->type < 0 || entry->type > 4) {
-				sprintf(buf, "OLC: Illegal save type %d!", entry->type);
-				log("%s", buf);
-			} else if ((rznum = get_zone_rnum_by_zone_vnum(entry->zone)) == -1) {
-				sprintf(buf, "OLC: Illegal save zone %d!", entry->zone);
-				log("%s", buf);
+				log("OLC: Illegal save type %d!", entry->type);
+			} else if ((rznum = GetZoneRnum(entry->zone)) == -1) {
+				log("OLC: Illegal save zone %d!", entry->zone);
 			} else if (rznum < 0 || rznum >= static_cast<int>(zone_table.size())) {
-				sprintf(buf, "OLC: Invalid real zone number %d!", rznum);
-				log("%s", buf);
+				log("OLC: Invalid real zone number %d!", rznum);
 			} else {
-				sprintf(buf, "OLC: Reboot saving %s for zone %d.",
-						save_info_msg[(int) entry->type], zone_table[rznum].vnum);
-				log("%s", buf);
+				log("OLC: Reboot saving %s for zone %d.",
+					save_info_msg[(int) entry->type], zone_table[rznum].vnum);
+				auto* data_source = world_loader::WorldDataSourceManager::Instance().GetDataSource();
 				switch (entry->type) {
-					case OLC_SAVE_ROOM: redit_save_to_disk(rznum);
+					case OLC_SAVE_ROOM: data_source->SaveRooms(rznum);
 						break;
-					case OLC_SAVE_OBJ: oedit_save_to_disk(rznum);
+					case OLC_SAVE_OBJ: data_source->SaveObjects(rznum);
 						break;
-					case OLC_SAVE_MOB: medit_save_to_disk(rznum);
+					case OLC_SAVE_MOB: data_source->SaveMobs(rznum);
 						break;
-					case OLC_SAVE_ZONE: zedit_save_to_disk(rznum);
+					case OLC_SAVE_ZONE: data_source->SaveZone(rznum);
 						break;
 					default: log("Unexpected olc_save_list->type");
 						break;
@@ -868,9 +1007,15 @@ void stop_game(ush_int port) {
 	}
 	if (shutdown_parameters.reboot_after_shutdown()) {
 		log("Rebooting.");
+		// Гасим телеметрию последней: Shutdown() дожимает буфер в коллектор и переводит
+		// вывод на файл. Стояла она раньше в начале stop_game -- и весь хвост выключения
+		// (сохранение ренты, сброс очереди зон, "Closing all sockets", "Rebooting") уходил
+		// в никуда: в файловом сислоге он есть, а в Loki этих строк не было вовсе.
+		observability::OtelProvider::Instance().Shutdown();
 		exit(52);    // what's so great about HHGTTG, anyhow?
 	}
 	log("Normal termination of game.");
+	observability::OtelProvider::Instance().Shutdown();   // см. комментарий выше
 }
 
 /*
@@ -891,8 +1036,7 @@ socket_t init_socket(ush_int port) {
 
 		if (WSAStartup(wVersionRequested, &wsaData) != 0)
 		{
-			log("SYSERR: WinSock not available!");
-			exit(1);
+			fatal_log("SYSERR: WinSock not available!");
 		}
 		if ((wsaData.iMaxSockets - 4) < max_players)
 		{
@@ -900,10 +1044,9 @@ socket_t init_socket(ush_int port) {
 		}
 		log("Max players set to %d", max_players);
 
-		if ((s = socket(PF_INET, SOCK_STREAM, 0)) == SOCKET_ERROR)
+		if ((s = socket(PF_INET, SOCK_STREAM, 0)) == static_cast<socket_t>(SOCKET_ERROR))
 		{
-			log("SYSERR: Error opening network connection: Winsock error #%d", WSAGetLastError());
-			exit(1);
+			fatal_log("SYSERR: Error opening network connection: Winsock error #%d", WSAGetLastError());
 		}
 	}
 #else
@@ -958,14 +1101,126 @@ socket_t init_socket(ush_int port) {
 	sa.sin_addr = *(get_bind_addr());
 
 	if (bind(s, (struct sockaddr *) &sa, sizeof(sa)) < 0) {
-		perror("SYSERR: bind");
+		log("SYSERR: bind() failed - port %d is already in use or permission denied", port);
 		CLOSE_SOCKET(s);
-		exit(1);
+		return -1;
 	}
 	nonblock(s);
 	listen(s, 5);
 	return (s);
 }
+
+#ifdef ENABLE_ADMIN_API
+socket_t init_unix_socket(const char *path) {
+	socket_t s;
+	struct sockaddr_un sa;
+
+	s = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (s < 0) {
+		fatal_log("SYSERR: Error creating Unix domain socket: %s", strerror(errno));
+	}
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sun_family = AF_UNIX;
+	strncpy(sa.sun_path, path, sizeof(sa.sun_path) - 1);
+
+	// Создаём родительский каталог сокета, если его нет: bind() сам каталоги не
+	// создаёт, а сокет удобно держать в выделенной директории (например, чтобы
+	// монтировать её в Docker-контейнер web-админки).
+	const std::filesystem::path sock_path(path);
+	const auto parent_dir = sock_path.parent_path();
+	if (!parent_dir.empty()) {
+		std::error_code ec;
+		std::filesystem::create_directories(parent_dir, ec);
+		if (ec) {
+			log("SYSERR: Cannot create directory %s for Unix socket: %s",
+				parent_dir.c_str(), ec.message().c_str());
+		}
+	}
+
+	unlink(path);
+
+	if (bind(s, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
+		fprintf(stderr, "FATAL: Cannot bind Unix socket to %s: %s\n", path, strerror(errno));
+		log("SYSERR: Cannot bind Unix socket to %s: %s", path, strerror(errno));
+		CLOSE_SOCKET(s);
+		exit(1);
+	}
+
+	chmod(path, 0600);
+	nonblock(s);
+
+	if (listen(s, 1) < 0) {
+		fprintf(stderr, "FATAL: Cannot listen on Unix socket: %s\n", strerror(errno));
+		log("SYSERR: Cannot listen on Unix socket: %s", strerror(errno));
+		CLOSE_SOCKET(s);
+		exit(1);
+	}
+
+	log("Admin API listening on Unix socket: %s", path);
+	return s;
+}
+
+int new_admin_descriptor(int epoll, socket_t s) {
+	socket_t desc;
+	DescriptorData *newd;
+
+	desc = accept(s, nullptr, nullptr);
+	if (desc == -1) {
+		return -1;
+	}
+
+	// Check connection limit
+	int admin_connections = 0;
+	for (DescriptorData *d = descriptor_list; d; d = d->next) {
+		if (d->admin_api_mode) {
+			admin_connections++;
+		}
+	}
+
+	int max_connections = runtime_config.admin_max_connections();
+	if (admin_connections >= max_connections) {
+		log("Admin API: connection rejected (limit %d reached)", max_connections);
+		const char *error_msg = "{\"status\":\"error\",\"message\":\"connection limit reached\"}\n";
+		iosystem::write_to_descriptor(desc, error_msg, strlen(error_msg));
+		CLOSE_SOCKET(desc);
+		return -1;
+	}
+
+	nonblock(desc);
+	NEWCREATE(newd);
+
+	newd->descriptor = desc;
+	newd->state = EConState::kAdminAPI;
+	newd->admin_api_mode = true;
+	newd->keytable = kCodePageUTF8;
+	strcpy(newd->host, "unix-socket");
+	newd->login_time = newd->input_time = time(0);
+
+	// Initialize output buffer
+	newd->output = newd->small_outbuf;
+	newd->bufspace = kSmallBufsize - 1;
+	*newd->output = '\0';
+	newd->bufptr = 0;
+
+#ifdef HAS_EPOLL
+	struct epoll_event event;
+	event.data.ptr = newd;
+	event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP;
+	epoll_ctl(epoll, EPOLL_CTL_ADD, desc, &event);
+#endif
+
+	newd->next = descriptor_list;
+	descriptor_list = newd;
+
+	log("Admin API: new connection from Unix socket");
+
+	const char *welcome = "{\"status\":\"ready\",\"version\":\"1.0\"}\n";
+	iosystem::write_to_descriptor(desc, welcome, strlen(welcome));
+
+	return 0;
+}
+#endif // ENABLE_ADMIN_API
 
 int get_max_players(void) {
 	return (max_playing);
@@ -991,18 +1246,12 @@ int shutting_down(void) {
 	wait = shutdown_parameters.get_shutdown_timeout() - time(nullptr);
 
 	if (wait == 10 || wait == 30 || wait == 60 || wait == 120 || wait % 300 == 0) {
-		if (shutdown_parameters.reboot_after_shutdown()) {
-			remove("../.crash");
-			sprintf(buf, "ПЕРЕЗАГРУЗКА через ");
-		} else {
-			remove("../.crash");
-			sprintf(buf, "ОСТАНОВКА через ");
-		}
-		if (wait < 60)
-			sprintf(buf + strlen(buf), "%d %s.\r\n", wait, GetDeclensionInNumber(wait, EWhat::kSec));
-		else
-			sprintf(buf + strlen(buf), "%d %s.\r\n", wait / 60, GetDeclensionInNumber(wait / 60, EWhat::kMinU));
-		SendMsgToAll(buf);
+		remove("../.crash");
+		const char *what = shutdown_parameters.reboot_after_shutdown() ? "ПЕРЕЗАГРУЗКА" : "ОСТАНОВКА";
+		const std::string left = wait < 60
+			? fmt::format("{} {}", wait, grammar::GetDeclensionInNumber(wait, grammar::EWhat::kSec))
+			: fmt::format("{} {}", wait / 60, grammar::GetDeclensionInNumber(wait / 60, grammar::EWhat::kMinU));
+		SendMsgToAll(fmt::format("{} через {}.\r\n", what, left).c_str());
 		lastmessage = time(nullptr);
 		// на десятой секунде засейвим нужное нам в сислог
 		if (wait == 10)
@@ -1013,8 +1262,7 @@ int shutting_down(void) {
 
 void log_zone_count_reset() {
 	for (auto & i : zone_table) {
-		sprintf(buf, "Zone: %d, count_reset: %d", i.vnum, i.count_reset);
-		log("%s", buf);
+		log("Zone: %d, count_reset: %d", i.vnum, i.count_reset);
 	}
 }
 
@@ -1049,15 +1297,26 @@ inline void process_io(fd_set input_set, fd_set output_set, fd_set exc_set, fd_s
 			d = (DescriptorData *) events[i].data.ptr;
 			if (d == nullptr)
 				continue;
-			if (mother_desc == d->descriptor) // событие на mother_desc: принимаем все ждущие соединения
-			{
+			if (mother_desc == d->descriptor) { // событие на mother_desc: принимаем все ждущие соединения
 				int desc;
 				do
 					desc = new_descriptor(epoll, mother_desc);
 				while (desc > 0 || desc == -3);
-			} else // событие на клиентском дескрипторе: получаем данные и закрываем сокет, если EOF
-			if (iosystem::process_input(d) < 0)
-				close_socket(d, false, epoll, events, n);
+			}
+#ifdef ENABLE_ADMIN_API
+			else if (admin_socket >= 0 && admin_socket == d->descriptor) {
+				new_admin_descriptor(epoll, admin_socket);
+			}
+#endif
+			else { // событие на клиентском дескрипторе: получаем данные и закрываем сокет, если EOF
+#ifdef ENABLE_ADMIN_API
+				int result = (d->admin_api_mode) ? admin_api_process_input(d) : iosystem::process_input(d);
+#else
+				int result = iosystem::process_input(d);
+#endif
+				if (result < 0)
+					close_socket(d, false, epoll, events, n);
+			}
 		} else if (events[i].events & !EPOLLOUT & !EPOLLIN) // тут ловим все события, имеющие флаги кроме in и out
 		{
 			// надо будет помониторить сислог на предмет этих сообщений
@@ -1105,6 +1364,11 @@ inline void process_io(fd_set input_set, fd_set output_set, fd_set exc_set, fd_s
 	for (d = descriptor_list; d; d = next_d) {
 		next_d = d->next;
 
+		// Admin API connections don't use the input queue - skip command processing
+		if (d->admin_api_mode) {
+			continue;
+		}
+
 		/*
 		 * Not combined to retain --(d->wait) behavior. -gg 2/20/98
 		 * If no wait state, no subtraction.  If there is a wait
@@ -1114,10 +1378,10 @@ inline void process_io(fd_set input_set, fd_set output_set, fd_set exc_set, fd_s
 		if (d->character) {
 			d->character->punctual_wait -=
 				(d->character->punctual_wait > 0 ? 1 : 0);
-			if (IS_IMMORTAL(d->character)) {
+			if (privilege::IsImmortal(d->character.get())) {
 				d->character->zero_wait();
 			}
-			if (IS_IMMORTAL(d->character)
+			if (privilege::IsImmortal(d->character.get())
 				|| d->character->punctual_wait < 0) {
 				d->character->punctual_wait = 0;
 			}
@@ -1129,7 +1393,7 @@ inline void process_io(fd_set input_set, fd_set output_set, fd_set exc_set, fd_s
 		if (!get_from_q(&d->input, comm, &aliased)) {
 			if (d->state != EConState::kPlaying &&
 				d->state != EConState::kDisconnect &&
-				time(nullptr) - d->input_time > 300 && d->character && !IS_GOD(d->character))
+				time(nullptr) - d->input_time > 300 && d->character && !privilege::IsGod(d->character.get()))
 #ifdef HAS_EPOLL
 				close_socket(d, true, epoll, events, n);
 #else
@@ -1158,7 +1422,7 @@ inline void process_io(fd_set input_set, fd_set output_set, fd_set exc_set, fd_s
 			string_add(d, comm);
 		} else if (d->state != EConState::kPlaying)    // In menus, etc.
 		{
-			nanny(d, comm);
+			ProcessLoginInput(d, comm);
 		} else    // else: we're playing normally.
 		{
 			if (aliased)    // To prevent recursive aliases.
@@ -1229,7 +1493,7 @@ void game_loop(int epoll, socket_t mother_desc)
 void game_loop(socket_t mother_desc)
 #endif
 {
-	printf("Game started.\n");
+	printf("[%s] Game started.\n", utils::NowTs().c_str());
 
 #ifdef HAS_EPOLL
 	struct epoll_event *events;
@@ -1565,7 +1829,7 @@ int new_descriptor(socket_t s)
 
 	// accept the new connection
 	i = sizeof(peer);
-	if ((desc = accept(s, (struct sockaddr *) &peer, &i)) == SOCKET_ERROR) {
+	if ((desc = accept(s, (struct sockaddr *) &peer, &i)) == static_cast<socket_t>(SOCKET_ERROR)) {
 #ifdef EWOULDBLOCK
 		if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
 #else
@@ -1624,17 +1888,15 @@ int new_descriptor(socket_t s)
 	 * Note that your immortals may wonder if they see a connection from
 	 * your site, but you are wizinvis upon login.
 	 */
-	sprintf(buf2, "New connection from [%s]", newd->host);
-	mudlog(buf2, CMP, kLevelGod, SYSLOG, false);
+	mudlog(fmt::format("New connection from [{}]", newd->host), CMP, kLevelGod, SYSLOG, false);
 #endif
 	if (ban->IsBanned(newd->host) == BanList::BAN_ALL) {
 		time_t bantime = ban->GetBanDate(newd->host);
-		sprintf(buf, "Sorry, your IP is banned till %s",
-				bantime == -1 ? "Infinite duration\r\n" : asctime(localtime(&bantime)));
-		iosystem::write_to_descriptor(desc, buf, strlen(buf));
+		const std::string reject = fmt::format("Sorry, your IP is banned till {}",
+											   bantime == -1 ? "Infinite duration\r\n"
+															 : asctime(localtime(&bantime)));
+		iosystem::write_to_descriptor(desc, reject.c_str(), reject.length());
 		CLOSE_SOCKET(desc);
-		// sprintf(buf2, "Connection attempt denied from [%s]", newd->host);
-		// mudlog(buf2, CMP, kLevelGod, SYSLOG, true);
 		delete newd;
 		return (-3);
 	}
@@ -1708,7 +1970,7 @@ int new_descriptor(socket_t s)
 
 	// let interpreter to set the ball rolling
 	char dummyArg[] = {""};
-	nanny(newd, dummyArg);
+	ProcessLoginInput(newd, dummyArg);
 
 	// trying to turn on MSDP
 	iosystem::write_to_descriptor(newd->descriptor, will_msdp, sizeof(will_msdp));
@@ -1730,7 +1992,7 @@ bool any_other_ch(CharData *ch) {
 	for (const auto &vict : character_list) {
 		if (!vict->IsNpc()
 			&& vict.get() != ch
-			&& GET_UID(vict) == GET_UID(ch)) {
+			&& vict->get_uid() == ch->get_uid()) {
 			return true;
 		}
 	}
@@ -1739,6 +2001,7 @@ bool any_other_ch(CharData *ch) {
 }
 
 #ifdef HAS_EPOLL
+namespace vedun { void vedun_cleanup(DescriptorData *d); }  // issue.vedun-editor
 void close_socket(DescriptorData *d, int direct, int epoll, struct epoll_event *events, int n_ev)
 #else
 void close_socket(DescriptorData * d, int direct)
@@ -1749,6 +2012,9 @@ void close_socket(DescriptorData * d, int direct)
 								 __func__, __FILE__, __LINE__).c_str());
 		return;
 	}
+
+	log("close_socket called: direct=%d, state=%d, admin_api_mode=%d, host=%s",
+	    direct, static_cast<int>(d->state), d->admin_api_mode, d->host);
 
 	//if (!direct && d->character && NORENTABLE(d->character))
 	//	return;
@@ -1789,6 +2055,8 @@ void close_socket(DescriptorData * d, int direct)
 		case EConState::kMredit:
 		case EConState::kTrigedit: cleanup_olc(d, CLEANUP_ALL);
 			break;
+		case EConState::kVedun: vedun::vedun_cleanup(d);
+			break;
 			/*case CON_CONSOLE:
 				d->console.reset();
 				break;*/
@@ -1815,7 +2083,6 @@ void close_socket(DescriptorData * d, int direct)
 			|| d->state == EConState::kGloryConst
 			|| d->state == EConState::kNamedStuff
 			|| d->state == EConState::kMapMenu
-			|| d->state == EConState::kTorcExch
 			|| d->state == EConState::kSedit || d->state == EConState::kConsole) {
 			d->state = EConState::kPlaying;
 		}
@@ -1823,16 +2090,16 @@ void close_socket(DescriptorData * d, int direct)
 		if (d->state == EConState::kPlaying || d->state == EConState::kDisconnect) {
 			act("$n потерял$g связь.", true, d->character.get(), 0, 0, kToRoom | kToArenaListen);
 			if (d->character->GetEnemy() && d->character->IsFlagged(EPrf::kAntiDcMode)) {
-				snprintf(buf2, sizeof(buf2), "зачитать свиток.возврата");
-				command_interpreter(d->character.get(), buf2);
+				char recall[] = "зачитать свиток.возврата";
+				command_interpreter(d->character.get(), recall);
 			}
 			if (!d->character->IsNpc()) {
 				d->character->save_char();
 				CheckLight(d->character.get(), kLightNo, kLightNo, kLightNo, kLightNo, -1);
 				Crash_ldsave(d->character.get());
 
-				sprintf(buf, "Closing link to: %s.", GET_NAME(d->character));
-				mudlog(buf, NRM, std::max(kLvlGod, GET_INVIS_LEV(d->character)), SYSLOG, true);
+				mudlog(fmt::format("Closing link to: {}.", GET_NAME(d->character)),
+					   NRM, std::max(kLvlGod, GET_INVIS_LEV(d->character)), SYSLOG, true);
 			}
 			d->character->desc = nullptr;
 		} else {
@@ -1840,8 +2107,7 @@ void close_socket(DescriptorData * d, int direct)
 				Depot::exit_char(d->character.get());
 			}
 			if (character_list.get_character_by_address(d->character.get())) {
-				sprintf(buf, "Remove from character list to: %s.", GET_NAME(d->character));
-				log("%s", buf);
+				log("Remove from character list to: %s.", GET_NAME(d->character));
 				character_list.remove(d->character);
 			}
 		}
@@ -2011,8 +2277,7 @@ RETSIGTYPE checkpointing(int/* sig*/) {
 }
 
 RETSIGTYPE hupsig(int/* sig*/) {
-	log("SYSERR: Received SIGHUP, SIGINT, or SIGTERM.  Shutting down...");
-	exit(1);        // perhaps something more elegant should substituted
+	shutdown_parameters.shutdown_now();
 }
 
 #endif                // CIRCLE_UNIX
@@ -2031,7 +2296,39 @@ RETSIGTYPE hupsig(int/* sig*/) {
  * SunOS Release 4.0.2 (sun386) needs this too, according to Tim Aldric.
  */
 
+// Поднимаем мягкий лимит на размер core до жёсткого (обычно unlimited), чтобы
+// при падении мада ОС писала ПОЛНЫЙ core. Урезанный по размеру core читается в
+// gdb как каша (стек неполный, фреймы "??"). Заодно логируем итоговый лимит и
+// core_pattern, чтобы было видно, пишутся ли коры и куда.
+static void enable_coredumps_and_log() {
+#ifdef CIRCLE_UNIX
+	struct rlimit rl;
+	if (getrlimit(RLIMIT_CORE, &rl) == 0) {
+		const rlim_t was = rl.rlim_cur;
+		rl.rlim_cur = rl.rlim_max;
+		if (setrlimit(RLIMIT_CORE, &rl) != 0) {
+			log("SYSERR: setrlimit(RLIMIT_CORE) failed: %s", strerror(errno));
+		}
+		getrlimit(RLIMIT_CORE, &rl);
+		auto lim = [](rlim_t v) -> long long { return v == RLIM_INFINITY ? -1 : (long long) v; };
+		log("Core dumps: RLIMIT_CORE was %lld, set cur=%lld max=%lld (-1 = unlimited)",
+			lim(was), lim(rl.rlim_cur), lim(rl.rlim_max));
+	} else {
+		log("SYSERR: getrlimit(RLIMIT_CORE) failed: %s", strerror(errno));
+	}
+	if (FILE *f = fopen("/proc/sys/kernel/core_pattern", "r")) {
+		char pat[256] = {0};
+		if (fgets(pat, sizeof(pat), f)) {
+			pat[strcspn(pat, "\n")] = '\0';
+			log("Core pattern: %s", pat);
+		}
+		fclose(f);
+	}
+#endif
+}
+
 void signal_setup(void) {
+	enable_coredumps_and_log();
 	my_signal(SIGINT, hupsig);
 	my_signal(SIGTERM, hupsig);
 	my_signal(SIGPIPE, SIG_IGN);
@@ -2049,7 +2346,7 @@ void signal_setup(void) {
 void send_stat_char(const CharData *ch) {
 	char fline[256];
 	sprintf(fline, "%d[%d]HP %d[%d]Mv %ldG %dL ",
-			ch->get_hit(), ch->get_real_max_hit(), ch->get_move(), ch->get_real_max_move(), ch->get_gold(), GetRealLevel(ch));
+			ch->get_hit(), ch->get_real_max_hit(), ch->get_move(), ch->get_real_max_move(), currencies::GetHand(*ch, currencies::kGold), GetRealLevel(ch));
 	iosystem::write_to_output(fline, ch->desc);
 }
 
@@ -2071,6 +2368,28 @@ void SendMsgToChar(const CharData *ch, const char *msg, ...) {
 void SendMsgToChar(const std::string &msg, const CharData *ch) {
 	if (ch->desc && !msg.empty())
 		SendMsgToChar(msg.c_str(), ch);
+}
+
+std::size_t LineWrapWidth(const CharData *ch) {
+	// Флаг kNoLineWrap -- выключатель: режим работает у всех, кто его не снимал.
+	if (ch->IsNpc() || ch->IsFlagged(EPrf::kNoLineWrap)) {
+		return 0;
+	}
+	return ch->player_specials->saved.stringLength;
+}
+
+void SendWrappedToChar(const std::string &msg, const CharData *ch) {
+	const std::size_t width = LineWrapWidth(ch);
+	if (width == 0 || msg.empty()) {
+		SendMsgToChar(msg, ch);
+		return;
+	}
+	// WrapText съедает хвостовой перевод строки -- возвращаем его
+	std::string wrapped = utils::WrapText(msg, width);
+	if (msg.back() == '\n') {
+		wrapped += "\r\n";
+	}
+	SendMsgToChar(wrapped, ch);
 }
 
 void SendMsgToAll(const char *msg) {
@@ -2112,7 +2431,8 @@ void SendMsgToOutdoor(const char *msg, int control) {
 	}
 }
 
-void SendMsgToGods(char *text, bool include_demigod) {
+// Принимала char *: ей всегда передавали глобальный buf, и другого вызывающего не было (#3814).
+void SendMsgToGods(const std::string &text, bool include_demigod) {
 	DescriptorData *d;
 	for (d = descriptor_list; d; d = d->next) {
 		if (d->state == EConState::kPlaying) {
@@ -2132,7 +2452,7 @@ void SendMsgToGods(const char *msg) {
 	}
 
 	for (i = descriptor_list; i; i = i->next) {
-		if  (i->state != EConState::kPlaying || i->character == nullptr || !IS_GOD(i->character)) {
+		if  (i->state != EConState::kPlaying || i->character == nullptr || !privilege::IsGod(i->character.get())) {
 			continue;
 		}
 		iosystem::write_to_output(msg, i);
@@ -2168,14 +2488,14 @@ void perform_act(const char *orig,
 				 const std::string &kick_type) {
 	const char *i = nullptr;
 	char nbuf[256];
-	char lbuf[kMaxStringLength], *buf;
+	char lbuf[kMaxStringLength], *out;
 	ubyte padis;
 	int stopbyte, cap = 0;
 	CharData *dg_victim = nullptr;
 	ObjData *dg_target = nullptr;
 	char *dg_arg = nullptr;
 
-	buf = lbuf;
+	out = lbuf;
 
 	if (orig == nullptr)
 		return mudlog("perform_act: NULL *orig string", BRF, -1, ERRLOG, true);
@@ -2187,7 +2507,7 @@ void perform_act(const char *orig,
 						snprintf(nbuf,
 								 sizeof(nbuf),
 								 "&q%s&Q",
-								 (!ch->IsNpc() && (IS_IMMORTAL(ch) || GET_INVIS_LEV(ch))) ? GET_NAME(ch) : APERS(ch,
+								 (!ch->IsNpc() && (privilege::IsImmortal(ch) || GET_INVIS_LEV(ch))) ? GET_NAME(ch) : arena::VisibleName(ch,
 																												to,
 																												0,
 																												arena));
@@ -2197,8 +2517,8 @@ void perform_act(const char *orig,
 						snprintf(nbuf,
 								 sizeof(nbuf),
 								 "&q%s&Q",
-								 (!ch->IsNpc() && (IS_IMMORTAL(ch) || GET_INVIS_LEV(ch))) ? GET_PAD(ch, padis)
-																						  : APERS(ch, to, padis, arena));
+								 (!ch->IsNpc() && (privilege::IsImmortal(ch) || GET_INVIS_LEV(ch))) ? GET_PAD(ch, padis)
+																						  : arena::VisibleName(ch, to, padis, arena));
 						i = nbuf;
 					}
 					break;
@@ -2207,56 +2527,56 @@ void perform_act(const char *orig,
 						snprintf(nbuf,
 								 sizeof(nbuf),
 								 "&q%s&Q",
-								 CHK_NULL(vict_obj, APERS((const CharData *) vict_obj, to, 0, arena)));
+								 CHK_NULL(vict_obj, arena::VisibleName((const CharData *) vict_obj, to, 0, arena)));
 						i = nbuf;
 					} else {
 						padis = *(++orig) - '0';
 						snprintf(nbuf,
 								 sizeof(nbuf),
 								 "&q%s&Q",
-								 CHK_NULL(vict_obj, APERS((const CharData *) vict_obj, to, padis, arena)));
+								 CHK_NULL(vict_obj, arena::VisibleName((const CharData *) vict_obj, to, padis, arena)));
 						i = nbuf;
 					}
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 'm': i = HMHR(ch);
+				case 'm': i = grammar::DativePronoun((ch)->get_sex());
 					break;
 				case 'M':
 					if (vict_obj)
-						i = HMHR((const CharData *) vict_obj);
-					else CHECK_NULL(obj, OMHR(obj));
+						i = grammar::DativePronoun(((const CharData *) vict_obj)->get_sex());
+					else CHECK_NULL(obj, grammar::DativePronoun((obj)->get_sex()));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 's': i = HSHR(ch);
+				case 's': i = grammar::PossessivePronoun((ch)->get_sex());
 					break;
 				case 'S':
 					if (vict_obj)
-						i = CHK_NULL(vict_obj, HSHR((const CharData *) vict_obj));
-					else CHECK_NULL(obj, OSHR(obj));
+						i = CHK_NULL(vict_obj, grammar::PossessivePronoun(((const CharData *) vict_obj)->get_sex()));
+					else CHECK_NULL(obj, grammar::PossessivePronoun((obj)->get_sex()));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 'e': i = HSSH(ch);
+				case 'e': i = grammar::PersonalPronoun((ch)->get_sex());
 					break;
 				case 'E':
 					if (vict_obj)
-						i = CHK_NULL(vict_obj, HSSH((const CharData *) vict_obj));
-					else CHECK_NULL(obj, OSSH(obj));
+						i = CHK_NULL(vict_obj, grammar::PersonalPronoun(((const CharData *) vict_obj)->get_sex()));
+					else CHECK_NULL(obj, grammar::PersonalPronoun((obj)->get_sex()));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
 				case 'o':
 					if (*(orig + 1) < '0' || *(orig + 1) > '5') {
-						snprintf(nbuf, sizeof(nbuf), "&q%s&Q", CHK_NULL(obj, AOBJN(obj, to, ECase::kNom, arena)));
+						snprintf(nbuf, sizeof(nbuf), "&q%s&Q", CHK_NULL(obj, arena::VisibleObjName(obj, to, grammar::ECase::kNom, arena)));
 						i = nbuf;
 					} else {
 						padis = *(++orig) - '0';
 						snprintf(nbuf,
 								 sizeof(nbuf),
 								 "&q%s&Q",
-								 CHK_NULL(obj, AOBJN(obj, to, padis > ECase::kLastCase ? ECase::kNom : static_cast<ECase>(padis), arena)));
+								 CHK_NULL(obj, arena::VisibleObjName(obj, to, padis > grammar::ECase::kLastCase ? grammar::ECase::kNom : static_cast<grammar::ECase>(padis), arena)));
 						i = nbuf;
 					}
 					break;
@@ -2265,23 +2585,23 @@ void perform_act(const char *orig,
 						snprintf(nbuf,
 								 sizeof(nbuf),
 								 "&q%s&Q",
-								 CHK_NULL(vict_obj, AOBJN((const ObjData *) vict_obj, to, ECase::kNom, arena)));
+								 CHK_NULL(vict_obj, arena::VisibleObjName((const ObjData *) vict_obj, to, grammar::ECase::kNom, arena)));
 						i = nbuf;
 					} else {
 						padis = *(++orig) - '0';
 						snprintf(nbuf, sizeof(nbuf), "&q%s&Q", CHK_NULL(vict_obj,
-																		AOBJN((const ObjData *) vict_obj,
+																		arena::VisibleObjName((const ObjData *) vict_obj,
 																			  to,
-																			  padis > ECase::kLastCase ? ECase::kNom : static_cast<ECase>(padis),
+																			  padis > grammar::ECase::kLastCase ? grammar::ECase::kNom : static_cast<grammar::ECase>(padis),
 																			  arena)));
 						i = nbuf;
 					}
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 'p': CHECK_NULL(obj, AOBJS(obj, to, arena));
+				case 'p': CHECK_NULL(obj, arena::VisibleObjShort(obj, to, arena));
 					break;
-				case 'P': CHECK_NULL(vict_obj, AOBJS((const ObjData *) vict_obj, to, arena));
+				case 'P': CHECK_NULL(vict_obj, arena::VisibleObjShort((const ObjData *) vict_obj, to, arena));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
@@ -2297,95 +2617,106 @@ void perform_act(const char *orig,
 				case '$': i = "$";
 					break;
 
-				case 'a': i = IS_IMMORTAL(ch) || (arena) ? GET_CH_SUF_6(ch) : GET_CH_VIS_SUF_6(ch, to);
+				case 'a': i = privilege::IsImmortal(ch) || (arena) ? grammar::SexEnding((ch)->get_sex(), 6) : grammar::VisSexEnding(sight::CanSee((to), (ch)), (ch)->get_sex(), 6);
 					break;
 				case 'A':
 					if (vict_obj)
-						i = arena ? GET_CH_SUF_6((const CharData *) vict_obj)
-								  : GET_CH_VIS_SUF_6((const CharData *) vict_obj, to);
-					else CHECK_NULL(obj, arena ? GET_OBJ_SUF_6(obj) : GET_OBJ_VIS_SUF_6(obj, to));
+						i = arena ? grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 6)
+								  : grammar::VisSexEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex(), 6);
+					else CHECK_NULL(obj, arena ? grammar::ObjSexEnding((obj)->get_sex(), 6) : grammar::ObjVisSexEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex(), 6));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 'g': i = IS_IMMORTAL(ch) || (arena) ? GET_CH_SUF_1(ch) : GET_CH_VIS_SUF_1(ch, to);
+				case 'g': i = privilege::IsImmortal(ch) || (arena) ? grammar::SexEnding((ch)->get_sex(), 1) : grammar::VisSexEnding(sight::CanSee((to), (ch)), (ch)->get_sex(), 1);
 					break;
 				case 'G':
 					if (vict_obj)
-						i = arena ? GET_CH_SUF_1((const CharData *) vict_obj)
-								  : GET_CH_VIS_SUF_1((const CharData *) vict_obj, to);
-					else CHECK_NULL(obj, arena ? GET_OBJ_SUF_1(obj) : GET_OBJ_VIS_SUF_1(obj, to));
+						i = arena ? grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 1)
+								  : grammar::VisSexEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex(), 1);
+					else CHECK_NULL(obj, arena ? grammar::ObjSexEnding((obj)->get_sex(), 1) : grammar::ObjVisSexEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex(), 1));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 'y': i = IS_IMMORTAL(ch) || (arena) ? GET_CH_SUF_5(ch) : GET_CH_VIS_SUF_5(ch, to);
+				case 'y': i = privilege::IsImmortal(ch) || (arena) ? grammar::SexEnding((ch)->get_sex(), 5) : grammar::VisSexEnding(sight::CanSee((to), (ch)), (ch)->get_sex(), 5);
 					break;
 				case 'Y':
 					if (vict_obj)
-						i = arena ? GET_CH_SUF_5((const CharData *) vict_obj)
-								  : GET_CH_VIS_SUF_5((const CharData *) vict_obj, to);
-					else CHECK_NULL(obj, arena ? GET_OBJ_SUF_5(obj) : GET_OBJ_VIS_SUF_5(obj, to));
+						i = arena ? grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 5)
+								  : grammar::VisSexEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex(), 5);
+					else CHECK_NULL(obj, arena ? grammar::ObjSexEnding((obj)->get_sex(), 5) : grammar::ObjVisSexEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex(), 5));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 'u': i = IS_IMMORTAL(ch) || (arena) ? GET_CH_SUF_2(ch) : GET_CH_VIS_SUF_2(ch, to);
+				case 'u': i = privilege::IsImmortal(ch) || (arena) ? grammar::SexEnding((ch)->get_sex(), 2) : grammar::VisSexEnding(sight::CanSee((to), (ch)), (ch)->get_sex(), 2);
 					break;
 				case 'U':
 					if (vict_obj)
-						i = arena ? GET_CH_SUF_2((const CharData *) vict_obj)
-								  : GET_CH_VIS_SUF_2((const CharData *) vict_obj, to);
-					else CHECK_NULL(obj, arena ? GET_OBJ_SUF_2(obj) : GET_OBJ_VIS_SUF_2(obj, to));
+						i = arena ? grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 2)
+								  : grammar::VisSexEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex(), 2);
+					else CHECK_NULL(obj, arena ? grammar::ObjSexEnding((obj)->get_sex(), 2) : grammar::ObjVisSexEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex(), 2));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 'w': i = IS_IMMORTAL(ch) || (arena) ? GET_CH_SUF_3(ch) : GET_CH_VIS_SUF_3(ch, to);
+				case 'w': i = privilege::IsImmortal(ch) || (arena) ? grammar::SexEnding((ch)->get_sex(), 3) : grammar::VisSexEnding(sight::CanSee((to), (ch)), (ch)->get_sex(), 3);
 					break;
 				case 'W':
 					if (vict_obj)
-						i = arena ? GET_CH_SUF_3((const CharData *) vict_obj)
-								  : GET_CH_VIS_SUF_3((const CharData *) vict_obj, to);
-					else CHECK_NULL(obj, arena ? GET_OBJ_SUF_3(obj) : GET_OBJ_VIS_SUF_3(obj, to));
+						i = arena ? grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 3)
+								  : grammar::VisSexEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex(), 3);
+					else CHECK_NULL(obj, arena ? grammar::ObjSexEnding((obj)->get_sex(), 3) : grammar::ObjVisSexEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex(), 3));
 					dg_victim = (CharData *) vict_obj;
 					break;
 
-				case 'q': i = IS_IMMORTAL(ch) || (arena) ? GET_CH_SUF_4(ch) : GET_CH_VIS_SUF_4(ch, to);
+				case 'q': i = privilege::IsImmortal(ch) || (arena) ? grammar::SexEnding((ch)->get_sex(), 4) : grammar::VisSexEnding(sight::CanSee((to), (ch)), (ch)->get_sex(), 4);
 					break;
 				case 'Q':
 					if (vict_obj)
-						i = arena ? GET_CH_SUF_4((const CharData *) vict_obj)
-								  : GET_CH_VIS_SUF_4((const CharData *) vict_obj, to);
-					else CHECK_NULL(obj, arena ? GET_OBJ_SUF_4(obj) : GET_OBJ_VIS_SUF_4(obj, to));
+						i = arena ? grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 4)
+								  : grammar::VisSexEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex(), 4);
+					else CHECK_NULL(obj, arena ? grammar::ObjSexEnding((obj)->get_sex(), 4) : grammar::ObjVisSexEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex(), 4));
 					dg_victim = (CharData *) vict_obj;
 					break;
 //суффикс глуп(ым,ой,ыми)
-				case 'r': i = IS_IMMORTAL(ch) || (arena) ? GET_CH_SUF_7(ch) : GET_CH_VIS_SUF_7(ch, to);
+				case 'r': i = privilege::IsImmortal(ch) || (arena) ? grammar::SexEnding((ch)->get_sex(), 7) : grammar::VisSexEnding(sight::CanSee((to), (ch)), (ch)->get_sex(), 7);
 					break;
 				case 'R':
 					if (vict_obj)
-						i = arena ? GET_CH_SUF_7((const CharData *) vict_obj)
-								  : GET_CH_VIS_SUF_7((const CharData *) vict_obj, to);
-					else CHECK_NULL(obj, arena ? GET_OBJ_SUF_7(obj) : GET_OBJ_VIS_SUF_7(obj, to));
+						i = arena ? grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 7)
+								  : grammar::VisSexEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex(), 7);
+					else CHECK_NULL(obj, arena ? grammar::ObjSexEnding((obj)->get_sex(), 7) : grammar::ObjVisSexEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex(), 7));
 					dg_victim = (CharData *) vict_obj;
 					break;
 //суффикс как(ое,ой,ая,ие)
-				case 'x': i = IS_IMMORTAL(ch) || (arena) ? GET_CH_SUF_8(ch) : GET_CH_VIS_SUF_8(ch, to);
+				case 'x': i = privilege::IsImmortal(ch) || (arena) ? grammar::SexEnding((ch)->get_sex(), 8) : grammar::VisSexEnding(sight::CanSee((to), (ch)), (ch)->get_sex(), 8);
 					break;
 				case 'X':
 					if (vict_obj)
-						i = arena ? GET_CH_SUF_8((const CharData *) vict_obj)
-								  : GET_CH_VIS_SUF_8((const CharData *) vict_obj, to);
-					else CHECK_NULL(obj, arena ? GET_OBJ_SUF_8(obj) : GET_OBJ_VIS_SUF_8(obj, to));
+						i = arena ? grammar::SexEnding(((const CharData *) vict_obj)->get_sex(), 8)
+								  : grammar::VisSexEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex(), 8);
+					else CHECK_NULL(obj, arena ? grammar::ObjSexEnding((obj)->get_sex(), 8) : grammar::ObjVisSexEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex(), 8));
+					dg_victim = (CharData *) vict_obj;
+					break;
+//суффикс посвежевш(им,ей,ими) -- мягкая основа, творительный падеж
+//(issue.mag-points; см. GET_CH_EXSUF_1 в utils.h).
+				case 'h': i = privilege::IsImmortal(ch) || (arena) ? grammar::InstrEnding((ch)->get_sex()) : grammar::VisInstrEnding(sight::CanSee((to), (ch)), (ch)->get_sex());
+					break;
+				case 'H':
+					if (vict_obj)
+						i = arena ? grammar::InstrEnding(((const CharData *) vict_obj)->get_sex())
+								  : grammar::VisInstrEnding(sight::CanSee((to), ((const CharData *) vict_obj)), ((const CharData *) vict_obj)->get_sex());
+					else CHECK_NULL(obj, arena ? grammar::InstrEnding((obj)->get_sex()) : grammar::VisInstrEnding(sight::CanSeeObj((to), (obj)), (obj)->get_sex()));
 					dg_victim = (CharData *) vict_obj;
 					break;
 //склонение местоимения Ваш(е,а,и)
 				case 'z':
 					if (obj)
-						i = OYOU(obj);
-					else CHECK_NULL(obj, OYOU(obj));
+						i = grammar::PossessiveYourObj((obj)->get_sex());
+					else CHECK_NULL(obj, grammar::PossessiveYourObj((obj)->get_sex()));
 					break;
 				case 'Z':
 					if (vict_obj)
-						i = HYOU((const CharData *) vict_obj);
-					else CHECK_NULL(vict_obj, HYOU((const CharData *) vict_obj))
+						i = grammar::PossessiveYour(((const CharData *) vict_obj)->get_sex());
+					else CHECK_NULL(vict_obj, grammar::PossessiveYour(((const CharData *) vict_obj)->get_sex()))
 					break;
 				default: log("SYSERR: Illegal $-code to act(): %c", *orig);
 					log("SYSERR: %s", orig);
@@ -2394,39 +2725,47 @@ void perform_act(const char *orig,
 			}
 			if (cap) {
 				if (*i == '&') {
-					*buf = *(i++);
-					buf++;
-					*buf = *(i++);
-					buf++;
+					*out = *(i++);
+					out++;
+					*out = *(i++);
+					out++;
 				}
-				*buf = a_ucc(*i);
-				i++;
-				buf++;
+				// Заглавной делаем букву целиком, а не первый байт: в UTF-8 русская буква
+				// двухбайтовая, и a_ucc(*i) портил ведущий байт -- "Волчица" приезжала как
+				// "?олчица" (issue #3797/#3681).
+				const std::size_t letter_bytes = native_text::char_bytes(i);
+				std::string first(i, letter_bytes);
+				native_text::capitalize_first(first);
+				for (const char symbol : first) {
+					*out = symbol;
+					++out;
+				}
+				i += letter_bytes;
 				cap = 0;
 			}
-			while ((*buf = *(i++)))
-				buf++;
+			while ((*out = *(i++)))
+				out++;
 			orig++;
 		} else if (*orig == '\\') {
 			if (*(orig + 1) == 'r') {
-				*(buf++) = '\r';
+				*(out++) = '\r';
 				orig += 2;
 			} else if (*(orig + 1) == 'n') {
-				*(buf++) = '\n';
+				*(out++) = '\n';
 				orig += 2;
 			} else if (*(orig + 1) == 'u')//Следующая подстановка $... будет с большой буквы
 			{
 				cap = 1;
 				orig += 2;
 			} else
-				*(buf++) = *(orig++);
-		} else if (!(*(buf++) = *(orig++)))
+				*(out++) = *(orig++);
+		} else if (!(*(out++) = *(orig++)))
 			break;
 	}
 
-	*(--buf) = '\r';
-	*(++buf) = '\n';
-	*(++buf) = '\0';
+	*(--out) = '\r';
+	*(++out) = '\n';
+	*(++out) = '\0';
 
 	if (to->desc) {
 		// Делаем первый символ большим, учитывая &X
@@ -2438,7 +2777,18 @@ void perform_act(const char *orig,
 				tmp += 2;
 			utils::CAP(tmp);
 		}
-		iosystem::write_to_output(utils::CAP(lbuf), to->desc);
+		// Перенос по ширине экрана получателя. У клиентов без собственного переноса длинная
+		// строка просто уезжала за край окна -- так терялись хвосты болтовни и криков, где
+		// текст пишет игрок и длина ничем не ограничена. Флаг kNoLineWrap -- выключатель,
+		// поэтому режим работает у всех, кто его не снимал, включая старых персонажей.
+		char *text = utils::CAP(lbuf);
+		if (const auto width = LineWrapWidth(to); width > 0) {
+			// WrapText съедает хвостовой \r\n -- возвращаем его обратно
+			const std::string wrapped = utils::WrapText(text, width) + "\r\n";
+			iosystem::write_to_output(wrapped.c_str(), to->desc);
+		} else {
+			iosystem::write_to_output(text, to->desc);
+		}
 	}
 
 	if ((to->IsNpc() && dg_act_check) && (to != ch))
@@ -2546,7 +2896,7 @@ void act(const char *str,
 			if (!SENDOK(to) || (to == ch)) {
 				continue;
 			}
-			if (hide_invisible && ch && !CAN_SEE(to, ch))
+			if (hide_invisible && ch && !sight::CanSee(to, ch))
 				continue;
 			if ((type != kToRoom && type != kToRoomSensors) && to == vict_obj)
 				continue;
@@ -2563,8 +2913,8 @@ void act(const char *str,
 				continue;
 			if (type == kToRoomSensors && to->IsFlagged(EPrf::kHolylight)) {
 				std::string buffer = str;
-				if (!IS_MALE(ch)) {
-					utils::ReplaceFirst(buffer, "ся", GET_CH_SUF_2(ch));
+				if (!IsMale(ch)) {
+					utils::ReplaceFirst(buffer, "ся", grammar::SexEnding((ch)->get_sex(), 2));
 				}
 				utils::ReplaceFirst(buffer, "Кто-то", ch->get_name());
 				perform_act(buffer.c_str(), ch, obj, vict_obj, to, kick_type);
@@ -2574,7 +2924,7 @@ void act(const char *str,
 		}
 	}
 	//Реализация флага слышно арену
-	if ((to_arena) && (ch) && !IS_IMMORTAL(ch) && (ch->in_room != kNowhere) && ROOM_FLAGGED(ch->in_room, ERoomFlag::kArena)
+	if ((to_arena) && (ch) && !privilege::IsImmortal(ch) && (ch->in_room != kNowhere) && ROOM_FLAGGED(ch->in_room, ERoomFlag::kArena)
 		&& ROOM_FLAGGED(ch->in_room, ERoomFlag::kArenaSend) && !ROOM_FLAGGED(ch->in_room, ERoomFlag::kTribune)) {
 		arena_room_rnum = ch->in_room;
 		// находим первую клетку в зоне

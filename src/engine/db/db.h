@@ -15,6 +15,8 @@
 #ifndef DB_H_
 #define DB_H_
 
+#include "world_data_source.h"
+
 #include "engine/boot/boot_constants.h"
 #include "engine/core/conf.h"    // to get definition of build type: (CIRCLE_AMIGA|CIRCLE_UNIX|CIRCLE_WINDOWS|CIRCLE_ACORN|CIRCLE_VMS)
 #include "administration/name_adviser.h"
@@ -44,27 +46,22 @@ void ExtractTagFromArgument(char *argument, char *tag);
 void BootMudDataBase();
 void ZoneUpdate();
 bool CanBeReset(ZoneRnum zone);
-long GetPlayerIdByName(char *name);
-int GetPlayerUidByName(int id);
-long CmpPtableByName(char *name, int len);
-const char *GetNameById(long id);
-const char *GetPlayerNameByUnique(int unique);
-int GetLevelByUnique(long unique);
-long GetLastlogonByUnique(long unique);
-long GetPtableByUnique(long unique);
 int GetZoneRooms(int, int *, int *);
 void ZoneTrafficSave();
 void ResetZone(ZoneRnum zone);
 void LoadSheduledReboot();
 void initIngredientsMagic();
-void InitZoneTypes();
 int AllocateBufferForFile(const char *name, char **destination_buf);
 int LoadPlayerCharacter(const char *name, CharData *char_element, int load_flags);
 CharData *ReadMobile(MobVnum nr, int type);
-int IsCorrectUnique(int unique);
 void SaveGlobalUID();
 void FlushPlayerIndex();
 bool IsZoneEmpty(ZoneRnum zone_nr, bool debug = false);
+// issue.utils-cleaning: player/depot file kinds (was loose const ints in utils.h).
+enum EPlayerFile {
+	kAliasFile = 1, kScriptVarsFile, kPlayersFile, kTextCrashFile,
+	kTimeCrashFile, kPersDepotFile, kShareDepotFile, kPurgeDepotFile,
+};
 int get_filename(const char *orig_name, char *filename, int mode);
 CharData *find_char(long n);
 CharData *find_pc(long n);
@@ -115,15 +112,12 @@ struct ExtraAffects {
 
 // for queueing zones for update
 struct reset_q_element {
-	ZoneRnum zone_to_reset;    // ref to zone_data
-	struct reset_q_element *next;
+	ZoneRnum zone_to_reset{0};
+	bool force_reset{false};
 };
 
-// structure for the update queue
-struct reset_q_type {
-	struct reset_q_element *head;
-	struct reset_q_element *tail;
-};
+using ResetQueue = std::list<reset_q_element>;
+extern ResetQueue reset_q;
 
 const int kObjectSaveActivity = 300;
 const int kPlayerSaveActivity = 305;
@@ -148,33 +142,10 @@ struct IndexData {
 
 // =====================================================================================================================
 
-class PlayerIndexElement {
- public:
-	explicit PlayerIndexElement(const char *name);
-
-	char *mail;
-	char *last_ip;
-	int level;
-	int remorts;
-	ECharClass plr_class;
-	int last_logon;
-	int activity;        // When player be saved and checked
-	SaveInfo *timer;
-
-	[[nodiscard]] const char *name() const { return m_name; }
-	[[nodiscard]] long uid() const { return m_uid_; }
-
-	void set_name(const char *name);
-	void set_uid(const long _) { m_uid_ = _; }
- private:
-	int m_uid_;
-	const char *m_name;
-};
-
 extern RoomRnum top_of_world;
 extern std::map<long, CharData *> chardata_by_uid;
-extern std::set<CharData *> chardata_wait_list;
-extern std::set<CharData *> chardata_cooldown_list;
+extern std::unordered_set<CharData *> chardata_wait_list;
+extern std::unordered_set<CharData *> chardata_cooldown_list;
 
 void AddTrigIndexEntry(int nr, Trigger *trig);
 extern IndexData **trig_index;
@@ -194,7 +165,7 @@ class UniqueList: private std::list<T> {
 private:
 	using base_t = std::list<T>;
 public:
-	using iterator = base_t::iterator;
+	using iterator = typename base_t::iterator;
 	void push_back(const T& value) {
 		if (std::find(base_t::begin(), base_t::end(), value) == base_t::end()) {
 			base_t::push_back(value);
@@ -222,11 +193,17 @@ extern MobRnum top_of_mobt;
 inline ObjVnum GET_OBJ_VNUM(const CObjectPrototype *obj) { return obj->get_vnum(); }
 
 extern CharData *mob_proto;
-extern const char *MENU;
+struct DescriptorData;
+// issue.exit-menu: render the auto-numbered main connection menu to a descriptor.
+void ShowMainMenu(DescriptorData *d);
 
 extern TimeInfoData time_info;
 
 extern int ConvertDrinkconSkillField(CObjectPrototype *obj, bool proto);
+extern int ConvertDrinkPoisonField(CObjectPrototype *obj, bool proto);
+extern int ConvertPotionToEValueKey(CObjectPrototype *obj, bool proto);
+extern int ConvertSpellItemToEValueKey(CObjectPrototype *obj, bool proto);   // issue.magic-items
+int ConvertDrinkconLiquidCore(CObjectPrototype *obj, bool proto);
 
 void PasteMobiles();
 
@@ -236,64 +213,8 @@ extern RoomRnum r_immort_start_room;
 extern RoomRnum r_named_start_room;
 extern RoomRnum r_unreg_start_room;
 
-long GetPlayerTablePosByName(const char *name);
-
-class PlayersIndex : public std::vector<PlayerIndexElement> {
- public:
-	using parent_t = std::vector<PlayerIndexElement>;
-	using parent_t::operator[];
-	using parent_t::size;
-
-	static const std::size_t NOT_FOUND;
-
-	~PlayersIndex();
-
-	std::size_t Append(const PlayerIndexElement &element);
-	bool IsPlayerExists(const int id) const { return m_id_to_index.find(id) != m_id_to_index.end(); }
-	bool IsPlayerExists(const char *name) const { return NOT_FOUND != GetIndexByName(name); }
-	std::size_t GetIndexByName(const char *name) const;
-	void SetName(std::size_t index, const char *name);
-
-	NameAdviser &GetNameAdviser() { return m_name_adviser; }
-
- private:
-	class hasher {
-	 public:
-		std::size_t operator()(const std::string &value) const;
-	};
-
-	class equal_to {
-	 public:
-		bool operator()(const std::string &left, const std::string &right) const;
-	};
-
-	using id_to_index_t = std::unordered_map<int, std::size_t>;
-	using name_to_index_t = std::unordered_map<std::string, std::size_t, hasher, equal_to>;
-
-	void AddNameToIndex(const char *name, std::size_t index);
-
-	id_to_index_t m_id_to_index;
-	name_to_index_t m_name_to_index;
-	// contains free names which are available for new players
-	NameAdviser m_name_adviser;
-};
-
-extern PlayersIndex &player_table;
-
 extern long top_idnum;
 
-bool IsPlayerExists(long id);
-
-inline SaveInfo *SAVEINFO(const size_t number) {
-	return player_table[number].timer;
-}
-
-inline void ClearSaveinfo(const size_t number) {
-	delete player_table[number].timer;
-	player_table[number].timer = nullptr;
-}
-
-void RecreateSaveinfo(size_t number);
 void SetGodSkills(CharData *ch);
 void CheckRoomForIncompatibleFlags(int rnum);
 void SetTestData(CharData *mob);
@@ -303,14 +224,28 @@ class GameLoader {
  public:
 	GameLoader() = default;
 
-	static void BootWorld();
+	static void BootWorld(std::unique_ptr<world_loader::IWorldDataSource> data_source = nullptr);
 	static void BootIndex(EBootType mode);
+
+	// Diagnostic: re-emit loaded world via the current backend's Save* APIs
+	// into a fresh directory. Used by `circle -S <out_dir>` for the
+	// load -> save -> diff round-trip test. Returns 0 on success or the
+	// number of save errors encountered.
+	//
+	// target_format selects the saver explicitly: "", "auto" or nullptr
+	// keeps the compile-time default (YAML when HAVE_YAML, SQLite when
+	// HAVE_SQLITE, otherwise legacy). Explicit values: "legacy", "yaml",
+	// "sqlite". Selecting a backend not compiled in returns a non-zero
+	// error count. The legacy target also regenerates per-subdir index
+	// files so the resulting tree is bootable.
+	static int ResaveWorld(const std::string &target_dir,
+		const std::string &target_format = std::string());
 
  private:
 	static void PrepareGlobalStructures(const EBootType mode, const int rec_count);
 };
 
-extern GameLoader world_loader;
+extern GameLoader game_loader;
 
 #endif // DB_H_
 

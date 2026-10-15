@@ -9,7 +9,10 @@
 ************************************************************************ */
 
 #include "dg_scripts.h"
-#include "engine/core/handler.h"
+#include "gameplay/affects/affect_messages.h"
+#include "engine/core/char_handler.h"
+#include "engine/entities/char_data.h"
+#include "engine/core/target_resolver.h"
 #include "dg_event.h"
 #include "gameplay/magic/magic.h"
 #include "engine/db/global_objects.h"
@@ -34,16 +37,14 @@ int find_dg_cast_target(ESpell spell_id, const char *t, CharData *ch, CharData *
 
 	if (spell_id == ESpell::kControlWeather) {
 		if ((what_sky = search_block(t, what_sky_type, false)) < 0) {
-			sprintf(buf2, "dg_cast (Не указан тип погоды)");
-			script_log(buf2);
+			script_log("dg_cast (Не указан тип погоды)");
 			return false;
 		} else
 			what_sky >>= 1;
 	}
 	if (spell_id == ESpell::kCreateWeapon) {
 		if ((what_sky = search_block(t, what_weapon, false)) < 0) {
-			sprintf(buf2, "dg_cast (Не указан тип оружия)");
-			script_log(buf2);
+			script_log("dg_cast (Не указан тип оружия)");
 			return false;
 		} else
 			what_sky = 5 + (what_sky >> 1);
@@ -56,12 +57,14 @@ int find_dg_cast_target(ESpell spell_id, const char *t, CharData *ch, CharData *
 		return true;
 	if (*t) {
 		if (MUD::Spell(spell_id).AllowTarget(kTarCharRoom)) {
-			if ((*tch = get_char_vis(ch, t, EFind::kCharInRoom)) != nullptr) {
+			*tch = target_resolver::FindCharInRoom(ch, t);
+			if ((*tch != nullptr)) {
 				return true;
 			}
 		}
 		if (MUD::Spell(spell_id).AllowTarget(kTarCharWorld)) {
-			if ((*tch = get_char_vis(ch, t, EFind::kCharInWorld)) != nullptr) {
+			*tch = target_resolver::FindCharInWorld(ch, t);
+			if ((*tch != nullptr)) {
 				return true;
 			}
 		}
@@ -86,9 +89,10 @@ int find_dg_cast_target(ESpell spell_id, const char *t, CharData *ch, CharData *
 			if ((*tobj = get_obj_in_list_vis(ch, t, world[ch->in_room]->contents)) != nullptr)
 				return true;
 
-		if (MUD::Spell(spell_id).AllowTarget(kTarObjWorld))
-			if ((*tobj = get_obj_vis(ch, t)) != nullptr)
+		if (MUD::Spell(spell_id).AllowTarget(kTarObjWorld)) {
+			if ((*tobj = target_resolver::FindObjAround(ch, t)) != nullptr)
 				return true;
+		}
 	} else {
 		if (MUD::Spell(spell_id).AllowTarget(kTarFightSelf))
 			if (ch->GetEnemy() != nullptr) {
@@ -117,10 +121,9 @@ int find_dg_cast_target(ESpell spell_id, const char *t, CharData *ch, CharData *
 // LIMITATION: a target MUST exist for the spell unless the spell is
 // set to TAR_IGNORE. Also, group spells are not permitted
 // code borrowed from do_cast()
-void do_dg_cast(void *go, Trigger *trig, int type, char *cmd) {
+void do_dg_cast(void *go, Trigger *trig, int type, std::string cmd) {
 	CharData *caster = nullptr;
 	RoomData *caster_room = nullptr;
-	char *s, *t;
 	int target = 0;
 	bool dummy_mob = false;
 	std::string argument = cmd;
@@ -142,26 +145,27 @@ void do_dg_cast(void *go, Trigger *trig, int type, char *cmd) {
 		default: trig_log(trig, "dg_do_cast: unknown trigger type!");
 			return;
 	}
-	// get: blank, spell name, target name
-	s = strtok(cmd, "'!");
-//ошибка сравнения с nullptr но так уже привыкли
-	if (s == nullptr) {
-		sprintf(buf2, "dg_cast: needs spell name.");
-		trig_log(trig, buf2);
+	// parse: "DgCast 'spell name' target"
+	auto quote1 = cmd.find_first_of("'!");
+	if (quote1 == std::string::npos) {
+		trig_log(trig, "dg_cast: needs spell name.");
 		return;
 	}
-	s = strtok(nullptr, "'!");
-	if (s == nullptr) {
-		sprintf(buf2, "dg_cast: needs spell name in `'s.");
-		trig_log(trig, buf2);
+	auto quote2 = cmd.find_first_of("'!", quote1 + 1);
+	if (quote2 == std::string::npos) {
+		trig_log(trig, "dg_cast: needs spell name in `'s.");
 		return;
 	}
-	t = strtok(nullptr, "\0");
+	std::string spell_name = cmd.substr(quote1 + 1, quote2 - quote1 - 1);
+	std::string target_name;
+	if (quote2 + 1 < cmd.size()) {
+		target_name = cmd.substr(quote2 + 1);
+		utils::TrimLeft(target_name);
+	}
 
-	auto spell_id = FixNameAndFindSpellId(s);
+	auto spell_id = FixNameAndFindSpellId(spell_name.data());
 	if (spell_id == ESpell::kUndefined) {
-		sprintf(buf2, "dg_cast: invalid spell name, аргумент: (%s)", argument.c_str());
-		trig_log(trig, buf2);
+		trig_log(trig, fmt::format("dg_cast: invalid spell name, аргумент: ({})", argument.c_str()));
 		return;
 	}
 
@@ -175,70 +179,71 @@ void do_dg_cast(void *go, Trigger *trig, int type, char *cmd) {
 		// take select pieces from char_to_room();
 		dummy_mob = true;
 		if (type == OBJ_TRIGGER) {
-			sprintf(buf, "дух %s", ((ObjData *) go)->get_PName(ECase::kGen).c_str());
-			caster->set_npc_name(buf);
-			sprintf(buf, "дух %s", ((ObjData *) go)->get_PName(ECase::kGen).c_str());
-			caster->player_data.PNames[ECase::kNom] = std::string(buf);
-			sprintf(buf, "духа %s", ((ObjData *) go)->get_PName(ECase::kGen).c_str());
-			caster->player_data.PNames[ECase::kGen] = std::string(buf);
-			sprintf(buf, "духу %s", ((ObjData *) go)->get_PName(ECase::kGen).c_str());
-			caster->player_data.PNames[ECase::kDat] = std::string(buf);
-			sprintf(buf, "духа %s", ((ObjData *) go)->get_PName(ECase::kGen).c_str());
-			caster->player_data.PNames[ECase::kAcc] = std::string(buf);
-			sprintf(buf, "духом %s", ((ObjData *) go)->get_PName(ECase::kGen).c_str());
-			caster->player_data.PNames[ECase::kIns] = std::string(buf);
-			sprintf(buf, "духе %s", ((ObjData *) go)->get_PName(ECase::kGen).c_str());
-			caster->player_data.PNames[ECase::kPre] = std::string(buf);
+			// Имя духа во всех падежах строится от родительного падежа предмета
+			const std::string &obj_gen = ((ObjData *) go)->get_PName(grammar::ECase::kGen);
+			caster->set_npc_name(fmt::format("дух {}", obj_gen));
+			caster->player_data.PNames[grammar::ECase::kNom] = fmt::format("дух {}", obj_gen);
+			caster->player_data.PNames[grammar::ECase::kGen] = fmt::format("духа {}", obj_gen);
+			caster->player_data.PNames[grammar::ECase::kDat] = fmt::format("духу {}", obj_gen);
+			caster->player_data.PNames[grammar::ECase::kAcc] = fmt::format("духа {}", obj_gen);
+			caster->player_data.PNames[grammar::ECase::kIns] = fmt::format("духом {}", obj_gen);
+			caster->player_data.PNames[grammar::ECase::kPre] = fmt::format("духе {}", obj_gen);
 		} else if (type == WLD_TRIGGER) {
 			caster->set_npc_name("Боги");
-			caster->player_data.PNames[ECase::kNom] = "Боги";
-			caster->player_data.PNames[ECase::kGen] = "Богов";
-			caster->player_data.PNames[ECase::kDat] = "Богам";
-			caster->player_data.PNames[ECase::kAcc] = "Богов";
-			caster->player_data.PNames[ECase::kIns] = "Богами";
-			caster->player_data.PNames[ECase::kPre] = "Богах";
+			caster->player_data.PNames[grammar::ECase::kNom] = "Боги";
+			caster->player_data.PNames[grammar::ECase::kGen] = "Богов";
+			caster->player_data.PNames[grammar::ECase::kDat] = "Богам";
+			caster->player_data.PNames[grammar::ECase::kAcc] = "Богов";
+			caster->player_data.PNames[grammar::ECase::kIns] = "Богами";
+			caster->player_data.PNames[grammar::ECase::kPre] = "Богах";
 		}
 		caster_room->people.push_front(caster);
 		caster->in_room = GetRoomRnum(caster_room->vnum);
 	}
-
-	// Find the target
-	if (t != nullptr)
-		one_argument(t, arg);
-	else
-		*arg = '\0';
 
 	// в find_dg_cast_target можем и не попасть для инита нулями и в CallMagic пойдет мусор
 	CharData *tch = nullptr;
 	ObjData *tobj = nullptr;
 	RoomData *troom = nullptr;
 
-	if (*arg == UID_CHAR) {
-		tch = get_char(arg);
+	// Причину неудачи ниже пишем один раз: раньше к разобранной причине ("victim not found",
+	// "в разных клетках комнат") добавлялась ещё и общая строка "target not found", и в логе
+	// на одну неудачу приходилось два сообщения.
+	bool reason_logged = false;
+
+	if (!target_name.empty() && target_name[0] == UID_CHAR) {
+		tch = get_char(target_name.c_str());
 		if (tch == nullptr) {
-			snprintf(buf2, kMaxStringLength, "dg_cast: victim (%s) not found, аргумент: %s", arg + 1, argument.c_str());
-			trig_log(trig, buf2);
+			trig_log(trig, fmt::format("dg_cast: victim ({}) not found, аргумент: {}", target_name.c_str() + 1, argument.c_str()));
+			reason_logged = true;
 		} else if (kNowhere == caster->in_room) {
-			sprintf(buf2, "dg_cast: caster (%s) in kNowhere", GET_NAME(caster));
-			trig_log(trig, buf2);
+			trig_log(trig, fmt::format("dg_cast: caster ({}) in kNowhere", caster->get_name().c_str()));
+			reason_logged = true;
+		} else if (kNowhere == tch->in_room) {
+			// Цель успела умереть между "set target" и "dgcast": из комнаты её убирают сразу,
+			// а из character_list -- только на следующем пульсе, поэтому get_char её ещё находит.
+			// Без этой ветки такая цель попадала в "в разных клетках комнат" и уводила разбор
+			// не в ту сторону (issue #3779).
+			trig_log(trig, fmt::format("dg_cast: цель ({}) уже мертва, аргумент: {}", tch->get_name().c_str(), argument.c_str()));
+			reason_logged = true;
 		} else if (tch->in_room != caster->in_room) {
-			sprintf(buf2,
-					"dg_cast: caster (%s) and victim (%s) в разных клетках комнат",
-					GET_NAME(caster),
-					GET_NAME(tch));
-			trig_log(trig, buf2);
+			trig_log(trig, fmt::format("dg_cast: caster ({}) and victim ({}) в разных клетках комнат", caster->get_name().c_str(), tch->get_name().c_str()));
+			reason_logged = true;
 		} else {
 			target = 1;
 			troom = world[caster->in_room];
 		}
 	} else {
-		target = find_dg_cast_target(spell_id, arg, caster, &tch, &tobj, &troom);
+		target = find_dg_cast_target(spell_id, target_name.c_str(), caster, &tch, &tobj, &troom);
 	}
 	if (target) {
 		CallMagic(caster, tch, tobj, troom, spell_id, GetRealLevel(caster));
-	} else if (spell_id != ESpell::kResurrection && spell_id != ESpell::kAnimateDead) {
-		sprintf(buf2, "dg_cast: target not found, аргумент: %s", argument.c_str());
-		trig_log(trig, buf2);
+	} else if (!reason_logged && spell_id != ESpell::kResurrection && spell_id != ESpell::kAnimateDead) {
+		// Цели не передали вовсе -- обычно %random.pc% в комнате, где живых игроков не осталось.
+		// Прежнее "target not found" читалось как "цель была, но движок её не нашёл".
+		trig_log(trig, target_name.empty()
+					   ? fmt::format("dg_cast: цель не указана, аргумент: {}", argument)
+					   : fmt::format("dg_cast: target not found, аргумент: {}", argument));
 	}
 	if (dummy_mob)
 		ExtractCharFromWorld(caster, false);
@@ -252,102 +257,87 @@ void do_dg_cast(void *go, Trigger *trig, int type, char *cmd) {
    if duration < 1 - function removes affect */
 #define APPLY_TYPE    1
 #define AFFECT_TYPE    2
-void do_dg_affect(void * /*go*/, Script * /*sc*/, Trigger *trig, int/* script_type*/, char *cmd) {
+void do_dg_affect(void * /*go*/, Script * /*sc*/, Trigger *trig, int/* script_type*/, std::string cmd) {
 	CharData *ch = nullptr;
 	int value = 0, duration = 0, battle = 0;
-	char junk[kMaxInputLength];    // will be set to "dg_affect"
-	char charname[kMaxInputLength], property[kMaxInputLength];
-	char value_p[kMaxInputLength], duration_p[kMaxInputLength];
-	char battle_p[kMaxInputLength];
-	char spell[kMaxInputLength];
-	int index = 0, type = 0, i;
+	int index = 0, type = 0;
+	EAffect dg_affect_type = EAffect::kUndefined;
 
-	half_chop(cmd, junk, cmd);
-	half_chop(cmd, charname, cmd);
-	half_chop(cmd, property, cmd);
-	half_chop(cmd, spell, cmd);
-	half_chop(cmd, value_p, cmd);
-	half_chop(cmd, duration_p, battle_p);
+	// issue.affect-migration: the <spell> argument was dropped -- affects carry their own description now,
+	// so an APPLY-type dgaffect falls back to the generic "чары" (kWitchery) identity instead of naming a spell.
+	// parse: "dgaffect <target> <property> <value> <duration> [battlepos]"
+	std::string remains = cmd;
+	std::string junk = utils::ExtractFirstArgument(remains, remains);       // "dgaffect"
+	std::string charname = utils::ExtractFirstArgument(remains, remains);   // target
+	std::string property = utils::ExtractFirstArgument(remains, remains);   // property
+	std::string value_p = utils::ExtractFirstArgument(remains, remains);    // value
+	std::string duration_p = utils::ExtractFirstArgument(remains, remains); // duration
+	std::string battle_p = remains;                                          // battlepos (optional)
+	utils::Trim(battle_p);
 
 	// make sure all parameters are present
-	if (!*charname || !*property || !*spell || !*value_p || !*duration_p) {
-		sprintf(buf2, "dg_affect usage: <target> <property> <spell> <value> <duration> *<battleposition>");
-		trig_log(trig, buf2);
+	if (charname.empty() || property.empty() || value_p.empty() || duration_p.empty()) {
+		trig_log(trig, "dg affect usage: <target> <property> <value> <duration> *<battleposition>");
 		return;
 	}
 
-	// заменяем '_' на ' ' в названии заклинания и аффекта
-	for (i = 0; spell[i]; i++)
-		if (spell[i] == '_')
-			spell[i] = ' ';
-	for (i = 0; property[i]; i++)
-		if (property[i] == '_')
-			property[i] = ' ';
+	std::replace(property.begin(), property.end(), '_', ' ');
 
-	value = atoi(value_p);
-	duration = atoi(duration_p);
-	battle = atoi(battle_p);
-// Если длительность 0 снимаем аффект ниже
+	value = atoi(value_p.c_str());
+	duration = atoi(duration_p.c_str());
+	battle = atoi(battle_p.c_str());
+
 	if (duration < 0) {
-		sprintf(buf2, "dg_affect: need positive duration!");
-		trig_log(trig, buf2);
+		trig_log(trig, "dg_affect: need positive duration!");
 		return;
 	}
 	// find the property -- first search apply_types
-	if ((index = search_block(property, apply_types, false)) != -1) {
+	if ((index = search_block(property.c_str(), apply_types, false)) != -1) {
 		type = APPLY_TYPE;
 	} else {
-		//search affect_types now
-		if ((index = ext_search_block(property, affected_bits, false)) != 0)
+		if (affects::FindByShortDesc(property, dg_affect_type))
 			type = AFFECT_TYPE;
 	}
 
 	if (!type)        // property not found
 	{
-		sprintf(buf2, "dg_affect: unknown property '%s'!", property);
-		trig_log(trig, buf2);
-		return;
-	}
-
-	auto index_s = FixNameAndFindSpellId(spell);
-	if (index_s == ESpell::kUndefined) {
-		sprintf(buf2, "dg_affect: unknown spell '%s' ставим 'чары'!", spell);
-		trig_log(trig, buf2);
+		trig_log(trig, fmt::format("dg_affect: unknown property '{}'!", property.c_str()));
 		return;
 	}
 
 	// locate the target
-	ch = get_char(charname);
+	ch = get_char(charname.c_str());
 	if (!ch) {
-		sprintf(buf2, "dg_affect: cannot locate target!");
-		trig_log(trig, buf2);
+		trig_log(trig, "dg_affect: cannot locate target!");
 		return;
 	}
 
 	if (duration > 0) {
 		// add the affect
 		Affect<EApply> af;
-		af.type = index_s;
-
-		af.battleflag = battle;
+		// issue #4005: число из триггера -- упакованный флаг ((плоскость << 30) | (1 << бит)),
+		// поэтому разбираем его from_string: плоскости 1-3 так тоже доходят, а не обрезаются.
+		af.battleflag.from_string(battle_p.c_str());
 		if (battle == kAfPulsedec) {
 			af.duration = duration;
 		} else {
-			af.duration = CalcDuration(ch, duration * 2, 0, 0, 0, 0);
+			af.duration = CalcDuration(ch, ch, ESkill::kUndefined, duration * 2, 0, 0, 0);
 		}
 		if (type == AFFECT_TYPE) {
 			af.location = EApply::kNone;
 			af.modifier = 0;
-			af.bitvector = index;
+			af.affect_type = dg_affect_type;
 		} else {
 			af.location = static_cast<EApply>(index);
 			af.modifier = value;
-			af.bitvector = 0;
+			// APPLY affect -> the generic "чары" identity so it displays + expires sensibly.
+			af.affect_type = EAffect::kWitchery;
 		}
 		ImposeAffect(ch, af); // перекастим аффект
 	} else {
-		// remove affect
-		RemoveAffectFromCharAndRecalculate(ch, index_s);
+		// remove affect -- by the affect identity (kWitchery for APPLY, the property's affect for AFFECT)
+		RemoveAffectFromCharAndRecalculate(ch,
+				type == AFFECT_TYPE ? dg_affect_type : EAffect::kWitchery);
 	}
 }
 

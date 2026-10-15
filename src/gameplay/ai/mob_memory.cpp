@@ -10,11 +10,12 @@
 #include "gameplay/ai/mobact.h"
 #include "gameplay/fight/fight_hit.h"
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "gameplay/abilities/timed_abilities.h"
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/fight_constants.h"
 #include "gameplay/mechanics/weather.h"
 #include "gameplay/mechanics/hide.h"
+#include "gameplay/mechanics/sight.h"
 
 namespace mob_ai {
 
@@ -46,9 +47,9 @@ void mobRemember(CharData *ch, CharData *victim) {
 		tmp->time = time(nullptr) + kMobMemKoeff * GetRealInt(ch);
 		MEMORY(ch) = tmp;
 	}
-	if (!IsTimedBySkill(victim, ESkill::kHideTrack) && victim->GetSkill(ESkill::kHideTrack)) {
+	if (!IsTimedBySkill(victim, ESkill::kHideTrack) && GetSkill(victim, ESkill::kHideTrack)) {
 		timed.skill = ESkill::kHideTrack;
-		timed.time = ch->GetSkill(ESkill::kTrack) ? 6 : 3;
+		timed.time = GetSkill(ch, ESkill::kTrack) ? 6 : 3;
 		ImposeTimedSkill(victim, &timed);
 	}
 }
@@ -96,7 +97,7 @@ void clearMemory(CharData *ch) {
 	MEMORY(ch) = nullptr;
 }
 
-CharData *FimdRememberedEnemyInRoom(CharData *mob, int check_sneak) {
+CharData *FimdRememberedEnemyInRoom(CharData *mob, bool respect_sneak, bool respect_hide_and_camouflage) {
 	if (!mob->mob_specials.memory) {
 		return nullptr;
 	}
@@ -111,26 +112,28 @@ CharData *FimdRememberedEnemyInRoom(CharData *mob, int check_sneak) {
 		}
 		for (MemoryRecord *names = MEMORY(mob); names && !victim; names = names->next) {
 			if (names->id == vict->get_uid()) {
-				if (!MAY_SEE(mob, mob, vict) || !may_kill_here(mob, vict, NoArgument)) {
+				if (!sight::MaySee(mob, mob, vict) || !may_kill_here(mob, vict, NoArgument)) {
 					continue;
 				}
-				if (check_sneak) {
+				if (respect_sneak) {
 					SkipSneaking(vict, mob);
-					if (EXTRA_FLAGGED(vict, EXTRA_FAILSNEAK)) {
+					if ((vict)->Temporary.get(ECharExtraFlag::kFailSneak)) {
 						AFF_FLAGS(vict).unset(EAffect::kSneak);
 					}
 					if (AFF_FLAGGED(vict, EAffect::kSneak))
 						continue;
 				}
-				SkipHiding(vict, mob);
-				if (EXTRA_FLAGGED(vict, EXTRA_FAILHIDE)) {
-					AFF_FLAGS(vict).unset(EAffect::kHide);
+				if (respect_hide_and_camouflage) {
+					SkipHiding(vict, mob);
+					if ((vict)->Temporary.get(ECharExtraFlag::kFailHide)) {
+						AFF_FLAGS(vict).unset(EAffect::kHide);
+					}
+					SkipCamouflage(vict, mob);
+					if ((vict)->Temporary.get(ECharExtraFlag::kFailCamouflage)) {
+						AFF_FLAGS(vict).unset(EAffect::kDisguise);
+					}
 				}
-				SkipCamouflage(vict, mob);
-				if (EXTRA_FLAGGED(vict, EXTRA_FAILCAMOUFLAGE)) {
-					AFF_FLAGS(vict).unset(EAffect::kDisguise);
-				}
-				if (CAN_SEE(mob, vict)) {
+				if (sight::CanSee(mob, vict)) {
 					victim = vict;
 				}
 			}
@@ -177,7 +180,7 @@ void update_mob_memory(CharData *ch, CharData *victim) {
 			if (ch->IsFlagged(EMobFlag::kClone)) {
 				mobRemember(victim, ch->get_master());
 			} else if (ch->get_master()->in_room == victim->in_room
-				&& CAN_SEE(victim, ch->get_master())) {
+				&& sight::CanSee(victim, ch->get_master())) {
 				mobRemember(victim, ch->get_master());
 			}
 		}
@@ -193,7 +196,7 @@ void update_mob_memory(CharData *ch, CharData *victim) {
 			if (victim->IsFlagged(EMobFlag::kClone)) {
 				mobRemember(ch, victim->get_master());
 			} else if (victim->get_master()->in_room == ch->in_room
-				&& CAN_SEE(ch, victim->get_master())) {
+				&& sight::CanSee(ch, victim->get_master())) {
 				mobRemember(ch, victim->get_master());
 			}
 		}

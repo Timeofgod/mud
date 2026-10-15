@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+import sys
+import os
+import re
+import subprocess
+from datetime import datetime
+
+input_file, output_file, git_rev, buildtype, build_features, build_compiler, source_root = sys.argv[1:]
+
+# Ревизию берём на МОМЕНТ СБОРКИ, а не конфигурации. Этот скрипт запускается
+# каждым ninja (build_always_stale), поэтому после `git pull` + `ninja` версия
+# обновится сама -- без `meson setup --reconfigure` (issue #3472).
+# Значение из meson (git_rev) остаётся запасным: если git недоступен (например,
+# сборка из распакованного архива), используем его.
+try:
+    rev = subprocess.run(
+        ['git', '-C', source_root, 'rev-parse', '--short', 'HEAD'],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    if rev:
+        git_rev = rev
+except Exception:
+    pass
+
+# Сборка может идти там, где git недоступен или бесполезен: контейнер, worktree (у него .git --
+# файл-ссылка наружу контекста), распакованный архив. Тогда значения пробрасываются окружением.
+if not git_rev or git_rev == 'unknown':
+    git_rev = os.environ.get('BYLINS_GIT_REV', '') or git_rev or 'unknown'
+
+# issue.versioning: the 4th version part ("release") = total commit count -- monotonic,
+# +1 per commit. Computed at build time like the revision hash. If git is unavailable
+# (e.g. build from an unpacked archive) it falls back to 0, mirroring git_rev above.
+commit_count = "0"
+try:
+    cc = subprocess.run(
+        ['git', '-C', source_root, 'rev-list', '--count', 'HEAD'],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    if cc:
+        commit_count = cc
+except Exception:
+    pass
+
+if commit_count == "0":
+    commit_count = os.environ.get('BYLINS_COMMIT_COUNT', '') or "0"
+
+# major.minor.patch: explicit, from the repo-root VERSION file (single source of truth).
+try:
+    with open(f'{source_root}/VERSION.txt', encoding='ascii') as vf:
+        mmp = vf.read().strip()
+except Exception:
+    mmp = "0.0.0"
+
+engine_name = "BRusMUD"
+engine_version = f'{mmp}.{commit_count}'
+
+with open(input_file, encoding='utf-8') as f:
+    content = f.read()
+
+content = content.replace('${REVISION}', f'{git_rev} ({buildtype})')
+content = content.replace('${BUILD_COMPILER}', build_compiler)
+content = content.replace('${BUILD_FEATURES}', build_features)
+content = content.replace('${BUILD_DATETIME}', datetime.now().strftime('%b %d %Y %H:%M:%S'))
+content = content.replace('${ENGINE_NAME}', engine_name)
+content = content.replace('${ENGINE_VERSION}', engine_version)
+
+# Файл переписываем, только если изменилось что-то, кроме отметки времени сборки:
+# ninja запускает этот скрипт каждый раз (build_always_stale), и переписывание ради
+# одной лишь новой секунды заставляло бы перелинковывать бинарь на каждую сборку.
+# Побочное следствие: "build from" -- это когда данную ревизию собрали впервые.
+stamp = re.compile(r'(const char\* build_datetime = ")[^"]*(";)')
+
+def without_stamp(text):
+    return stamp.sub(r'\1\2', text)
+
+try:
+    with open(output_file, encoding='utf-8') as f:
+        if without_stamp(f.read()) == without_stamp(content):
+            sys.exit(0)
+except FileNotFoundError:
+    pass
+
+with open(output_file, 'w', encoding='utf-8') as f:
+    f.write(content)

@@ -7,21 +7,33 @@
 */
 
 #include "engine/core/iosystem.h"
+#include "utils/native_text.h"
+#include <array>
+#include <cstring>
+#include <string_view>
+#include "gameplay/core/experience.h"
+#include "administration/privilege.h"
+#include "utils/utils_encoding.h"
+#include "utils/grammar/gender.h"
+#include "gameplay/mechanics/sight.h"
 
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "gameplay/abilities/timed_abilities.h"
 #include "engine/network/descriptor_data.h"
+#include "engine/ui/cmd/do_mode.h"   // ApplyNawsScreenSize и границы размеров экрана
+#include "engine/network/naws.h"
 #include "engine/network/msdp/msdp.h"
 #include "engine/ui/color.h"
 #include "utils/logger.h"
 #include "utils/utils.h"
+#include "utils/utils_string.h"
 #include "engine/db/global_objects.h"
 #include "engine/network/msdp/msdp_constants.h"
-#include "gameplay/classes/classes.h"
+#include "gameplay/classes/pc_classes.h"
 #include "gameplay/core/game_limits.h"
 #include "gameplay/mechanics/weather.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 
 namespace iosystem {
@@ -65,7 +77,7 @@ void zlib_free(void *opaque, void *address);
 ssize_t perform_socket_read(socket_t desc, char *read_point, size_t space_left);
 int perform_subst(DescriptorData *t, char *orig, char *subst);
 std::string MakePrompt(DescriptorData *d);
-char *show_state(CharData *ch, CharData *victim);
+std::string show_state(CharData *ch, CharData *victim);
 
 void write_to_q(const char *txt, struct TextBlocksQueue *queue, int aliased) {
 	struct TextBlock *newt;
@@ -106,12 +118,13 @@ int get_from_q(struct TextBlocksQueue *queue, char *dest, int *aliased) {
 // Empty the queues before closing connection
 void flush_queues(DescriptorData *d) {
 	int dummy;
+	char discard[kMaxStringLength];
 
 	if (d->large_outbuf) {
 		d->large_outbuf->next = bufpool;
 		bufpool = d->large_outbuf;
 	}
-	while (get_from_q(&d->input, buf2, &dummy));
+	while (get_from_q(&d->input, discard, &dummy));
 }
 
 // Add a new string to a player's output queue
@@ -141,6 +154,25 @@ void write_to_output(const char *txt, DescriptorData *t) {
 	if (size + t->bufptr > kLargeBufSize - 1) {
 		t->bufptr = ~0ull;
 		buf_overflows++;
+		// Дальше и до конца такта весь вывод этому дескриптору молча выбрасывается (проверка
+		// bufptr == ~0ull в начале функции), а игрок об этом не узнает. Пишем в сислог, кому и
+		// на какой команде не хватило буфера -- иначе такие случаи видны только счётчиком в
+		// "показать статистика", без единой подробности.
+		// last_input заполняется на ЛЮБОЙ строке от клиента -- проверки состояния над той
+		// записью нет, -- так что в парольных состояниях там лежит сам пароль. В лог его
+		// отдавать нельзя: сислог читают и хранят.
+		const bool secret_input = t->state == EConState::kPassword
+			|| t->state == EConState::kNewpasswd
+			|| t->state == EConState::kCnfpasswd
+			|| t->state == EConState::kChpwdGetOld
+			|| t->state == EConState::kChpwdGetNew
+			|| t->state == EConState::kChpwdVrfy
+			|| t->state == EConState::kDelcnf1;
+		log("SYSERR: output overflow: %s [%s], команда '%s', в буфере %zu б, отброшено %zu б",
+			t->character ? GET_NAME(t->character) : "<без персонажа>",
+			*t->host ? t->host : "?",
+			secret_input ? "<ввод скрыт>" : t->last_input,
+			t->bufspace, size);
 		return;
 	}
 	buf_switches++;
@@ -170,6 +202,22 @@ void write_to_output(const char *txt, DescriptorData *t) {
  * ASSUMPTION: There will be no newlines in the raw input buffer when this
  * function is called.  We must maintain that before returning.
  */
+/**
+ * Принимает размер окна от клиента: разбирает подпереговоры и применяет их к персонажу.
+ *
+ * Возвращает длину разобранной последовательности -- её вырезает вызывающий; 0 значит,
+ * что последовательность пришла не целиком и дождётся следующего чтения.
+ */
+static size_t HandleNaws(DescriptorData *t, const char *begin, size_t available) {
+	const auto parsed = naws::Parse(std::string_view(begin, available));
+	if (parsed.complete) {
+		t->naws_width = parsed.width;
+		t->naws_height = parsed.height;
+		ApplyNawsScreenSize(t);
+	}
+	return parsed.consumed;
+}
+
 int process_input(DescriptorData *t) {
 	int failed_subst;
 	ssize_t bytes_read;
@@ -278,6 +326,17 @@ int process_input(DescriptorData *t) {
 				memmove(ptr, ptr + 3, bytes_read - (ptr - read_point) - 3 + 1);
 				bytes_read -= 3;
 				--ptr;
+			} else if (ptr[1] == (char) WILL || ptr[1] == (char) WONT) {
+				// WILL/WONT прежде не разбирались вовсе, и их байты оставались в тексте:
+				// клиент, сообщающий о своих возможностях, подсовывал игроку мусор в ввод
+				if (ptr[1] == (char) WILL && ptr[2] == (char) TELOPT_NAWS) {
+					// Клиент готов сообщать размер окна -- просим сообщать
+					const char do_naws[] = {(char) IAC, (char) DO, (char) TELOPT_NAWS};
+					write_to_descriptor(t->descriptor, do_naws, sizeof(do_naws));
+				}
+				memmove(ptr, ptr + 3, bytes_read - (ptr - read_point) - 3 + 1);
+				bytes_read -= 3;
+				--ptr;
 			} else if (ptr[1] == char(SB)) {
 				size_t sb_length = 0;
 				switch (ptr[2]) {
@@ -285,6 +344,10 @@ int process_input(DescriptorData *t) {
 						if (!runtime_config.msdp_disabled()) {
 							sb_length = msdp::handle_conversation(t, ptr, bytes_read - (ptr - read_point));
 						}
+						break;
+
+					case TELOPT_NAWS:
+						sb_length = HandleNaws(t, ptr, bytes_read - (ptr - read_point));
 						break;
 
 					default: break;
@@ -341,6 +404,16 @@ int process_input(DescriptorData *t) {
 		space_left = kMaxInputLength - 1;
 
 		for (ptr = read_point; (space_left > 1) && (ptr < nl_pos); ptr++) {
+			// ANSI-последовательность целиком, а не один байт ESC. Клиентские триггеры
+			// отдают перехваченную строку вместе с цветом, игрок отправляет её обратно, и
+			// раньше непечатный ESC отбрасывался ниже, а печатный остаток "[1;35m" уходил
+			// в текст и был виден всем в канале (точку с запятой в нём ещё и заменяло на
+			// запятую правило строкой ниже).
+			if (const auto escape = utils::AnsiEscapeLength(ptr, nl_pos); escape > 0) {
+				ptr += escape - 1;
+				continue;
+			}
+
 			// Нафиг точку с запятой - задрали уроды с тригерами (Кард)
 			if (*ptr == ';'
 				&&  (t->state == EConState::kPlaying
@@ -391,7 +464,7 @@ int process_input(DescriptorData *t) {
 			} else if (isascii(*ptr) && isprint(*ptr)) {
 				*(write_point++) = *ptr;
 				space_left--;
-				if (*ptr == '$' &&  t->state != EConState::kSedit)    // copy one character
+				if (*ptr == '$' &&  t->state != EConState::kSedit && t->state != EConState::kVedun)    // copy one character
 				{
 					*(write_point++) = '$';    // if it's a $, double it
 					space_left--;
@@ -403,15 +476,15 @@ int process_input(DescriptorData *t) {
 					case 0:
 					case kCodePageUTF8: *(write_point++) = *ptr;
 						break;
-					case kCodePageAlt: *(write_point++) = AtoK(*ptr);
+					case kCodePageAlt: *(write_point++) = codepages::AtoK(*ptr);
 						break;
 					case kCodePageWin:
 					case kCodePageWinz:
-					case kCodePageWinzZ: *(write_point++) = WtoK(*ptr);
+					case kCodePageWinzZ: *(write_point++) = codepages::WtoK(*ptr);
 						if (*ptr == (char) 255 && *(ptr + 1) == (char) 255 && ptr + 1 < nl_pos)
 							ptr++;
 						break;
-					case kCodePageWinzOld: *(write_point++) = WtoK(*ptr);
+					case kCodePageWinzOld: *(write_point++) = codepages::WtoK(*ptr);
 						break;
 				}
 				space_left--;
@@ -421,8 +494,20 @@ int process_input(DescriptorData *t) {
 			// Увы, это кое-что ломает, напр. wizhelp, или "г я использую zMUD"
 			if  (t->state == EConState::kPlaying ||  (t->state == EConState::kExdesc)) {
 				if (t->keytable == kCodePageWinzZ || t->keytable == kCodePageWinzOld) {
-					if (*(write_point - 1) == 'z') {
-						*(write_point - 1) = 'я';
+					// Буква задана СТРОКОВЫМ литералом: он байт-прозрачен, поэтому один и тот
+					// же код верен и для KOI8-R (1 байт), и для UTF-8 (2 байта) -- в отличие от
+					// символьного литерала, который под UTF-8 не помещается в char (issue #3681).
+					// В этой точке буфер содержит KOI8-R (таблицы легаси-кодировок выше отдают
+					// именно его), поэтому букву тоже берём в KOI8-R. Под KOI8-R-рантаймом
+					// to_koi8 - тождество, под UTF-8 - перекодировка литерала.
+					static const std::string kYaStorage = native_text::to_koi8("я");
+					const std::string_view kYaLetter = kYaStorage;
+					if (*(write_point - 1) == 'z' && space_left + 1 >= kYaLetter.size()) {
+						--write_point;
+						++space_left;
+						std::memcpy(write_point, kYaLetter.data(), kYaLetter.size());
+						write_point += kYaLetter.size();
+						space_left -= kYaLetter.size();
 					}
 				}
 			}
@@ -431,20 +516,19 @@ int process_input(DescriptorData *t) {
 
 		*write_point = '\0';
 
-		if (t->keytable == kCodePageUTF8) {
-			int i;
-			char utf8_tmp[kMaxSockBuf * 2 * 3];
-			size_t len_i, len_o;
-
-			len_i = strlen(tmp);
-
-			for (i = 0; i < kMaxSockBuf * 2 * 3; i++) {
-				utf8_tmp[i] = 0;
-			}
-			utf8_to_koi(tmp, utf8_tmp);
-			len_o = strlen(utf8_tmp);
-			strncpy(tmp, utf8_tmp, kMaxInputLength - 1);
-			space_left = space_left + len_i - len_o;
+		// Приводим собранную строку к нативной кодировке движка (issue #3681). После разбора
+		// выше в tmp лежит либо UTF-8 (клиент UTF-8), либо KOI8-R (все остальные кодировки
+		// клиентов - их таблицы отдают именно KOI8-R).
+		if (t->keytable != kCodePageUTF8) {
+			const size_t len_i = strlen(tmp);
+			const std::string native = native_text::from_koi8(tmp);
+			// После конверсии строка длиннее (кириллица идёт по два байта), так что в буфер
+			// она может не влезть. Отступаем до границы символа: обрезать посреди символа --
+			// значит отдать движку битый UTF-8 (issue #3681).
+			const std::size_t fits = native_text::truncate_offset(native, kMaxInputLength - 1);
+			std::memcpy(tmp, native.data(), fits);
+			tmp[fits] = '\0';
+			space_left = space_left + len_i - strlen(tmp);
 		}
 
 		if ((space_left <= 0) && (ptr < nl_pos)) {
@@ -464,8 +548,9 @@ int process_input(DescriptorData *t) {
 		if ((tmp[0] == '~') && (tmp[1] == 0)) {
 			// очистка входной очереди
 			int dummy;
+			char discard[kMaxStringLength];
 			tilde = 1;
-			while (get_from_q(&t->input, buf2, &dummy));
+			while (get_from_q(&t->input, discard, &dummy));
 		iosystem::write_to_output("Очередь очищена.\r\n", t);
 			tmp[0] = 0;
 		} else if (*tmp == '!' && !(*(tmp + 1)))
@@ -568,6 +653,8 @@ int perform_subst(DescriptorData *t, char *orig, char *subst) {
 
 	// terminate the string in case of an overflow from strncat
 	newsub[kMaxInputLength - 1] = '\0';
+	// ...и, если strncat оборвал строку посреди символа, отступаем до его границы (issue #3681).
+	newsub[native_text::truncate_offset(newsub, strlen(newsub))] = '\0';
 	strcpy(subst, newsub);
 
 	return (0);
@@ -708,6 +795,19 @@ int process_output(DescriptorData *t) {
 		return -1;
 	}
 
+#ifdef ENABLE_ADMIN_API
+	// Admin API uses raw JSON output, skip formatting
+	if (t->admin_api_mode) {
+		if (!t->output || !*t->output)
+			return 0;
+
+		int result = write_to_descriptor(t->descriptor, t->output, strlen(t->output));
+		t->bufptr = 0;
+		*t->output = '\0';
+		return (result >= 0 ? 1 : -1);
+	}
+#endif
+
 	// Отправляю данные снуперам
 	// handle snooping: prepend "% " and send to snooper
 	if (t->output && t->snoop_by) {
@@ -759,12 +859,11 @@ int process_output(DescriptorData *t) {
 	// easy color
 	int pos;
 	if ((t->character) && (pos = proc_color(i))) {
-		sprintf(buf,
-				"SYSERR: %s pos:%d player:%s in proc_color!",
-				(pos < 0 ? (pos == -1 ? "NULL buffer" : "zero length buffer") : "go out of buffer"),
-				pos,
-				GET_NAME(t->character));
-		mudlog(buf, BRF, kLvlGod, SYSLOG, true);
+		mudlog(fmt::format("SYSERR: {} pos:{} player:{} in proc_color!",
+						   (pos < 0 ? (pos == -1 ? "NULL buffer" : "zero length buffer") : "go out of buffer"),
+						   pos,
+						   GET_NAME(t->character)),
+			   BRF, kLvlGod, SYSLOG, true);
 	}
 
 	t->string_to_client_encoding(pi, po);
@@ -879,8 +978,8 @@ ssize_t perform_socket_write(socket_t desc, const char *txt, size_t length)
 #define write	socketwrite
 #endif
 
-#if defined(__APPLE__) || defined(__MACH__) || defined(__CYGWIN__)
 #include <sys/socket.h>
+#if defined(__APPLE__) || defined(__MACH__) || defined(__CYGWIN__)
 # ifndef MSG_NOSIGNAL
 #   define MSG_NOSIGNAL SO_NOSIGPIPE
 # endif
@@ -1049,7 +1148,7 @@ int mccp_end(DescriptorData *t, int ver) {
 }
 #endif
 
-int toggle_compression(DescriptorData *t) {
+int toggle_compression([[maybe_unused]] DescriptorData *t) {
 #if defined(HAVE_ZLIB)
 	if (t->mccp_version == 0)
 		return 0;
@@ -1087,7 +1186,7 @@ std::string MakePrompt(DescriptorData *d) {
 				  d->showstr_page, d->showstr_count);
 	} else if (d->writer) {
 		fmt::format_to(std::back_inserter(out), "] ");
-	} else if (d->state == EConState::kPlaying && !ch->IsNpc()) {
+	} else if (d->state == EConState::kPlaying && ch && ch->in_room != kNowhere && !ch->IsNpc()) {
 		if (GET_INVIS_LEV(ch)) {
 			fmt::format_to(std::back_inserter(out), "i{} ", GET_INVIS_LEV(ch));
 		}
@@ -1105,15 +1204,15 @@ std::string MakePrompt(DescriptorData *d) {
 		if (ch->IsFlagged(EPrf::kDispMana) && IS_MANA_CASTER(ch)) {
 			int current_mana = 100 * ch->mem_queue.stored;
 			fmt::format_to(std::back_inserter(out), "{}э{}{} ",
-					  GetColdValueColor(current_mana, GET_MAX_MANA((ch).get())), ch->mem_queue.stored, kColorNrm);
+					  GetColdValueColor(current_mana, Mana(GetRealWis((ch).get()))), ch->mem_queue.stored, kColorNrm);
 		}
 
 		if (ch->IsFlagged(EPrf::kDispExp)) {
-			if (IS_IMMORTAL(ch)) {
+			if (privilege::IsImmortal(ch.get())) {
 				fmt::format_to(std::back_inserter(out), "??? ");
 			} else {
 				fmt::format_to(std::back_inserter(out), "{}o ",
-						  GetExpUntilNextLvl(ch.get(), GetRealLevel(ch) + 1) - GET_EXP(ch));
+						  experience::GetExpUntilNextLvl(ch.get(), GetRealLevel(ch) + 1) - ch->get_exp());
 			}
 		}
 
@@ -1137,11 +1236,11 @@ std::string MakePrompt(DescriptorData *d) {
 		if (ch->IsFlagged(EPrf::kDispCooldowns)) {
 			fmt::format_to(std::back_inserter(out), "{}:{} ",
 					  MUD::Skill(ESkill::kGlobalCooldown).GetAbbr(),
-					  ch->getSkillCooldownInPulses(ESkill::kGlobalCooldown));
+					  ch->Skills().GetCooldownInPulses(ESkill::kGlobalCooldown));
 
 			for (const auto &skill : MUD::Skills()) {
 				if (skill.IsAvailable()) {
-					int cooldown = ch->getSkillCooldownInPulses(skill.GetId());
+					int cooldown = ch->Skills().GetCooldownInPulses(skill.GetId());
 					if (cooldown > 0) {
 						fmt::format_to(std::back_inserter(out), "{}:{} ", skill.GetAbbr(), cooldown);
 					}
@@ -1150,18 +1249,21 @@ std::string MakePrompt(DescriptorData *d) {
 		}
 
 		if (ch->IsFlagged(EPrf::kDispTimed)) {
-			for (auto timed = ch->timed; timed; timed = timed->next) {
-				if (timed->skill != ESkill::kWarcry && timed->skill != ESkill::kTurnUndead) {
+			for (auto timed : ch->timed_skill) {
+				int display_time = (timed.second - time(0) - 1) / 60 + 1;
+
+				if (display_time > 0 && timed.first != ESkill::kWarcry && timed.first != ESkill::kTurnUndead
+					&& timed.first != ESkill::kReligion) {
 					fmt::format_to(std::back_inserter(out), "{}:{} ",
-							  MUD::Skill(timed->skill).GetAbbr(), +timed->time);
+							  MUD::Skill(timed.first).GetAbbr(), +display_time);
 				}
 			}
-			if (ch->GetSkill(ESkill::kWarcry)) {
+			if (GetSkill(ch.get(), ESkill::kWarcry)) {
 				int wc_count = (kHoursPerDay - IsTimedBySkill(ch.get(), ESkill::kWarcry)) / kHoursPerWarcry;
 				fmt::format_to(std::back_inserter(out), "{}:{} ",
 						  MUD::Skill(ESkill::kWarcry).GetAbbr(), wc_count);
 			}
-			if (ch->GetSkill(ESkill::kTurnUndead)) {
+			if (GetSkill(ch.get(), ESkill::kTurnUndead)) {
 				auto bonus =
 					std::max(1, kHoursPerTurnUndead + (CanUseFeat(ch.get(), EFeat::kExorcist) ? -2 : 0));
 				fmt::format_to(std::back_inserter(out), "{}:{} ",
@@ -1176,7 +1278,7 @@ std::string MakePrompt(DescriptorData *d) {
 			}
 
 			if (ch->IsFlagged(EPrf::kDispMoney)) {
-				fmt::format_to(std::back_inserter(out), "{}G ", ch->get_gold());
+				fmt::format_to(std::back_inserter(out), "{}G ", currencies::GetHand(*ch, currencies::kGold));
 			}
 
 			if (ch->IsFlagged(EPrf::kDispExits)) {
@@ -1212,7 +1314,7 @@ std::string MakePrompt(DescriptorData *d) {
 	return to_string(out);
 }
 
-char *show_state(CharData *ch, CharData *victim) {
+std::string show_state(CharData *ch, CharData *victim) {
 	static const char *WORD_STATE[12] = {"Смертельно ранен",
 										 "О.тяжело ранен",
 										 "О.тяжело ранен",
@@ -1228,10 +1330,11 @@ char *show_state(CharData *ch, CharData *victim) {
 	};
 
 	const int ch_hp = posi_value(victim->get_hit(), victim->get_real_max_hit()) + 1;
-	sprintf(buf, "%s&q[%s:%s%s]%s&Q ",
-			GetWarmValueColor(victim->get_hit(), victim->get_real_max_hit()),
-			PERS(victim, ch, 0), WORD_STATE[ch_hp], GET_CH_SUF_6(victim), kColorNrm);
-	return buf;
+	// &w, не &n: тот же &q[...]&w&Q статус-блок, что в do_affects.cpp -- один из
+	// мэппер-чувствительных мест из PR #3897, closing-цвет там должен остаться белым.
+	return fmt::format("{}&q[{}:{}{}]&w&Q ",
+					   GetWarmValueColor(victim->get_hit(), victim->get_real_max_hit()),
+					   sight::PersonName(victim, ch, 0), WORD_STATE[ch_hp], grammar::SexEnding((victim)->get_sex(), 6));
 }
 
 } // namespace iosystem

@@ -8,21 +8,23 @@
 
 #include "engine/entities/char_data.h"
 #include "gameplay/mechanics/sight.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
 
 void do_diagnose(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	CharData *vict;
 
-	one_argument(argument, buf);
+	char name[kMaxInputLength];
+	one_argument(argument, name);
 
-	if (*buf) {
-		if (!(vict = get_char_vis(ch, buf, EFind::kCharInRoom)))
-			SendMsgToChar(NOPERSON, ch);
+	if (*name) {
+		vict = target_resolver::FindCharInRoom(ch, name);
+		if (!vict)
+			SendMsgToChar(CommonMsg(ECommonMsg::kNoPerson) + "\r\n", ch);
 		else
-			diag_char_to_char(vict, ch);
+			sight::diag_char_to_char(vict, ch);
 	} else {
 		if (ch->GetEnemy())
-			diag_char_to_char(ch->GetEnemy(), ch);
+			sight::diag_char_to_char(ch->GetEnemy(), ch);
 		else
 			SendMsgToChar("На кого вы хотите взглянуть?\r\n", ch);
 	}

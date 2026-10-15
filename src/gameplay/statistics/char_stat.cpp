@@ -7,11 +7,13 @@
 */
 
 #include "gameplay/statistics/char_stat.h"
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/mechanics/mount.h"
 
 #include "engine/entities/char_data.h"
 #include "engine/ui/table_wrapper.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 void CharStat::Increase(ECategory category, ullong increment) {
 	try {
@@ -130,17 +132,15 @@ void CharStat::UpdateOnKill(CharData *ch, CharData *killer, ullong dec_exp) {
 
 	if (rkiller
 		&& rkiller->IsNpc()
-		&& (IS_CHARMICE(rkiller)
-			|| IS_HORSE(rkiller)
+		&& (IsCharmice(rkiller)
+			|| mount::IsHorse(rkiller)
 			|| killer->IsFlagged(EMobFlag::kTutelar)
 			|| killer->IsFlagged(EMobFlag::kMentalShadow))) {
 		if (rkiller->has_master()) {
 			rkiller = rkiller->get_master();
 		} else {
-			snprintf(buf, kMaxStringLength,
-					 "die: %s killed by %s (without master)",
-					 GET_PAD(ch, 0), GET_PAD(rkiller, 0));
-			mudlog(buf, LGH, kLvlImmortal, SYSLOG, true);
+			mudlog(fmt::format("die: {} killed by {} (without master)", GET_PAD(ch, 0), GET_PAD(rkiller, 0)),
+				   LGH, kLvlImmortal, SYSLOG, true);
 			rkiller = nullptr;
 		}
 	}

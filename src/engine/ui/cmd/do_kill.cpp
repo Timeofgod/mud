@@ -1,4 +1,5 @@
 #include "do_kill.h"
+#include "administration/privilege.h"
 
 #include "gameplay/fight/fight.h"
 #include "gameplay/fight/pk.h"
@@ -7,7 +8,8 @@
 #include "gameplay/fight/common.h"
 
 void DoHit(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
-	CharData *vict = FindVictim(ch, argument);
+	std::string target_name;
+	CharData *vict = FindVictim(ch, argument, target_name);
 	if (!vict) {
 		SendMsgToChar("Вы не видите цели.\r\n", ch);
 		return;
@@ -31,7 +33,7 @@ void DoHit(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		return;
 	}
 
-	if (subcmd != kScmdMurder && !check_pkill(ch, vict, arg)) {
+	if (subcmd != kScmdMurder && !check_pkill(ch, vict, target_name)) {
 		return;
 	}
 
@@ -59,7 +61,7 @@ void DoHit(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 }
 
 void DoKill(CharData *ch, char *argument, int cmd, int subcmd) {
-	if (!IS_GRGOD(ch)) {
+	if (!privilege::IsGrGod(ch)) {
 		DoHit(ch, argument, cmd, subcmd);
 		return;
 	};
@@ -72,7 +74,7 @@ void DoKill(CharData *ch, char *argument, int cmd, int subcmd) {
 		SendMsgToChar("Вы мазохист... :(\r\n", ch);
 		return;
 	};
-	if (IS_IMPL(vict) || vict->IsFlagged(EPrf::kCoderinfo)) {
+	if (privilege::IsImpl(vict) || vict->IsFlagged(EPrf::kCoderinfo)) {
 		SendMsgToChar("А если он вас чайником долбанет? Думай, Господи, думай!\r\n", ch);
 	} else {
 		act("Вы обратили $N3 в прах! Взглядом! Одним!", false, ch, 0, vict, kToChar);

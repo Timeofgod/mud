@@ -7,32 +7,36 @@
 */
 
 #include "engine/entities/char_data.h"
+#include "utils/utils_string.h"
+#include "administration/privilege.h"
 #include "engine/ui/cmd/do_recall.h"
 #include "engine/db/world_characters.h"
 #include "gameplay/clans/house.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
 
 void DoSwitch(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	one_argument(argument, arg);
+	std::string remains;
+	const std::string arg = utils::ExtractFirstArgumentLower(argument, remains);
 
 	if (ch->desc->original) {
 		SendMsgToChar("Вы уже в чьем-то теле.\r\n", ch);
-	} else if (!*arg) {
+	} else if (arg.empty()) {
 		SendMsgToChar("Стать кем?\r\n", ch);
 	} else {
-		const auto visible_character = get_char_vis(ch, arg, EFind::kCharInWorld);
+		CharData *visible_character = nullptr;
+		visible_character = target_resolver::FindCharInWorld(ch, arg);
 		if (!visible_character) {
 			SendMsgToChar("Нет такого создания.\r\n", ch);
 		} else if (ch == visible_character) {
 			SendMsgToChar("Вы и так им являетесь.\r\n", ch);
 		} else if (visible_character->desc) {
 			SendMsgToChar("Это тело уже под контролем.\r\n", ch);
-		} else if (!IS_IMPL(ch) && !visible_character->IsNpc()) {
+		} else if (!privilege::IsImpl(ch) && !visible_character->IsNpc()) {
 			SendMsgToChar("Вы не столь могущественны, чтобы контроолировать тело игрока.\r\n", ch);
 		} else if (GetRealLevel(ch) < kLvlGreatGod
 			&& ROOM_FLAGGED(visible_character->in_room, ERoomFlag::kGodsRoom)) {
 			SendMsgToChar("Вы не можете находиться в той комнате.\r\n", ch);
-		} else if (!IS_GRGOD(ch)
+		} else if (!privilege::IsGrGod(ch)
 			&& !Clan::MayEnter(ch, visible_character->in_room, kHousePortal)) {
 			SendMsgToChar("Вы не сможете проникнуть на частную территорию.\r\n", ch);
 		} else {
@@ -43,7 +47,7 @@ void DoSwitch(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				return;
 			}
 
-			SendMsgToChar(OK, ch);
+			SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 
 			ch->desc->character = victim;
 			ch->desc->original = me;

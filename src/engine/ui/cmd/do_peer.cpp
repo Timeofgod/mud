@@ -6,8 +6,9 @@
 */
 
 #include "engine/entities/char_data.h"
+#include "administration/privilege.h"
 #include "gameplay/mechanics/sight.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_movement.h"
 
 void DoPeer(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/) {
 	int i;
@@ -21,13 +22,13 @@ void DoPeer(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("Виделся часто сон беспокойный...\r\n", ch);
 	else if (AFF_FLAGGED(ch, EAffect::kBlind))
 		SendMsgToChar("Вы ослеплены!\r\n", ch);
-	else if (ch->GetSkill(ESkill::kLooking)) {
+	else if (GetSkill(ch, ESkill::kLooking)) {
 		if (check_moves(ch, kLookingMoves)) {
 			SendMsgToChar("Вы напрягли зрение и начали присматриваться по сторонам.\r\n", ch);
 			for (i = 0; i < EDirection::kMaxDirNum; i++)
-				look_in_direction(ch, i, EXIT_SHOW_LOOKING);
-			if (!(IS_IMMORTAL(ch) || GET_GOD_FLAG(ch, EGf::kGodsLike)))
-				SetWaitState(ch, 1 * kBattleRound);
+				sight::look_in_direction(ch, i, sight::EXIT_SHOW_LOOKING);
+			if (!(privilege::IsImmortal(ch) || GET_GOD_FLAG(ch, EGf::kGodsLike)))
+				SetBattleLag(ch, 1);
 		}
 	} else
 		SendMsgToChar("Вам явно не хватает этого умения.\r\n", ch);

@@ -7,15 +7,16 @@
 */
 
 #include "engine/entities/char_data.h"
+#include "administration/privilege.h"
 
 void do_antigods(CharData *ch, char * /*argument*/, int/* cmd*/, int/* subcmd*/) {
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		SendMsgToChar("Оно вам надо?\r\n", ch);
 		return;
 	}
 	if (AFF_FLAGGED(ch, EAffect::kGodsShield)) {
-		if (IsAffectedBySpell(ch, ESpell::kGodsShield)) {
-			RemoveAffectFromChar(ch, ESpell::kGodsShield);
+		if (IsAffected(ch, EAffect::kGodsShield)) {
+			RemoveAffectFromChar(ch, EAffect::kGodsShield);
 		}
 		AFF_FLAGS(ch).unset(EAffect::kGodsShield);
 		SendMsgToChar("Голубой кокон вокруг вашего тела угас.\r\n", ch);

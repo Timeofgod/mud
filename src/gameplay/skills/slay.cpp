@@ -3,6 +3,9 @@
 //
 
 #include "slay.h"
+#include "administration/privilege.h"
+#include "skill_messages.h"
+#include "engine/db/global_objects.h"
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/common.h"
 #include "gameplay/fight/fight_hit.h"
@@ -13,22 +16,21 @@
 #include <cmath>
 
 void go_slay(CharData *ch, CharData *vict) {
-
 	if (IsUnableToAct(ch) || AFF_FLAGGED(ch, EAffect::kStopRight)) {
-		SendMsgToChar("Вы временно не в состоянии сражаться.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSlay, ESkillMsg::kCantFightNow) + "\r\n", ch);
 		return;
 	}
-
 	if (ch->IsFlagged(EPrf::kIronWind)) {
 		SendMsgToChar("Вы не можете применять этот прием в таком состоянии!\r\n", ch);
 		return;
 	}
-
 	if (ch->GetPosition() < EPosition::kFight) {
-		SendMsgToChar("Вам стоит встать на ноги.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSlay, ESkillMsg::kGetOnFeet) + "\r\n", ch);
 		return;
 	}
-
+//	if (vict->purged()) {
+//		return;
+//	}
 	vict = TryToFindProtector(vict, ch);
 
 	ObjData *GetUsedWeapon(CharData *ch, fight::AttackType AttackType);
@@ -56,9 +58,9 @@ void go_slay(CharData *ch, CharData *vict) {
 		lag = 2;
 
 	} else {
-		dam = (number(ceil((((GetRealStr(ch) + weapon_dmg) / 1.2) * (ch->GetSkill(ESkill::kSlay) / 6)
+		dam = (number(ceil((((GetRealStr(ch) + weapon_dmg) / 1.2) * (GetSkill(ch, ESkill::kSlay) / 6)
 						  + ((GetRealDamroll(ch)) * 2)) / 1.25),
-					  ceil((((GetRealStr(ch) + weapon_dmg) / 1.2) * (ch->GetSkill(ESkill::kSlay) / 6)
+					  ceil((((GetRealStr(ch) + weapon_dmg) / 1.2) * (GetSkill(ch, ESkill::kSlay) / 6)
 						  + ((GetRealDamroll(ch)) * 2)) * 1.25)) *
 			GetRealLevel(ch)) / 30;
 
@@ -76,7 +78,7 @@ void go_slay(CharData *ch, CharData *vict) {
 		}
 	}
 	switch (lag) {
-		case 0: SetWait(ch, 0, true);
+		case 0: ch->zero_wait();
 			break;
 		case 1: SetSkillCooldownInFight(ch, ESkill::kGlobalCooldown, 1);
 			break;
@@ -86,41 +88,42 @@ void go_slay(CharData *ch, CharData *vict) {
 }
 
 void do_slay(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	CharData *vict = FindVictim(ch, argument);
+	std::string target_name;
+	CharData *vict = FindVictim(ch, argument, target_name);
 
-	if (!ch->GetSkill(ESkill::kSlay)) {
-		SendMsgToChar("Вы не умеете сражать, только сра... В общем, не умеете.\r\n", ch);
+	if (!GetSkill(ch, ESkill::kSlay)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSlay, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 	if (!vict) {
-		SendMsgToChar("Кого же вы хотите сразить?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSlay, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 	if (ch == vict) {
-		SendMsgToChar("Сразить себя?! Вы же дружинник, а не самурай!\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSlay, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 	if (ch->IsFlagged(EPrf::kAwake)) {
 		SendMsgToChar("Вы не можете потрошить врагов и при этом осторожничать!\r\n", ch);
 		return;
 	}
-	if (!IS_IMMORTAL(ch) && !(GET_EQ(ch, EEquipPos::kWield) || GET_EQ(ch, EEquipPos::kBoths))) {
-		SendMsgToChar("Для этого Вам потребуется оружие!\r\n", ch);
+	if (!privilege::IsImmortal(ch) && !(GET_EQ(ch, EEquipPos::kWield) || GET_EQ(ch, EEquipPos::kBoths))) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSlay, ESkillMsg::kNeedWeapon) + "\r\n", ch);
 		return;
 	}
-	if (!(AFF_FLAGGED(vict, EAffect::kConfused) || IS_IMMORTAL(ch))) {
+	if (!(AFF_FLAGGED(vict, EAffect::kConfused) || privilege::IsImmortal(ch))) {
 		SendMsgToChar("Это не так просто! Сначала попробуйте обескуражить противника!\r\n", ch);
 		return;
 	}
-	if (ch->HasCooldown(ESkill::kSlay)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kSlay)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kSlay, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	}
 	if (!may_kill_here(ch, vict, argument))
 		return;
-	if (!check_pkill(ch, vict, arg))
+	if (!check_pkill(ch, vict, target_name))
 		return;
-	if (IS_IMPL(ch) || !ch->GetEnemy()) {
+	if (privilege::IsImpl(ch) || !ch->GetEnemy()) {
 		go_slay(ch, vict);
 	} else if (IsHaveNoExtraAttack(ch)) {
 		if (!ch->IsNpc())

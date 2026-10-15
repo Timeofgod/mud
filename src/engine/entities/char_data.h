@@ -5,19 +5,25 @@
 #define CHAR_HPP_INCLUDED
 
 #include "player_i.h"
+#include "gameplay/mechanics/alignment.h"
 #include "administration/punishments.h"
-#include "gameplay/skills/morph.hpp"
+#include "gameplay/fight/pk.h"
+#include "gameplay/magic/magic_temp_spells.h"
 #include "gameplay/mechanics/obj_sets.h"
 #include "gameplay/mechanics/dead_load.h"
 #include "engine/db/db.h"
 #include "entities_constants.h"
+#include "engine/structs/bitset_flags.h"
+#include "gameplay/magic/spells_constants.h"  // issue.flags-migration: EExtraAttackFlag for battle_affects
 #include "room_data.h"
+#include "obj_data.h"
+#include "engine/scripting/dg_scripts.h"
 #include "gameplay/communication/ignores.h"
 #include "gameplay/crafting/im.h"
 #include "gameplay/skills/skills.h"
-#include "gameplay/skills/townportal.h"
+#include "gameplay/economics/currency_storage.h"
+#include "gameplay/mechanics/rune_stones.h"
 #include "utils/utils.h"
-#include "engine/core/conf.h"
 #include "gameplay/affects/affect_data.h"
 #include "gameplay/mechanics/mem_queue.h"
 #include "gameplay/ai/mob_memory.h"
@@ -28,11 +34,6 @@
 #include <bitset>
 #include <list>
 #include <map>
-
-// pernalty types
-enum { P_DAMROLL, P_HITROLL, P_CAST, P_MEM_GAIN, P_MOVE_GAIN, P_HIT_GAIN, P_AC };
-
-enum { DRUNK, FULL, THIRST };
 
 // These data contain information about a players time data
 struct time_data {
@@ -53,17 +54,16 @@ struct char_player_data {
 
 	std::array<std::string, 6> PNames;
 	ubyte Religion;
-	ubyte Kin;
 	ubyte Race;        // PC / NPC's race
 };
 
-struct TemporarySpell {
-	ESpell spell{ESpell::kUndefined};
-	time_t set_time{0};
-	time_t duration{0};
+enum class EBriefShieldsMode : int {
+	kOff = 0,
+	kBrief = 1,
+	kCompact = 2,
+	kCompressed = 3
 };
-// кол-во +слотов со шмоток
-const int MAX_ADD_SLOTS = 10;
+const int MAX_ADD_SLOTS = 10;  // кол-во +слотов со шмоток
 
 // Char's additional abilities. Used only while work
 struct char_played_ability_data {
@@ -87,6 +87,7 @@ struct char_played_ability_data {
 	int cast_success;
 	int initiative_add;
 	int poison_add;
+	int bind_add;        // issue.affects-improve: EApply::kBind accumulator (no-flee); not persisted
 	int skill_reduce_add;
 	int pray_add;
 	int percent_exp_add;
@@ -132,8 +133,9 @@ struct char_point_data {
  */
 struct char_special_data_saved {
 	int alignment;        // +-1000 for alignments
-	FlagData act;        // act flag for NPC's; player flag for PC's
-	FlagData affected_by;
+	BitsetFlags<EPlrFlag> plr_flags;   // PC flags (was the PC half of the shared act field)
+	BitsetFlags<EMobFlag> mob_flags;   // NPC action flags (was the NPC half of act)
+	BitsetFlags<EAffect> affected_by;
 	// Bitvector for spells/skills affected by
 };
 
@@ -151,20 +153,20 @@ struct char_special_data {
 
 // Specials used by NPCs, not PCs
 struct mob_special_data {
-	byte last_direction;    // The last direction the monster went
+	int last_direction;    // The last direction the monster went
 	int attack_type;        // The Attack Type Bitvector for NPC's
 	EPosition default_pos;    // Default position for NPC
 	mob_ai::MemoryRecord *memory;    // List of attackers to remember
-	byte damnodice;        // The number of damage dice's
-	byte damsizedice;    // The size of the damage dice's
+	int damnodice;        // The number of damage dice's
+	int damsizedice;    // The size of the damage dice's
 	std::array<int, kMaxDest> dest;
 	int dest_dir;
 	int dest_pos;
 	int dest_count;
 	int activity;
-	FlagData npc_flags;
-	byte extra_attack;
-	byte like_work;
+	BitsetFlags<ENpcFlag> npc_flags;
+	int extra_attack;
+	int like_work;
 	int MaxFactor;
 	int GoldNoDs;
 	int GoldSiDs;
@@ -189,6 +191,9 @@ struct CastAttack {
 	CharData *tch{nullptr};
 	ObjData *tobj{nullptr};
 	RoomData *troom{nullptr};
+	// issue #4000: остаток строки каста. Каст в бою откладывается до своего раунда, и дописанное
+	// игроком слово (вид скелета) должно дожить до него, иначе заклинание сработает как без него.
+	std::string extra;
 };
 
 struct player_special_data_saved {
@@ -197,7 +202,7 @@ struct player_special_data_saved {
 	int wimp_level;        // Below this # of hit points, flee!
 	int invis_level;        // level of invisibility
 	RoomVnum load_room;    // Which room to place char in
-	FlagData pref;        // preference flags for PC's.
+	BitsetFlags<EPrf> pref;        // preference flags for PC's.
 	int bad_pws;        // number of bad password attemps
 	std::array<int, 3> conditions{};        // Drunk, full, thirsty
 
@@ -216,6 +221,7 @@ struct player_special_data_saved {
 	CharStat personal_statistics_;
 	long ntfyExchangePrice;
 	int HiredCost;
+	EBriefShieldsMode brief_shields_mode;
 	unsigned int who_mana; // количество энергии для использования команды кто
 	unsigned long int telegram_id;// идентификатор телеграма
 	time_t lastGloryRespecTime; // дата последнего респека славой
@@ -245,57 +251,16 @@ struct player_special_data {
 
   	network::LogonRecords logons;
 
-// Punishments structs
-  	punishments::Punish pmute;
-  	punishments::Punish pdumb;
-  	punishments::Punish phell;
-  	punishments::Punish pname;
-  	punishments::Punish pfreeze;
-  	punishments::Punish pgcurse;
-  	punishments::Punish punreg;
+	punishments::CharPunishments punishments;  // mute/dumb/hell/name/freeze/gcurse/unreg
 
 	char *clanStatus; // строка для отображения приписки по кто
-	// TODO: однозначно переписать
 	std::shared_ptr<class Clan> clan; // собсна клан, если он есть
 	std::shared_ptr<class ClanMember> clan_member; // поле мембера в клане
 
 	static player_special_data::shared_ptr s_for_mobiles;
 };
 
-enum {
-	MOB_ROLE_BOSS,
-	MOB_ROLE_MINION,
-	MOB_ROLE_TANK,
-	MOB_ROLE_MELEE_DMG,
-	MOB_ROLE_ARCHER,
-	MOB_ROLE_ROGUE,
-	MOB_ROLE_MAGE_DMG,
-	MOB_ROLE_MAGE_BUFF,
-	MOB_ROLE_HEALER,
-	MOB_ROLE_TOTAL_NUM
-};
-
-struct attacker_node {
-	attacker_node() : damage(0), rounds(0) {};
-	// влитый дамаг
-	int damage;
-	// кол-во раундов в бою
-	int rounds;
-};
-
-enum {
-	ATTACKER_DAMAGE,
-	ATTACKER_ROUNDS
-};
-
-struct CharacterSkillDataType {
-	int skillLevel;
-	unsigned cooldown;
-
-	void decreaseCooldown(unsigned value);
-};
-
-using CharSkillsType = std::map<ESkill, CharacterSkillDataType>;
+#include "gameplay/skills/character_skills.h"
 
 class ProtectedCharData;    // to break up cyclic dependencies
 
@@ -332,13 +297,22 @@ class ProtectedCharData : public PlayerI {
 };
 
 // * Общий класс для игроков/мобов.
+class CharData;   // for FightTargets below
+
+// CharData's combat-relationship targets, grouped: each must be cleared when its target is
+// extracted. Reached through get/set_protecting, get/set_touching and Get/SetEnemy.
+struct FightTargets {
+	CharData *enemy{nullptr};         // current fight target
+	CharData *protecting{nullptr};    // target of 'прикрыть' (cover)
+	CharData *intercepting{nullptr};  // target of 'перехватить' (intercept)
+};
+
 class CharData : public ProtectedCharData {
 // новое
  public:
 	using ptr_t = CharData *;
 	using shared_ptr = std::shared_ptr<CharData>;
 	using char_affects_list_t = std::list<Affect<EApply>::shared_ptr>;
-	using morphs_list_t = std::list<std::string>;
 	using role_t = std::bitset<9>;
 	using followers_list_t = std::list<CharData *>;
 
@@ -348,18 +322,18 @@ class CharData : public ProtectedCharData {
 	friend void do_mtransform(CharData *ch, char *argument, int cmd, int subcmd);
 	friend void medit_mobile_copy(CharData *dst, CharData *src);
 
-	void SetFeat(EFeat feat_id) { real_abils.Feats.set(to_underlying(feat_id)); };
-	void UnsetFeat(EFeat feat_id) { real_abils.Feats.reset(to_underlying(feat_id)); };
+	void SetFeat(EFeat feat_id) { real_abils.Feats.set(to_underlying(feat_id)); affect_total(this); };
+	void UnsetFeat(EFeat feat_id) { real_abils.Feats.reset(to_underlying(feat_id)); affect_total(this); };
 	bool HaveFeat(EFeat feat_id) const { return real_abils.Feats.test(to_underlying(feat_id)); };
 
-	void set_skill(ESkill skill_id, int percent);
-	void SetSkillAfterRemort();
 	void clear_skills();
-	int GetSkill(ESkill skill_id) const;
-	int GetSkillWithoutEquip(ESkill skill_id) const;
 	int get_skills_count() const;
-	int GetEquippedSkill(ESkill skill_id) const;
-	int GetMorphSkill(ESkill skill_id) const;
+	const CharacterSkills::Map &GetCharSkills() const { return skills_.data(); }
+	CharacterSkills &Skills() { return skills_; }
+	const CharacterSkills &Skills() const { return skills_; }
+	// Sets a skill's cooldown and registers the char in the global cooldown list (the one cooldown
+	// op that is a char-level concern, hence here and not on CharacterSkills).
+	void setSkillCooldown(ESkill skill_id, unsigned cooldown);
 	int get_skill_bonus() const;
 	void set_skill_bonus(int);
 	int GetAddSkill(ESkill skill_id) const;
@@ -369,7 +343,6 @@ class CharData : public ProtectedCharData {
 	void add_obj_slot(int slot_num, int count);
 	// ресет нпс
 	void restore_npc();
-	////////////////////////////////////////////////////////////////////////////
 	CharData *get_touching() const;
 	void set_touching(CharData *vict);
 
@@ -385,14 +358,13 @@ class CharData : public ProtectedCharData {
 	CharData *GetEnemy() const;
 	void SetEnemy(CharData *enemy);
 
-	// TODO: касты можно сделать и красивее (+ troom не используется, CastSpell/cast_subst/cast_obj только по разу)
-	void SetCast(ESpell spell_id, ESpell spell_subst, CharData *tch, ObjData *tobj, RoomData *troom);
+	void SetCast(ESpell spell_id, ESpell spell_subst, CharData *tch, ObjData *tobj, RoomData *troom,
+				 const std::string &extra = {});
 	ESpell GetCastSpell() const;
 	ESpell GetCastSubst() const;
 	CharData *GetCastChar() const;
 	ObjData *GetCastObj() const;
-
-	////////////////////////////////////////////////////////////////////////////
+	[[nodiscard]] const std::string &GetCastExtra() const;
 
 	bool purged() const;
 
@@ -431,6 +403,8 @@ class CharData : public ProtectedCharData {
 
 	time_t get_last_logon() const;
 	void set_last_logon(time_t num);
+	time_t get_last_state_save() const;
+	void set_last_state_save(time_t num);
 
 	time_t get_last_exchange() const;
 	void set_last_exchange(time_t num);
@@ -443,8 +417,6 @@ class CharData : public ProtectedCharData {
 	void set_height(ubyte);
 	ubyte get_religion() const;
 	void set_religion(ubyte);
-	ubyte get_kin() const;
-	void set_kin(ubyte);
 	ubyte get_race() const;
 	void set_race(ubyte);
 	int get_hit() const;
@@ -466,21 +438,9 @@ class CharData : public ProtectedCharData {
 	int get_movereg() const;
 	void set_movereg(int);
 
-	////////////////////////////////////////////////////////////////////////////
-	long get_gold() const;
-	long get_bank() const;
-	long get_total_gold() const;
-
-	void add_gold(long gold, bool log = true, bool clan_tax = false);
-	void add_bank(long gold, bool log = true);
-
-	void set_gold(long num, bool log = true);
-	void set_bank(long num, bool log = true);
-
-	long remove_gold(long num, bool log = true);
-	long remove_bank(long num, bool log = true);
-	long remove_both_gold(long num, bool log = true);
-	////////////////////////////////////////////////////////////////////////////
+	// issue.currency-storage: the per-owner currency container (single mutation chokepoint).
+	currencies::CurrencyStorage &currency_storage() { return currency_storage_; }
+	[[nodiscard]] const currencies::CurrencyStorage &currency_storage() const { return currency_storage_; }
 
 	int calc_morale() const;
 
@@ -510,7 +470,6 @@ class CharData : public ProtectedCharData {
 	void set_cha(int);
 	void inc_cha(int);
 
-	////////////////////////////////////////////////////////////////////////////
 	void clear_add_apply_affects();
 	int get_str_add() const;
 	void set_str_add(int);
@@ -524,48 +483,18 @@ class CharData : public ProtectedCharData {
 	void set_int_add(int);
 	int get_cha_add() const;
 	void set_cha_add(int);
-	////////////////////////////////////////////////////////////////////////////
-
-	/**
-	 * \return поле group из зон файла данного моба
-	 * <= 1 - обычная зона (соло), >= 2 - групповая зона на указанное кол-во человек
-	 */
-	int get_zone_group() const;
 
 	/**
 	** Returns true if character is mob and located in used zone.
 	**/
 	bool in_used_zone() const;
 
-	/**
-	 * Возвращает коэффициент штрафа за состояние
-	**/
-	float get_cond_penalty(int type) const;
-
-	bool know_morph(const std::string &morph_id) const;
-	void add_morph(const std::string &morph_id);
-	void clear_morphs();
-	void set_morph(const MorphPtr& morph);
-	void reset_morph();
-	size_t get_morphs_count() const;
-	const morphs_list_t &get_morphs();
-	bool is_morphed() const;
-	void set_normal_morph();
-
 	std::string GetTitle() const;
-	std::string get_morphed_name() const;
 	std::string get_pretitle() const;
-	std::string get_race_name() const;
 	std::string GetTitleAndName();
 	std::string GetNameWithTitleOrRace();
 	std::string race_or_title();
-	std::string get_morphed_title() const;
-	std::string get_cover_desc();
-	std::string get_morph_desc() const;
-	int GetTrainedSkill(ESkill skill_num) const;
-	void set_morphed_skill(ESkill skill_num, int percent);
 	bool isAffected(EAffect flag) const;
-	const IMorph::affects_list_t &GetMorphAffects();
 
 	void set_who_mana(unsigned int);
 	void set_who_last(time_t);
@@ -577,15 +506,13 @@ class CharData : public ProtectedCharData {
 	void set_role(unsigned num, bool flag);
 	const CharData::role_t &get_role_bits() const;
 
-	void add_attacker(CharData *ch, unsigned type, int num);
-	int get_attacker(CharData *ch, unsigned type) const;
-	std::pair<int /* uid */, int /* rounds */> get_max_damager_in_room() const;
+	void mark_attacked(CharData *attacker);
 
-	void inc_restore_timer(int num);
+	// issue.mob-flag-affect-materialization: returns true on the tick the out-of-combat restore fires,
+	// so the caller can re-materialize the mob's dispelled intrinsic buffs.
+	bool inc_restore_timer(int num);
 	obj_sets::activ_sum &obj_bonus();
-
-	void set_ruble(int ruble);
-	long get_ruble();
+	[[nodiscard]] const obj_sets::activ_sum &obj_bonus() const { return obj_bonus_; }
 
 	void set_souls(int souls);
 	void inc_souls();
@@ -597,19 +524,9 @@ class CharData : public ProtectedCharData {
 	void set_wait(const unsigned _);
 	void wait_dec() { m_wait -= 0 < m_wait ? 1 : 0; }
 	void zero_wait() { m_wait = 0; }
-	void setSkillCooldown(ESkill skillID, unsigned cooldown);
-	void decreaseSkillsCooldowns(unsigned value);
-	bool haveSkillCooldown(ESkill skillID);
-	bool HasCooldown(ESkill skillID);
-	bool HaveDecreaseCooldowns();
-	int getSkillCooldownInPulses(ESkill skillID);
-	void ZeroCooldowns();
-	unsigned getSkillCooldown(ESkill skillID);
 
 	void reset() override;
 
-	void set_abstinent();
-	char_affects_list_t::iterator AffectRemove(const char_affects_list_t::iterator &affect_i);
 	bool has_any_affect(const affects_list_t &affects);
 	size_t remove_random_affects(size_t count);
 
@@ -617,14 +534,7 @@ class CharData : public ProtectedCharData {
 	void set_role(const role_t &new_role) { role_ = new_role; }
 	void msdp_report(const std::string &name);
 
-	void removeGroupFlags();
-	void add_follower(CharData *ch);
-	/** Do NOT call this before having checked if a circle of followers
-	* will arise. CH will follow leader
-	* \param silent - для смены лидера группы без лишнего спама (по дефолту 0)
-	*/
-	void add_follower_silently(CharData *ch);
-	followers_list_t get_followers_list() const;
+	const followers_list_t &get_followers_list() const { return followers; }
 	const player_special_data::ignores_t &get_ignores() const;
 	void add_ignore(const ignore_data::shared_ptr& ignore);
 	void clear_ignores();
@@ -633,7 +543,6 @@ class CharData : public ProtectedCharData {
 	void set_affect(T affect) { char_specials.saved.affected_by.set(affect); }
 	template<typename T>
 	void remove_affect(T affect) { char_specials.saved.affected_by.unset(affect); }
-	bool low_charm() const;
 
 	void set_purged(const bool _ = true) {
 		purged_ = _;
@@ -644,9 +553,13 @@ class CharData : public ProtectedCharData {
 
 	bool IsNpc() const { return is_npc_; }
 	void SetNpcAttribute(bool _) { is_npc_ = _; }
+	// Экземпляр, созданный мимо счётчика mob_index[].total_online (подъём нежити, оживление
+	// трупа и прочие союзники -- ReadMobile с отрицательным внумом). Такой при удалении не
+	// должен счётчик уменьшать, иначе он уходит в минус и врёт резетам зон.
+	bool IsUncountedInstance() const { return uncounted_instance_; }
+	void SetUncountedInstance(bool _) { uncounted_instance_ = _; }
 	bool IsPlayer() const { return !IsNpc(); }
-	bool have_mind() const;
-	bool HasWeapon();
+
  private:
 	const auto &get_player_specials() const { return player_specials; }
 	auto &get_player_specials() { return player_specials; }
@@ -658,80 +571,42 @@ class CharData : public ProtectedCharData {
 
 	void purge();
 
-	CharSkillsType skills;    // список изученных скиллов
-	////////////////////////////////////////////////////////////////////////////
-	CharData *protecting_{nullptr}; // цель для 'прикрыть'
-	CharData *touching_;   // цель для 'перехватить'
-	CharData *enemy_;
+	CharacterSkills skills_;    // learned skills (level + cooldown)
+	FightTargets fight_targets_;   // enemy / cover / intercept targets (cleared on target extraction)
 
 	struct extra_attack_type extra_attack_; // атаки типа баша, пинка и т.п.
 	struct CastAttack cast_attack_;   // каст заклинания
-	////////////////////////////////////////////////////////////////////////////
-	// true - чар очищен и ждет вызова delete для оболочки
-	bool purged_;
+	bool purged_;  // true - чар очищен и ждет вызова delete для оболочки
 
-// * TODO: пока сюда скидывается, чтобы поля private были
-	// имя чара или алиасы моба
-	std::string name_;
-	// имя моба (им.падеж)
-	std::string short_descr_;
-	// профессия чара/класс моба
-	ECharClass chclass_;
+	std::string name_;  // имя чара или алиасы моба
+	std::string short_descr_;  // имя моба (им.падеж)
+	ECharClass chclass_;  // профессия чара/класс моба
 	bool is_npc_;
-	// уровень
-	int level_;
-	// плюс на уровень
-	int level_add_;
-	// id чара (не тот, что для тригов), у мобов -1
-	long uid_;
-	// экспа
-	long exp_;
-	// реморты
-	int remorts_;
-	// плюсы на реморт
-	int remorts_add_;
-	// время последнего входа в игру //by kilnik
-	time_t last_logon_;
-	// последний вызов базара
-	time_t last_exchange_;
-	// деньги на руках
-	long gold_;
-	// деньги в банке
-	long bank_gold_;
-	// рубли
-	long ruble;
-	// родная сила
-	int str_;
-	// плюсы на силу
-	int str_add_;
-	// родная ловкость
-	int dex_;
-	// плюсы на ловкость
-	int dex_add_;
-	// родное тело
-	int con_;
-	// плюсы на тело
-	int con_add_;
-	// родная мудра
-	int wis_;
-	// плюсы на мудру
-	int wis_add_;
-	// родная инта
-	int int_;
-	// плюсы на инту
-	int int_add_;
-	// родная харизма
-	int cha_;
-	// плюсы на харизму
-	int cha_add_;
-	//изученные формы
-	morphs_list_t morphs_;
-	//текущая форма
-	MorphPtr current_morph_;
-	// аналог класса у моба
-	role_t role_;
-	// для боссов: список атакующих (и им сочувствующих), uid->attacker
-	std::unordered_map<int, attacker_node> attackers_;
+	bool uncounted_instance_{false};
+	int level_;  // уровень
+	int level_add_;  // плюс на уровень
+	long uid_;  // id чара (не тот, что для тригов), у мобов -1
+	long exp_;  // экспа
+	int remorts_;  // реморты
+	int remorts_add_;  // плюсы на реморт
+	time_t last_logon_;  // время последнего входа в игру //by kilnik
+	time_t last_state_save_{0};  // issue.3678-affect-timer: wall-clock of the last live-state save; drives offline affect/cooldown aging
+	time_t last_exchange_;  // последний вызов базара
+	currencies::CurrencyStorage currency_storage_;  // деньги на руках
+	int str_;  // родная сила
+	int str_add_;  // плюсы на силу
+	int dex_;  // родная ловкость
+	int dex_add_;  // плюсы на ловкость
+	int con_;  // родное тело
+	int con_add_;  // плюсы на тело
+	int wis_;  // родная мудра
+	int wis_add_;  // плюсы на мудру
+	int int_;  // родная инта
+	int int_add_;  // плюсы на инту
+	int cha_;  // родная харизма
+	int cha_add_;  // плюсы на харизму
+	role_t role_;  // аналог класса у моба
+	bool was_attacked_{false};  // для боссов: атаковал ли босса игрок (взводит таймер рефреша после боя)
 	// для боссов: таймер (в секундах), включающийся по окончанию боя
 	// через который происходит сброс списка атакующих и рефреш моба
 	int restore_timer_;
@@ -748,8 +623,6 @@ class CharData : public ProtectedCharData {
 	RoomRnum in_room;    // Location (real room number)
 
  private:
-	void report_loop_error(CharData::ptr_t master) const;
-	void print_leaders_chain(std::ostream &ss) const;
 
 	unsigned m_wait;            // wait for how many loops
 	CharData *m_master;        // Who is char following?
@@ -774,28 +647,21 @@ class CharData : public ProtectedCharData {
   	void SetPosition(const EPosition position) { char_specials.position = position; };
 	/* Character's flags actions */
 	// Костыльная функция, которая пока нужна, потому что загрузчик файлов не часть чардаты и не friend class.
-	void SetFlagsFromString(const std::string &string) { char_specials.saved.act.from_string(string.c_str()); };
-  	void PrintFlagsToAscii(char *sink) const { char_specials.saved.act.tascii(FlagData::kPlanesNumber, sink); };
-  	void CopyFlagsFrom(CharData *source) { char_specials.saved.act = source->char_specials.saved.act ; };
-	void SetFlag(const EMobFlag flag) { if (IsNpc()) { char_specials.saved.act.set(flag); }; };
-  	void UnsetFlag(const EMobFlag flag) { if (IsNpc()) { char_specials.saved.act.unset(flag); }; };
-  	[[nodiscard]] bool IsFlagged(const EMobFlag flag) const { return (IsNpc() && char_specials.saved.act.get(flag)); };
+	void SetFlagsFromString(const std::string &string) { char_specials.saved.mob_flags.from_string(string.c_str()); };
+  	void PrintFlagsToAscii(char *sink, size_t sink_size) const { char_specials.saved.mob_flags.tascii(4, sink, sink_size); };
+	void SetFlag(const EMobFlag flag) { if (IsNpc()) { char_specials.saved.mob_flags.set(flag); }; };
+  	void UnsetFlag(const EMobFlag flag) { if (IsNpc()) { char_specials.saved.mob_flags.unset(flag); }; };
+  	[[nodiscard]] bool IsFlagged(const EMobFlag flag) const { return (IsNpc() && char_specials.saved.mob_flags.get(flag)); };
   	void SetFlag(const ENpcFlag flag) { if (IsNpc()) { mob_specials.npc_flags.set(flag); }; };
   	void UnsetFlag(const ENpcFlag flag) { if (IsNpc()) { mob_specials.npc_flags.unset(flag); }; };
   	[[nodiscard]] bool IsFlagged(const ENpcFlag flag) const { return (IsNpc() && mob_specials.npc_flags.get(flag)); };
-  	void SetFlag(const EPlrFlag flag) { if (!IsNpc()) { char_specials.saved.act.set(flag); }; };
-  	void UnsetFlag(const EPlrFlag flag) { if (!IsNpc()) { char_specials.saved.act.unset(flag); }; };
-  	[[nodiscard]] bool IsFlagged(const EPlrFlag flag) const { return (!IsNpc() && char_specials.saved.act.get(flag)); };
+  	void SetFlag(const EPlrFlag flag) { if (!IsNpc()) { char_specials.saved.plr_flags.set(flag); }; };
+  	void UnsetFlag(const EPlrFlag flag) { if (!IsNpc()) { char_specials.saved.plr_flags.unset(flag); }; };
+  	[[nodiscard]] bool IsFlagged(const EPlrFlag flag) const { return (!IsNpc() && char_specials.saved.plr_flags.get(flag)); };
 
 	struct mob_special_data mob_specials;        // NPC specials
 
 	player_special_data::shared_ptr player_specials;    // PC specials
-  	void ClearRunestones() { player_specials->runestones.Clear(); };
-  	void AddRunestone(const Runestone &stone);
-  	void RemoveRunestone(const Runestone &stone);
-  	void DeleteIrrelevantRunestones() { player_specials->runestones.DeleteIrrelevant(this); };
-	void PageRunestonesToChar() { player_specials->runestones.PageToChar(this); };
-  	bool IsRunestoneKnown(const Runestone &stone) { return player_specials->runestones.Contains(stone); };
   	void ClearStatistics() { player_specials->saved.personal_statistics_.Clear(); };
   	void ClearThisRemortStatistics() { player_specials->saved.personal_statistics_.ClearThisRemort(); };
   	void IncreaseStatistic(CharStat::ECategory category, ullong increment);
@@ -805,13 +671,32 @@ class CharData : public ProtectedCharData {
   	void SetFlag(const EPrf flag) { if (!IsNpc()) { player_specials->saved.pref.set(flag); }; };
   	void UnsetFlag(const EPrf flag) { if (!IsNpc()) { player_specials->saved.pref.unset(flag); }; };
   	[[nodiscard]] bool IsFlagged(const EPrf flag) const { return (!IsNpc() && player_specials->saved.pref.get(flag)); };
+	[[nodiscard]] EBriefShieldsMode GetBriefShieldsMode() const {
+		if (IsNpc() || !IsFlagged(EPrf::kBriefShields)) {
+			return EBriefShieldsMode::kOff;
+		}
+
+		return player_specials->saved.brief_shields_mode;
+	};
+	void SetBriefShieldsMode(const EBriefShieldsMode mode) {
+		if (IsNpc()) {
+			return;
+		}
+
+		player_specials->saved.brief_shields_mode = mode;
+		if (mode == EBriefShieldsMode::kOff) {
+			UnsetFlag(EPrf::kBriefShields);
+		} else {
+			SetFlag(EPrf::kBriefShields);
+		}
+	};
 
 	int GetCarryingWeight() const { return char_specials.carry_weight; };
   	int GetCarryingQuantity() const { return char_specials.carry_items; };
 
 	char_affects_list_t affected;    // affected by what spells
-	struct TimedSkill *timed;    // use which timed skill/spells
-	struct TimedFeat *timed_feat;    // use which timed feats
+	std::unordered_map<ESkill, time_t> timed_skill;    // use which timed skill/spells
+	std::unordered_map<EFeat, time_t> timed_feat;    // use which timed feats
 	ObjData *equipment[EEquipPos::kNumEquipPos];    // Equipment array
 
 	ObjData *carrying;    // Head of list
@@ -820,28 +705,25 @@ class CharData : public ProtectedCharData {
 	Script::shared_ptr script;    // script info for the object
 
 	//отладочные сообщения имморталу/тестеру/кодеру
-	void send_to_TC(bool to_impl, bool to_tester, bool to_coder, const char *msg, ...);
 
 	// очередь изучаемых заклинаний
 	SpellMemQueue mem_queue;
 
 	int caster_level;
 	int damage_level;
-	struct PK_Memory_type *pk_list;
+	std::unordered_map<long, PkMemory> pk_map;
 
 	int track_dirs;
 	bool check_aggressive;
 	int extract_timer;
 
-	FlagData Temporary;
+	BitsetFlags<ECharExtraFlag> Temporary;
 
 	int initiative;
 	int battle_counter;
 	int round_counter;
 
-	FlagData battle_affects;
-
-	int poisoner;
+	BitsetFlags<EExtraAttackFlag> battle_affects;
 
 	dead_load::OnDeadLoadList dl_list;    // загружаемые в труп предметы
 	bool agrobd;        // показывает, агробд или нет
@@ -851,33 +733,12 @@ class CharData : public ProtectedCharData {
 	std::vector<int> kill_list; //used only for MTRIG_KILL
  public:
 	// FOLLOWERS
-	struct FollowerType *followers;
+	std::list<CharData *> followers;
 	CharData::ptr_t get_master() const { return m_master; }
 	void set_master(CharData::ptr_t master);
 	bool has_master() const { return nullptr != m_master; }
-	bool makes_loop(CharData::ptr_t master) const;
-	// MOUNTS
-	bool IsOnHorse() const;
-	bool has_horse(bool same_room) const;
-	CharData *get_horse();
-	bool DropFromHorse();
-	bool IsHorsePrevents();
-	void dismount();
-	bool IsLeader();
 };
 
-# define MAX_FIRSTAID_REMOVE 17
-inline ESpell GetRemovableSpellId(int num) {
-	static const ESpell spell[MAX_FIRSTAID_REMOVE] = {ESpell::kAbstinent, ESpell::kPoison, ESpell::kMadness,
-		ESpell::kWeaknes, ESpell::kSlowdown, ESpell::kMindless, ESpell::kColdWind,
-		ESpell::kFever, ESpell::kCurse, ESpell::kDeafness, ESpell::kSilence,
-		ESpell::kBlindness, ESpell::kSleep, ESpell::kHold, ESpell::kVacuum, ESpell::kHaemorrhage, ESpell::kBattle};
-	if (num < MAX_FIRSTAID_REMOVE) {
-		return spell[num];
-	} else {
-		return ESpell::kUndefined;
-	}
-}
 inline const player_special_data::ignores_t &CharData::get_ignores() const {
 	const auto &ps = get_player_specials();
 	return ps->ignores;
@@ -893,15 +754,22 @@ inline void CharData::clear_ignores() {
 }
 
 inline int GET_INVIS_LEV(const CharData *ch) {
-	if (ch->player_specials->saved.invis_level)
+	if (ch->player_specials && ch->player_specials->saved.invis_level)
 		return ch->player_specials->saved.invis_level;
 	else
 		return 0;
 }
 inline int GET_INVIS_LEV(const CharData::shared_ptr &ch) { return GET_INVIS_LEV(ch.get()); }
 
-inline void SET_INVIS_LEV(const CharData *ch, const int level) { ch->player_specials->saved.invis_level = level; }
+inline void SET_INVIS_LEV(const CharData *ch, const int level) {
+	if (ch->player_specials) {
+		ch->player_specials->saved.invis_level = level;
+	}
+}
 inline void SET_INVIS_LEV(const CharData::shared_ptr &ch, const int level) { SET_INVIS_LEV(ch.get(), level); }
+
+// issue.utils-cleaning: IsGood/IsEvil/IsNeutral moved to gameplay/mechanics/alignment.h
+// (re-exported via the #include above so existing callers are unaffected).
 
 inline void SetWaitState(CharData *ch, const unsigned cycle) {
 	if (ch->get_wait() < cycle) {
@@ -909,12 +777,38 @@ inline void SetWaitState(CharData *ch, const unsigned cycle) {
 	}
 }
 
-inline FlagData &AFF_FLAGS(CharData *ch) { return ch->char_specials.saved.affected_by; }
-inline const FlagData &AFF_FLAGS(const CharData *ch) { return ch->char_specials.saved.affected_by; }
-inline const FlagData &AFF_FLAGS(const CharData::shared_ptr &ch) { return ch->char_specials.saved.affected_by; }
+// Lag the character by `lag` battle rounds. Thin wrapper over SetWaitState that spells the
+// "rounds, not raw pulses" intent at the call site -- preferred over the ubiquitous
+// SetWaitState(ch, N * kBattleRound) idiom that previously dotted the codebase.
+inline void SetBattleLag(CharData *ch, const unsigned lag) {
+	SetWaitState(ch, lag * kBattleRound);
+}
+
+inline BitsetFlags<EAffect> &AFF_FLAGS(CharData *ch) { return ch->char_specials.saved.affected_by; }
+inline const BitsetFlags<EAffect> &AFF_FLAGS(const CharData *ch) { return ch->char_specials.saved.affected_by; }
+inline const BitsetFlags<EAffect> &AFF_FLAGS(const CharData::shared_ptr &ch) { return ch->char_specials.saved.affected_by; }
+
+// Бывшие макросы GET_SPELL_MEM / GET_SPELL_TYPE из utils.h. Возвращают ссылку,
+// т.к. используются и как lvalue (GET_SPELL_MEM(ch, sp)++ и т.п.).
+constexpr ubyte &GET_SPELL_MEM(CharData *ch, ESpell spell) { return ch->real_abils.SplMem[to_underlying(spell)]; }
+constexpr ubyte GET_SPELL_MEM(const CharData *ch, ESpell spell) { return ch->real_abils.SplMem[to_underlying(spell)]; }
+inline ubyte &GET_SPELL_MEM(const CharData::shared_ptr &ch, ESpell spell) { return GET_SPELL_MEM(ch.get(), spell); }
+
+constexpr ubyte &GET_SPELL_TYPE(CharData *ch, ESpell spell) { return ch->real_abils.SplKnw[to_underlying(spell)]; }
+constexpr ubyte GET_SPELL_TYPE(const CharData *ch, ESpell spell) { return ch->real_abils.SplKnw[to_underlying(spell)]; }
+inline ubyte &GET_SPELL_TYPE(const CharData::shared_ptr &ch, ESpell spell) { return GET_SPELL_TYPE(ch.get(), spell); }
 
 inline bool AFF_FLAGGED(const CharData *ch, const EAffect flag) {
 	return AFF_FLAGS(ch).get(flag);
+}
+
+// issue.affect-migration / TEMPORARY: a flag-only stealth/utility check. Many MOBS apply skills
+// like hide/sneak/camouflage/light-walk as a bare EAffect flag, with NO full affect struct, so
+// these sites cannot yet use IsAffected (which needs the struct). Thin AFF_FLAGGED wrapper whose
+// distinct name marks every such site: once mobs carry real affect structs, grep IsAffectedFlagOnly
+// and replace each occurrence with IsAffected.
+inline bool IsAffectedFlagOnly(const CharData *ch, const EAffect flag) {
+	return AFF_FLAGGED(ch, flag);
 }
 
 inline bool AFF_FLAGGED(const CharData::shared_ptr &ch, const EAffect flag) {
@@ -922,67 +816,14 @@ inline bool AFF_FLAGGED(const CharData::shared_ptr &ch, const EAffect flag) {
 //		|| ch->isAffected(flag); //обойдемся без морфа
 }
 
-bool IS_CHARMICE(const CharData *ch);
-inline bool IS_CHARMICE(const CharData::shared_ptr &ch) { return IS_CHARMICE(ch.get()); }
-
-inline bool IS_FLY(const CharData *ch) {
-	return AFF_FLAGGED(ch, EAffect::kFly);
-}
-
-inline bool INVIS_OK(const CharData *sub, const CharData *obj) {
-	return !AFF_FLAGGED(sub, EAffect::kBlind)
-		&& ((!AFF_FLAGGED(obj, EAffect::kInvisible)
-			|| AFF_FLAGGED(sub, EAffect::kDetectInvisible))
-			&& ((!AFF_FLAGGED(obj, EAffect::kHide)
-				&& !AFF_FLAGGED(obj, EAffect::kDisguise))
-				|| AFF_FLAGGED(sub, EAffect::kDetectLife)));
-}
-
-inline bool INVIS_OK(const CharData *sub, const CharData::shared_ptr &obj) { return INVIS_OK(sub, obj.get()); }
-
-bool MORT_CAN_SEE(const CharData *sub, const CharData *obj);
-bool IMM_CAN_SEE(const CharData *sub, const CharData *obj);
-
-inline bool SELF(const CharData *sub, const CharData *obj) { return sub == obj; }
-inline bool SELF(const CharData *sub, const CharData::shared_ptr &obj) { return sub == obj.get(); }
-
-/// Can subject see character "obj"?
-bool CAN_SEE(const CharData *sub, const CharData *obj);
-inline bool CAN_SEE(const CharData *sub, const CharData::shared_ptr &obj) { return CAN_SEE(sub, obj.get()); }
-inline bool CAN_SEE(const CharData::shared_ptr &sub, const CharData *obj) { return CAN_SEE(sub.get(), obj); }
-inline bool CAN_SEE(const CharData::shared_ptr &sub, const CharData::shared_ptr &obj) {
-	return CAN_SEE(sub.get(),
-				   obj.get());
-}
-
-bool MAY_SEE(const CharData *ch, const CharData *sub, const CharData *obj);
-
-bool IS_HORSE(const CharData *ch);
-inline bool IS_HORSE(const CharData::shared_ptr &ch) { return IS_HORSE(ch.get()); }
-bool IS_MORTIFIER(const CharData *ch);
-
-bool MAY_ATTACK(const CharData *sub);
-inline bool MAY_ATTACK(const CharData::shared_ptr &sub) { return MAY_ATTACK(sub.get()); }
-
 bool AWAKE(const CharData *ch);
 inline bool AWAKE(const CharData::shared_ptr &ch) { return AWAKE(ch.get()); }
 
-bool CLEAR_MIND(const CharData *ch);
-inline bool CLEAR_MIND(const CharData::shared_ptr &ch) { return CLEAR_MIND(ch.get()); }
-
-inline bool CAN_START_MTRIG(const CharData *ch) {
-	return !AFF_FLAGGED(ch, EAffect::kCharmed);
-}
-
-bool OK_GAIN_EXP(const CharData *ch, const CharData *victim);
-
-bool IS_MALE(const CharData *ch);
-inline bool IS_MALE(const CharData::shared_ptr &ch) { return IS_MALE(ch.get()); }
-bool IS_FEMALE(const CharData *ch);
-inline bool IS_FEMALE(const CharData::shared_ptr &ch) { return IS_FEMALE(ch.get()); }
-bool IS_NOSEXY(const CharData *ch);
-inline bool IS_NOSEXY(const CharData::shared_ptr &ch) { return IS_NOSEXY(ch.get()); }
-bool IS_POLY(const CharData *ch);
+bool IsMale(const CharData *ch);
+inline bool IsMale(const CharData::shared_ptr &ch) { return IsMale(ch.get()); }
+bool IsFemale(const CharData *ch);
+inline bool IsFemale(const CharData::shared_ptr &ch) { return IsFemale(ch.get()); }
+bool IsPoly(const CharData *ch);
 
 int GetRealBaseStat(const CharData *ch, EBaseStat stat_id);
 
@@ -1019,25 +860,13 @@ inline void SetSave(CharData *ch, ESaving save, int mod) {
 	ch->add_abils.apply_saving_throw[to_underlying(save)] = mod;
 }
 
-inline bool IS_UNDEAD(CharData *ch) {
-	return ch->IsNpc()
-			&& (ch->IsFlagged(EMobFlag::kResurrected)
-					|| GET_RACE(ch) == ENpcRace::kZombie
-					|| GET_RACE(ch) == ENpcRace::kGhost);
-}
-
-void change_fighting(CharData *ch, int need_stop);
-
 /*
  *  Это все, разумеется, безобразно. Уровни-реморты должны возвращаться какие есть, а всякие таблицы принимать любой
  *  уровень и возвращать вращумтельное значение. Но имеем, что имеем, потому пока так.
  */
 int GetRealLevel(const CharData *ch);
 int GetRealLevel(const std::shared_ptr<CharData> &ch);
-int GetRealRemort(const CharData *ch);
-int GetRealRemort(const std::shared_ptr<CharData> &ch);
 
 #endif // CHAR_HPP_INCLUDED
-
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

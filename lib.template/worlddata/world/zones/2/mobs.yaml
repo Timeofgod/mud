@@ -1,0 +1,2870 @@
+# Mobs for zone 2
+
+# Mob #200
+0:
+  names:
+    aliases: моб первого уровня
+    nominative: моб первого уровня
+    genitive: моба первого уровня
+    dative: мобу первого уровня
+    accusative: моба первого уровня
+    instrumental: мобом первого уровня
+    prepositional: мобе первого уровня
+  descriptions:
+    short_desc: |2
+      Моб первого уровня прохаживается здесь
+    long_desc: |2
+      Приглядевшись повнимательнее, Вы заметили, что это существо всего лишь
+      первого уровня
+  alignment: 600
+  stats:
+    level: 1
+    hitroll_penalty: 20
+    armor: 10
+    hp:
+      dice_count: 5
+      dice_size: 3
+      bonus: 5
+    damage:
+      dice_count: 1
+      dice_size: 3
+      bonus: 0
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 30
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 31
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 3
+  enhanced:
+    absorb: 1
+
+# Mob #201
+1:
+  names:
+    aliases: моб первого уровня
+    nominative: моб первого уровня
+    genitive: моба первого уровня
+    dative: мобу первого уровня
+    accusative: моба первого уровня
+    instrumental: мобом первого уровня
+    prepositional: мобе первого уровня
+  descriptions:
+    short_desc: |2
+      Моб первого уровня прохаживается здесь
+    long_desc: |2
+      Приглядевшись повнимательнее, Вы заметили, что это существо всего лишь
+      первого уровня
+  alignment: 600
+  stats:
+    level: 1
+    hitroll_penalty: 20
+    armor: 10
+    hp:
+      dice_count: 5
+      dice_size: 3
+      bonus: 5
+    damage:
+      dice_count: 1
+      dice_size: 3
+      bonus: 0
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 30
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 31
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 3
+  enhanced:
+    absorb: 1
+
+# Mob #202
+2:
+  names:
+    aliases: моб второго уровня
+    nominative: моб второго уровня
+    genitive: моба второго уровня
+    dative: мобу второго уровня
+    accusative: моба второго уровня
+    instrumental: мобом второго уровня
+    prepositional: мобе второго уровня
+  descriptions:
+    short_desc: |2
+      Маленький моб стоит и размышляет о жизни
+    long_desc: |2
+      Странно, подумали Вы, взглянув на это создание, что такое умное на вид
+      существо всего лишь второго уровня
+  alignment: 600
+  stats:
+    level: 2
+    hitroll_penalty: 19
+    armor: 10
+    hp:
+      dice_count: 5
+      dice_size: 5
+      bonus: 15
+    damage:
+      dice_count: 1
+      dice_size: 4
+      bonus: 1
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 50
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 32
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 6
+  enhanced:
+    absorb: 2
+
+# Mob #203
+3:
+  names:
+    aliases: моб третьего уровня
+    nominative: моб третьего уровня
+    genitive: моба третьего уровня
+    dative: мобу третьего уровня
+    accusative: моба третьего уровня
+    instrumental: мобом третьего уровня
+    prepositional: мобе третьего уровня
+  descriptions:
+    short_desc: |2
+      Пузатая мелочь шныряет под ногами
+    long_desc: |2
+      Приглядевшись внимательнее, Вы заметили, что эта пузатая мелочь
+      третьего уровня
+  alignment: 600
+  stats:
+    level: 3
+    hitroll_penalty: 18
+    armor: 9
+    hp:
+      dice_count: 10
+      dice_size: 4
+      bonus: 20
+    damage:
+      dice_count: 1
+      dice_size: 4
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 90
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 33
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 9
+  enhanced:
+    absorb: 3
+
+# Mob #204
+4:
+  names:
+    aliases: моб четвертого уровня
+    nominative: моб четвертого уровня
+    genitive: моба четвертого уровня
+    dative: мобу четвертого уровня
+    accusative: моба четвертого уровня
+    instrumental: мобом четвертого уровня
+    prepositional: мобе четвертого уровня
+  descriptions:
+    short_desc: |2
+      Пузатая немелочь расхаживает взад вперед
+    long_desc: |2
+      Странно, подумали Вы, взглянув на это создание, что такое умное на вид
+      существо всего лишь четвертого уровня
+  alignment: 600
+  stats:
+    level: 4
+    hitroll_penalty: 17
+    armor: 9
+    hp:
+      dice_count: 20
+      dice_size: 3
+      bonus: 20
+    damage:
+      dice_count: 1
+      dice_size: 4
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 180
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 34
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 12
+  enhanced:
+    absorb: 4
+
+# Mob #205
+5:
+  names:
+    aliases: чармис пятого уровня
+    nominative: чармис пятого уровня дамагер
+    genitive: чармиса пятого уровня
+    dative: чармису пятого уровня
+    accusative: чармиса пятого уровня
+    instrumental: чармисом пятого уровня
+    prepositional: чармисе пятого уровня
+  descriptions:
+    short_desc: |2
+      Это просто чармис пятого уровня
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 5
+    hitroll_penalty: 14
+    armor: 9
+    hp:
+      dice_count: 5
+      dice_size: 9
+      bonus: 25
+    damage:
+      dice_count: 1
+      dice_size: 4
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 360
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 35
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 15
+  enhanced:
+    absorb: 5
+
+# Mob #206
+6:
+  names:
+    aliases: чармис шестого уровня
+    nominative: чармис шестого уровня танк
+    genitive: чармиса шестого уровня
+    dative: чармису шестого уровня
+    accusative: чармиса шестого уровня
+    instrumental: чармисом шестого уровня
+    prepositional: чармисе шестого уровня
+  descriptions:
+    short_desc: |2
+      Чармис шестого уровня стоит тут
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 6
+    hitroll_penalty: 15
+    armor: 8
+    hp:
+      dice_count: 10
+      dice_size: 8
+      bonus: 50
+    damage:
+      dice_count: 2
+      dice_size: 2
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 720
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 36
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 18
+    - skill_id: 137  # спасти
+      value: 10
+  enhanced:
+    absorb: 6
+
+# Mob #207
+7:
+  names:
+    aliases: чармис седьмого уровня
+    nominative: чармис седьмого уровня_дамаг
+    genitive: чармиса седьмого уровня
+    dative: чармису седьмого уровня
+    accusative: чармиса седьмого уровня
+    instrumental: чармисом седьмого уровня
+    prepositional: чармисе седьмого уровня
+  descriptions:
+    short_desc: |2
+      Чармис седьмого уровня расположился тут
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 7
+    hitroll_penalty: 13
+    armor: 8
+    hp:
+      dice_count: 10
+      dice_size: 8
+      bonus: 40
+    damage:
+      dice_count: 2
+      dice_size: 3
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 1500
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 37
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 21
+  enhanced:
+    absorb: 7
+    max_factor: 1
+
+# Mob #208
+8:
+  names:
+    aliases: чармис восьмого уровня
+    nominative: чармис восьмого уровня_танк
+    genitive: чармиса восьмого уровня
+    dative: чармису восьмого уровня
+    accusative: чармиса восьмого уровня
+    instrumental: чармисом восьмого уровня
+    prepositional: чармисе восьмого уровня
+  descriptions:
+    short_desc: |2
+      Несколько раздобревший вширь чармис стоит здесь
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 8
+    hitroll_penalty: 13
+    armor: 8
+    hp:
+      dice_count: 15
+      dice_size: 7
+      bonus: 90
+    damage:
+      dice_count: 2
+      dice_size: 3
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 2000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 38
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 24
+    - skill_id: 137  # спасти
+      value: 16
+  enhanced:
+    absorb: 8
+    max_factor: 1
+
+# Mob #209
+9:
+  names:
+    aliases: чармис девятого уровня
+    nominative: чармис девятого уровня_дамаг
+    genitive: чармиса девятого уровня
+    dative: чармису девятого уровня
+    accusative: чармиса девятого уровня
+    instrumental: чармисом девятого уровня
+    prepositional: чармисе девятого уровня
+  descriptions:
+    short_desc: |2
+      Несколько раздобревший вширь и ввысь чармис стоит туточки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 9
+    hitroll_penalty: 11
+    armor: 7
+    hp:
+      dice_count: 25
+      dice_size: 5
+      bonus: 50
+    damage:
+      dice_count: 2
+      dice_size: 4
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 2500
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 39
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 27
+  enhanced:
+    absorb: 9
+    max_factor: 1
+    extra_attack: 1
+
+# Mob #210
+10:
+  names:
+    aliases: чармис десятого уровня
+    nominative: чармис десятого уровня_танк
+    genitive: чармиса десятого уровня
+    dative: чармису десятого уровня
+    accusative: чармиса десятого уровня
+    instrumental: чармисом десятого уровня
+    prepositional: чармисе десятого уровня
+  descriptions:
+    short_desc: |2
+      Несколько обнаглевший чармис смотрит на Вас, не отрываясь.
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 10
+    hitroll_penalty: 11
+    armor: 7
+    hp:
+      dice_count: 40
+      dice_size: 4
+      bonus: 100
+    damage:
+      dice_count: 2
+      dice_size: 4
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 3000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 40
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 30
+    - skill_id: 137  # спасти
+      value: 22
+  enhanced:
+    absorb: 10
+    max_factor: 1
+    extra_attack: 1
+
+# Mob #211
+11:
+  names:
+    aliases: чармис одиннадцатого уровня
+    nominative: чармис одиннадцатого уровня_дамаг
+    genitive: чармиса одиннадцатого уровня
+    dative: чармису одиннадцатого уровня
+    accusative: чармиса одиннадцатого уровня
+    instrumental: чармисом одиннадцатого уровня
+    prepositional: чармисе одиннадцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис средних размеров глазеет на окружающих
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 11
+    hitroll_penalty: 9
+    armor: 6
+    hp:
+      dice_count: 25
+      dice_size: 7
+      bonus: 75
+    damage:
+      dice_count: 2
+      dice_size: 4
+      bonus: 5
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 4000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 41
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 33
+  enhanced:
+    absorb: 11
+    max_factor: 1
+    extra_attack: 1
+
+# Mob #212
+12:
+  names:
+    aliases: чармис двенадцатого уровня
+    nominative: чармис двенадцатого уровня_танк
+    genitive: чармиса двенадцатого уровня
+    dative: чармису двенадцатого уровня
+    accusative: чармиса двенадцатого уровня
+    instrumental: чармисом двенадцатого уровня
+    prepositional: чармисе двенадцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис средних размеров обозревает окрестности
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 12
+    hitroll_penalty: 10
+    armor: 6
+    hp:
+      dice_count: 20
+      dice_size: 10
+      bonus: 190
+    damage:
+      dice_count: 2
+      dice_size: 4
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 5000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 42
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 36
+    - skill_id: 137  # спасти
+      value: 28
+  enhanced:
+    absorb: 12
+    max_factor: 1
+    extra_attack: 1
+
+# Mob #213
+13:
+  names:
+    aliases: чармис тринадцатого уровня
+    nominative: чармис тринадцатого уровня_дамаг
+    genitive: чармиса тринадцатого уровня
+    dative: чармису тринадцатого уровня
+    accusative: чармиса тринадцатого уровня
+    instrumental: чармисом тринадцатого уровня
+    prepositional: чармисе тринадцатого уровня
+  descriptions:
+    short_desc: |2
+      Маленький чертенок считает до дюжины
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 13
+    hitroll_penalty: 9
+    armor: 5
+    hp:
+      dice_count: 20
+      dice_size: 11
+      bonus: 100
+    damage:
+      dice_count: 3
+      dice_size: 4
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 10000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 43
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 39
+  enhanced:
+    absorb: 13
+    max_factor: 1
+    extra_attack: 1
+
+# Mob #214
+14:
+  names:
+    aliases: чармис четырнадцатого уровня
+    nominative: чармис четырнадцатого уровня
+    genitive: чармиса четырнадцатого уровня
+    dative: чармису четырнадцатого уровня
+    accusative: чармиса четырнадцатого уровня
+    instrumental: чармисом четырнадцатого уровня
+    prepositional: чармисе четырнадцатого уровня
+  descriptions:
+    short_desc: |2
+      Высокий дылда опирается на сучковатую дубину
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 14
+    hitroll_penalty: 8
+    armor: 5
+    hp:
+      dice_count: 20
+      dice_size: 12
+      bonus: 230
+    damage:
+      dice_count: 3
+      dice_size: 4
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 13000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 44
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 42
+    - skill_id: 137  # спасти
+      value: 34
+  enhanced:
+    absorb: 14
+    max_factor: 2
+    extra_attack: 1
+
+# Mob #215
+15:
+  names:
+    aliases: чармис пятнадцатого уровня
+    nominative: чармис пятнадцатого уровня
+    genitive: чармиса пятнадцатого уровня
+    dative: чармису пятнадцатого уровня
+    accusative: чармиса пятнадцатого уровня
+    instrumental: чармисом пятнадцатого уровня
+    prepositional: чармисе пятнадцатого уровня
+  descriptions:
+    short_desc: |2
+      Просто чармис просто пятнадцатого уровня.
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 15
+    hitroll_penalty: 8
+    armor: 5
+    hp:
+      dice_count: 10
+      dice_size: 25
+      bonus: 130
+    damage:
+      dice_count: 3
+      dice_size: 4
+      bonus: 5
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 14000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 45
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 45
+  enhanced:
+    absorb: 15
+    max_factor: 2
+    extra_attack: 1
+
+# Mob #216
+16:
+  names:
+    aliases: чармис шестнадцатого уровня
+    nominative: чармис шестнадцатого уровня
+    genitive: чармиса шестнадцатого уровня
+    dative: чармису шестнадцатого уровня
+    accusative: чармиса шестнадцатого уровня
+    instrumental: чармисом шестнадцатого уровня
+    prepositional: чармисе шестнадцатого уровня
+  descriptions:
+    short_desc: |2
+      Просто чармис шестнадцатого уровня.
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 16
+    hitroll_penalty: 7
+    armor: 4
+    hp:
+      dice_count: 10
+      dice_size: 25
+      bonus: 290
+    damage:
+      dice_count: 3
+      dice_size: 4
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 15000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 46
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 48
+    - skill_id: 137  # спасти
+      value: 40
+  enhanced:
+    absorb: 16
+    max_factor: 2
+    extra_attack: 1
+
+# Mob #217
+17:
+  names:
+    aliases: чармис семнадцатого уровня
+    nominative: чармис семнадцатого уровня
+    genitive: чармиса семнадцатого уровня
+    dative: чармису семнадцатого уровня
+    accusative: чармиса семнадцатого уровня
+    instrumental: чармисом семнадцатого уровня
+    prepositional: чармисе семнадцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис семнадцатого уровня мается дурью.
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 17
+    hitroll_penalty: 7
+    armor: 4
+    hp:
+      dice_count: 20
+      dice_size: 14
+      bonus: 150
+    damage:
+      dice_count: 4
+      dice_size: 4
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 16300
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 47
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 51
+  enhanced:
+    absorb: 17
+    max_factor: 2
+    extra_attack: 1
+
+# Mob #218
+18:
+  names:
+    aliases: чармис восемнадцатого уровня
+    nominative: чармис восемнадцатого уровня
+    genitive: чармиса восемнадцатого уровня
+    dative: чармису восемнадцатого уровня
+    accusative: чармиса восемнадцатого уровня
+    instrumental: чармисом восемнадцатого уровня
+    prepositional: чармисе восемнадцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис восемнадцатого уровня просто стоит тут.
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 18
+    hitroll_penalty: 6
+    armor: 4
+    hp:
+      dice_count: 20
+      dice_size: 15
+      bonus: 300
+    damage:
+      dice_count: 4
+      dice_size: 4
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 175000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 48
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 54
+    - skill_id: 137  # спасти
+      value: 46
+  enhanced:
+    absorb: 18
+    max_factor: 2
+    extra_attack: 1
+
+# Mob #219
+19:
+  names:
+    aliases: чармис девятнадцатого уровня
+    nominative: чармис девятнадцатого уровня
+    genitive: чармиса девятнадцатого уровня
+    dative: чармису девятнадцатого уровня
+    accusative: чармиса девятнадцатого уровня
+    instrumental: чармисом девятнадцатого уровня
+    prepositional: чармисе девятнадцатого уровня
+  descriptions:
+    short_desc: |2
+      Девятнадцатиуровневый монстр рычит на Вас.
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 19
+    hitroll_penalty: 6
+    armor: 3
+    hp:
+      dice_count: 40
+      dice_size: 8
+      bonus: 150
+    damage:
+      dice_count: 4
+      dice_size: 5
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 18800
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 49
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 57
+  enhanced:
+    absorb: 19
+    max_factor: 2
+    extra_attack: 1
+
+# Mob #220
+20:
+  names:
+    aliases: чармис двадцатого уровня
+    nominative: чармис двадцатого уровня_танк
+    genitive: чармиса двадцатого уровня
+    dative: чармису двадцатого уровня
+    accusative: чармиса двадцатого уровня
+    instrumental: чармисом двадцатого уровня
+    prepositional: чармисе двадцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 20
+    hitroll_penalty: 5
+    armor: 3
+    hp:
+      dice_count: 50
+      dice_size: 7
+      bonus: 300
+    damage:
+      dice_count: 4
+      dice_size: 4
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 20000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 50
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 60
+    - skill_id: 137  # спасти
+      value: 52
+  enhanced:
+    absorb: 20
+    max_factor: 2
+    extra_attack: 1
+
+# Mob #221
+21:
+  names:
+    aliases: чармис двадцать первого уровня
+    nominative: чармис двадцать первого уровня_дамаг
+    genitive: чармиса двадцать первого уровня
+    dative: чармису двадцать первого уровня
+    accusative: чармиса двадцать первого уровня
+    instrumental: чармисом двадцать первого уровня
+    prepositional: чармисе двадцать первого уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать первого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 21
+    hitroll_penalty: 4
+    armor: 3
+    hp:
+      dice_count: 20
+      dice_size: 17
+      bonus: 175
+    damage:
+      dice_count: 5
+      dice_size: 5
+      bonus: 1
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 20000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 51
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 63
+  enhanced:
+    absorb: 21
+    max_factor: 3
+    extra_attack: 1
+
+# Mob #222
+22:
+  names:
+    aliases: чармис двадцать второго уровня
+    nominative: чармис двадцать второго уровня_танк
+    genitive: чармиса двадцать второго уровня
+    dative: чармису двадцать второго уровня
+    accusative: чармиса двадцать второго уровня
+    instrumental: чармисом двадцать второго уровня
+    prepositional: чармисе двадцать второго уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать второго уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 22
+    hitroll_penalty: 3
+    armor: 2
+    hp:
+      dice_count: 20
+      dice_size: 18
+      bonus: 380
+    damage:
+      dice_count: 4
+      dice_size: 5
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 22500
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 52
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 66
+    - skill_id: 137  # спасти
+      value: 58
+  enhanced:
+    absorb: 22
+    max_factor: 3
+    extra_attack: 1
+
+# Mob #223
+23:
+  names:
+    aliases: чармис двадцать третьего уровня
+    nominative: чармис двадцать третьего уровня_дамаг
+    genitive: чармиса двадцать третьего уровня
+    dative: чармису двадцать третьего уровня
+    accusative: чармиса двадцать третьего уровня
+    instrumental: чармисом двадцать третьего уровня
+    prepositional: чармисе двадцать третьего уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать третьего уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 23
+    hitroll_penalty: 3
+    armor: 2
+    hp:
+      dice_count: 40
+      dice_size: 10
+      bonus: 200
+    damage:
+      dice_count: 5
+      dice_size: 5
+      bonus: 5
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 22500
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 53
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 69
+  enhanced:
+    absorb: 23
+    max_factor: 3
+    extra_attack: 1
+
+# Mob #224
+24:
+  names:
+    aliases: чармис двадцать четвертого уровня
+    nominative: чармис двадцать четвертого уровня_танк
+    genitive: чармиса двадцать четвертого уровня
+    dative: чармису двадцать четвертого уровня
+    accusative: чармиса двадцать четвертого уровня
+    instrumental: чармисом двадцать четвертого уровня
+    prepositional: чармисе двадцать четвертого уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать четвертого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 24
+    hitroll_penalty: 2
+    armor: 2
+    hp:
+      dice_count: 100
+      dice_size: 5
+      bonus: 380
+    damage:
+      dice_count: 5
+      dice_size: 5
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 25000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 54
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 72
+    - skill_id: 137  # спасти
+      value: 64
+  enhanced:
+    absorb: 24
+    max_factor: 3
+    extra_attack: 1
+
+# Mob #225
+25:
+  names:
+    aliases: чармис двадцать пятого уровня
+    nominative: чармис двадцать пятого уровня_дамаг
+    genitive: чармиса двадцать пятого уровня
+    dative: чармису двадцать пятого уровня
+    accusative: чармиса двадцать пятого уровня
+    instrumental: чармисом двадцать пятого уровня
+    prepositional: чармисе двадцать пятого уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать пятого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 25
+    hitroll_penalty: 2
+    armor: 1
+    hp:
+      dice_count: 40
+      dice_size: 12
+      bonus: 250
+    damage:
+      dice_count: 6
+      dice_size: 5
+      bonus: 6
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 25000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 55
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 75
+  enhanced:
+    absorb: 25
+    max_factor: 3
+    extra_attack: 2
+
+# Mob #226
+26:
+  names:
+    aliases: чармис двадцать шестого уровня
+    nominative: чармис двадцать шестого уровня_танк
+    genitive: чармиса двадцать шестого уровня
+    dative: чармису двадцать шестого уровня
+    accusative: чармиса двадцать шестого уровня
+    instrumental: чармисом двадцать шестого уровня
+    prepositional: чармисе двадцать шестого уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать шестого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 26
+    hitroll_penalty: 2
+    armor: 1
+    hp:
+      dice_count: 100
+      dice_size: 6
+      bonus: 480
+    damage:
+      dice_count: 6
+      dice_size: 5
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 30000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 56
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 78
+    - skill_id: 137  # спасти
+      value: 70
+  enhanced:
+    absorb: 26
+    max_factor: 3
+    extra_attack: 2
+
+# Mob #227
+27:
+  names:
+    aliases: чармис двадцать седьмого уровня
+    nominative: чармис двадцать седьмого уровня_дамаг
+    genitive: чармиса двадцать седьмого уровня
+    dative: чармису двадцать седьмого уровня
+    accusative: чармиса двадцать седьмого уровня
+    instrumental: чармисом двадцать седьмого уровня
+    prepositional: чармисе двадцать седьмого уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать седьмого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 27
+    hitroll_penalty: 1
+    armor: 0
+    hp:
+      dice_count: 40
+      dice_size: 15
+      bonus: 310
+    damage:
+      dice_count: 6
+      dice_size: 6
+      bonus: 9
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 40000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 57
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 81
+  enhanced:
+    absorb: 27
+    max_factor: 3
+    extra_attack: 2
+
+# Mob #228
+28:
+  names:
+    aliases: чармис двадцать восьмого уровня
+    nominative: чармис двадцать восьмого уровня_танк
+    genitive: чармиса двадцать восьмого уровня
+    dative: чармису двадцать восьмого уровня
+    accusative: чармиса двадцать восьмого уровня
+    instrumental: чармисом двадцать восьмого уровня
+    prepositional: чармисе двадцать восьмого уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать восьмого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 28
+    hitroll_penalty: 0
+    armor: -1
+    hp:
+      dice_count: 100
+      dice_size: 6
+      bonus: 550
+    damage:
+      dice_count: 7
+      dice_size: 5
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 50000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 58
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 84
+    - skill_id: 137  # спасти
+      value: 76
+  enhanced:
+    absorb: 28
+    max_factor: 4
+    extra_attack: 2
+
+# Mob #229
+29:
+  names:
+    aliases: чармис двадцать девятого уровня
+    nominative: чармис двадцать девятого уровня_дамаг
+    genitive: чармиса двадцать девятого уровня
+    dative: чармису двадцать девятого уровня
+    accusative: чармиса двадцать девятого уровня
+    instrumental: чармисом двадцать девятого уровня
+    prepositional: чармисе двадцать девятого уровня
+  descriptions:
+    short_desc: |2
+      Чармис двадцать девятого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 29
+    hitroll_penalty: -1
+    armor: -2
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 300
+    damage:
+      dice_count: 7
+      dice_size: 7
+      bonus: 8
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 100000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 59
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 87
+  enhanced:
+    absorb: 29
+    max_factor: 4
+    extra_attack: 3
+
+# Mob #230
+30:
+  names:
+    aliases: чармис тридцатого уровня
+    nominative: чармис тридцатого уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 30
+    hitroll_penalty: -1
+    armor: -3
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 600
+    damage:
+      dice_count: 7
+      dice_size: 6
+      bonus: 8
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 60
+  race: 100
+  height: 198
+  weight: 150
+  attributes:
+    strength: 11
+    dexterity: 25
+    intelligence: 11
+    wisdom: 11
+    constitution: 11
+    charisma: 11
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 90
+    - skill_id: 137  # спасти
+      value: 82
+  enhanced:
+    absorb: 30
+    max_factor: 4
+    extra_attack: 3
+
+# Mob #231
+31:
+  names:
+    aliases: чармис тридцать первого уровня_дамаг
+    nominative: чармис тридцать первого уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 31
+    hitroll_penalty: -1
+    armor: -2
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 500
+    damage:
+      dice_count: 8
+      dice_size: 8
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 61
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 93
+  enhanced:
+    cast_success: 20
+    absorb: 31
+    max_factor: 4
+    extra_attack: 3
+    saves:
+      kWill: -10
+      kCritical: -10
+      kStability: -10
+      kReflex: -10
+
+# Mob #232
+32:
+  names:
+    aliases: чармис тридцать воторого уровня_танк
+    nominative: чармис тридцать воторого уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 32
+    hitroll_penalty: -2
+    armor: -3
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 660
+    damage:
+      dice_count: 7
+      dice_size: 7
+      bonus: 8
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 63
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 96
+    - skill_id: 137  # спасти
+      value: 88
+  enhanced:
+    cast_success: 23
+    absorb: 32
+    max_factor: 4
+    extra_attack: 3
+    saves:
+      kWill: -14
+      kCritical: -14
+      kStability: -14
+      kReflex: -14
+
+# Mob #233
+33:
+  names:
+    aliases: чармис тридцать третего уровня_дамаг
+    nominative: чармис тридцать третего уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 33
+    hitroll_penalty: -2
+    armor: -3
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 600
+    damage:
+      dice_count: 8
+      dice_size: 8
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 63
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 99
+  enhanced:
+    cast_success: 26
+    absorb: 33
+    max_factor: 4
+    extra_attack: 3
+    saves:
+      kWill: -18
+      kCritical: -18
+      kStability: -18
+      kReflex: -18
+
+# Mob #234
+34:
+  names:
+    aliases: чармис тридцать четвертого уровня_танк
+    nominative: чармис тридцать четвертого уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 34
+    hitroll_penalty: -3
+    armor: -4
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 720
+    damage:
+      dice_count: 8
+      dice_size: 8
+      bonus: 2
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 63
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 102
+    - skill_id: 137  # спасти
+      value: 94
+  enhanced:
+    cast_success: 29
+    absorb: 34
+    max_factor: 4
+    extra_attack: 3
+    saves:
+      kWill: -22
+      kCritical: -22
+      kStability: -22
+      kReflex: -22
+
+# Mob #235
+35:
+  names:
+    aliases: чармис тридцать пятого уровня_дамаг
+    nominative: чармис тридцать пятого уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 35
+    hitroll_penalty: -4
+    armor: -3
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 660
+    damage:
+      dice_count: 8
+      dice_size: 8
+      bonus: 6
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 63
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 105
+  enhanced:
+    cast_success: 32
+    absorb: 35
+    max_factor: 5
+    extra_attack: 3
+    saves:
+      kWill: -26
+      kCritical: -26
+      kStability: -26
+      kReflex: -26
+
+# Mob #236
+36:
+  names:
+    aliases: чармис тридцать шестого уровня_танк
+    nominative: чармис тридцать шестого уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 36
+    hitroll_penalty: -5
+    armor: -5
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 780
+    damage:
+      dice_count: 8
+      dice_size: 8
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 63
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 108
+    - skill_id: 137  # спасти
+      value: 100
+  enhanced:
+    cast_success: 35
+    absorb: 36
+    max_factor: 5
+    extra_attack: 3
+    saves:
+      kWill: -30
+      kCritical: -30
+      kStability: -30
+      kReflex: -30
+
+# Mob #237
+37:
+  names:
+    aliases: чармис тридцать седьмого уровня_дамаг
+    nominative: чармис тридцать седьмого уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 37
+    hitroll_penalty: -6
+    armor: -4
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 720
+    damage:
+      dice_count: 8
+      dice_size: 9
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 63
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 111
+  enhanced:
+    cast_success: 38
+    absorb: 37
+    max_factor: 5
+    extra_attack: 4
+    saves:
+      kWill: -34
+      kCritical: -34
+      kStability: -34
+      kReflex: -34
+
+# Mob #238
+38:
+  names:
+    aliases: чармис тридцать восьмого уровня_танк
+    nominative: чармис тридцать восьмого уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 38
+    hitroll_penalty: -6
+    armor: -6
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 840
+    damage:
+      dice_count: 8
+      dice_size: 8
+      bonus: 6
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 65
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 114
+    - skill_id: 137  # спасти
+      value: 106
+  enhanced:
+    cast_success: 41
+    absorb: 38
+    max_factor: 5
+    extra_attack: 3
+    saves:
+      kWill: -38
+      kCritical: -38
+      kStability: -38
+      kReflex: -38
+
+# Mob #239
+39:
+  names:
+    aliases: чармис тридцать девятого уровня_дамаг
+    nominative: чармис тридцать девятого уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 39
+    hitroll_penalty: -7
+    armor: -5
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 780
+    damage:
+      dice_count: 8
+      dice_size: 9
+      bonus: 6
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 63
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 117
+  enhanced:
+    cast_success: 44
+    absorb: 39
+    max_factor: 5
+    extra_attack: 4
+    saves:
+      kWill: -42
+      kCritical: -42
+      kStability: -42
+      kReflex: -42
+
+# Mob #240
+40:
+  names:
+    aliases: чармис сорокового уровня_танк
+    nominative: чармис сорокового уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 40
+    hitroll_penalty: -7
+    armor: -7
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 900
+    damage:
+      dice_count: 8
+      dice_size: 9
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 65
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 120
+    - skill_id: 137  # спасти
+      value: 112
+  enhanced:
+    cast_success: 47
+    absorb: 40
+    max_factor: 5
+    extra_attack: 4
+    saves:
+      kWill: -46
+      kCritical: -46
+      kStability: -46
+      kReflex: -46
+
+# Mob #241
+41:
+  names:
+    aliases: чармис сорок первого уровня_дамаг
+    nominative: чармис сорок первого уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 41
+    hitroll_penalty: -8
+    armor: -6
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 840
+    damage:
+      dice_count: 9
+      dice_size: 9
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 65
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 123
+  enhanced:
+    cast_success: 50
+    absorb: 41
+    max_factor: 5
+    extra_attack: 4
+    saves:
+      kWill: -50
+      kCritical: -50
+      kStability: -50
+      kReflex: -50
+
+# Mob #242
+42:
+  names:
+    aliases: чармис сорок второго  уровня_танк
+    nominative: чармис сорок второго  уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 42
+    hitroll_penalty: 0
+    armor: -8
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 910
+    damage:
+      dice_count: 8
+      dice_size: 9
+      bonus: 6
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 67
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 126
+    - skill_id: 137  # спасти
+      value: 118
+  enhanced:
+    cast_success: 53
+    absorb: 42
+    max_factor: 6
+    extra_attack: 4
+    saves:
+      kWill: -54
+      kCritical: -54
+      kStability: -54
+      kReflex: -54
+
+# Mob #243
+43:
+  names:
+    aliases: чармис сорок третего уровня_дамаг
+    nominative: чармис сорок третего уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 43
+    hitroll_penalty: 0
+    armor: -7
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 900
+    damage:
+      dice_count: 9
+      dice_size: 9
+      bonus: 5
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 65
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 129
+  enhanced:
+    cast_success: 56
+    absorb: 43
+    max_factor: 6
+    extra_attack: 4
+    saves:
+      kWill: -58
+      kCritical: -58
+      kStability: -58
+      kReflex: -58
+
+# Mob #244
+44:
+  names:
+    aliases: чармис сорок четвертого  уровня_танк
+    nominative: чармис сорок четвертого  уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 44
+    hitroll_penalty: 0
+    armor: -8
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 1020
+    damage:
+      dice_count: 9
+      dice_size: 9
+      bonus: 3
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 67
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 132
+    - skill_id: 137  # спасти
+      value: 124
+  enhanced:
+    cast_success: 59
+    absorb: 44
+    max_factor: 6
+    extra_attack: 4
+    saves:
+      kWill: -62
+      kCritical: -62
+      kStability: -62
+      kReflex: -62
+
+# Mob #245
+45:
+  names:
+    aliases: чармис сорок пятого уровня_дамаг
+    nominative: чармис сорок пятого уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 45
+    hitroll_penalty: 0
+    armor: -8
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 960
+    damage:
+      dice_count: 9
+      dice_size: 9
+      bonus: 7
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 67
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 135
+  enhanced:
+    cast_success: 62
+    absorb: 45
+    max_factor: 6
+    extra_attack: 4
+    saves:
+      kWill: -66
+      kCritical: -66
+      kStability: -66
+      kReflex: -66
+
+# Mob #246
+46:
+  names:
+    aliases: чармис сорок шестого уровня_танк
+    nominative: чармис сорок шестого уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 46
+    hitroll_penalty: 0
+    armor: -9
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 1080
+    damage:
+      dice_count: 9
+      dice_size: 9
+      bonus: 5
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 70
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 138
+    - skill_id: 137  # спасти
+      value: 130
+  enhanced:
+    cast_success: 65
+    absorb: 46
+    max_factor: 6
+    extra_attack: 4
+    saves:
+      kWill: -70
+      kCritical: -70
+      kStability: -70
+      kReflex: -70
+
+# Mob #247
+47:
+  names:
+    aliases: чармис сорок седьмого уровня_дамаг
+    nominative: чармис сорок седьмого уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 47
+    hitroll_penalty: 0
+    armor: -8
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 1020
+    damage:
+      dice_count: 10
+      dice_size: 10
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 70
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 141
+  enhanced:
+    cast_success: 68
+    absorb: 47
+    max_factor: 6
+    extra_attack: 5
+    saves:
+      kWill: -74
+      kCritical: -74
+      kStability: -74
+      kReflex: -74
+
+# Mob #248
+48:
+  names:
+    aliases: чармис сорок восьмого уровня_танк
+    nominative: чармис сорок восьмого уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 48
+    hitroll_penalty: 0
+    armor: -9
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 1140
+    damage:
+      dice_count: 9
+      dice_size: 9
+      bonus: 7
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 72
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 144
+    - skill_id: 137  # спасти
+      value: 136
+  enhanced:
+    cast_success: 71
+    absorb: 48
+    max_factor: 6
+    extra_attack: 4
+    saves:
+      kWill: -78
+      kCritical: -78
+      kStability: -78
+      kReflex: -78
+
+# Mob #249
+49:
+  names:
+    aliases: чармис тридцатого уровня
+    nominative: чармис сорок девятого уровня_дамаг
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 49
+    hitroll_penalty: 0
+    armor: -9
+    hp:
+      dice_count: 100
+      dice_size: 7
+      bonus: 1080
+    damage:
+      dice_count: 10
+      dice_size: 10
+      bonus: 6
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 70
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 147
+  enhanced:
+    cast_success: 74
+    absorb: 49
+    max_factor: 7
+    extra_attack: 5
+    saves:
+      kWill: -82
+      kCritical: -82
+      kStability: -82
+      kReflex: -82
+
+# Mob #250
+50:
+  names:
+    aliases: чармис пятидесятого уровня_танк
+    nominative: чармис пятидесятого уровня_танк
+    genitive: чармиса тридцатого уровня
+    dative: чармису тридцатого уровня
+    accusative: чармиса тридцатого уровня
+    instrumental: чармисом тридцатого уровня
+    prepositional: чармисе тридцатого уровня
+  descriptions:
+    short_desc: |2
+      Чармис тридцатого уровня стоит здесь и мается со скуки
+    long_desc: неопределен
+  alignment: 600
+  stats:
+    level: 50
+    hitroll_penalty: 0
+    armor: -10
+    hp:
+      dice_count: 100
+      dice_size: 9
+      bonus: 1000
+    damage:
+      dice_count: 10
+      dice_size: 10
+      bonus: 4
+  gold:
+    dice_count: 0
+    dice_size: 0
+    bonus: 0
+  experience: 200000
+  position:
+    default: kStand
+    start: kStand
+  sex: kMale
+  size: 75
+  race: 100
+  height: 198
+  weight: 150
+  action_flags:
+    - kNpc
+    - kStayZone
+  affect_flags:
+    - kNoTrack
+  skills:
+    - skill_id: 136  # кулачный бой
+      value: 150
+    - skill_id: 137  # спасти
+      value: 142
+  enhanced:
+    cast_success: 77
+    absorb: 50
+    max_factor: 7
+    extra_attack: 5
+    saves:
+      kWill: -86
+      kCritical: -86
+      kStability: -86
+      kReflex: -86

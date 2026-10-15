@@ -7,14 +7,22 @@
 */
 
 #include "punctual_style.h"
+#include "utils/grammar/gender.h"
+#include "gameplay/mechanics/mount.h"
+#include "gameplay/mechanics/resist.h"
 
 #include "engine/entities/obj_data.h"
 #include "engine/entities/char_data.h"
 #include "gameplay/magic/spells_constants.h"
 #include "engine/entities/entities_constants.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_equip_flags.h"
+#include "engine/core/obj_handler.h"
+#include "gameplay/mechanics/inventory.h"
 #include "gameplay/magic/magic_utils.h"
+#include "engine/db/global_objects.h"   // MUD::Class -- кап тела профессии для срока кровотечения
 #include "gameplay/mechanics/equipment.h"
+
+#include <fmt/format.h>
 
 void ImposeHaemorrhage(CharData *ch, int percent);
 void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data);
@@ -33,12 +41,11 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 	int unequip_pos = 0;
 
 	for (auto & i : af) {
-		i.type = ESpell::kUndefined;
 		i.location = EApply::kNone;
-		i.bitvector = 0;
+		i.affect_type = EAffect::kSevereWound;
 		i.modifier = 0;
-		i.battleflag = 0;
-		i.duration = CalcDuration(victim, 2, 0, 0, 0, 0);
+		i.battleflag.clear();
+		i.duration = CalcDuration(victim, victim, ESkill::kUndefined, 2, 0, 0, 0);
 	}
 
 	switch (number(1, 10)) {
@@ -54,12 +61,12 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					return;
 				case 4:    // Hit genus, victim bashed, speed/2
 					victim->battle_affects.set(kEafSlow);
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 10);
+					hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual) / 10), 20);
 					if (victim->GetPosition() > EPosition::kSit) {
 						victim->SetPosition(EPosition::kSit);
 					}
-					victim->DropFromHorse();
-					SetWaitState(victim, 2 * kBattleRound);
+					mount::DropFromHorse(victim);
+					SetBattleLag(victim, 2);
 					to_char = "повалило $N3 на землю";
 					to_vict = "повредило вам колено, повалив на землю";
 					break;
@@ -67,13 +74,13 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					if (victim->GetPosition() > EPosition::kSit) {
 						victim->SetPosition(EPosition::kSit);
 					}
-					victim->DropFromHorse();
-					SetWaitState(victim, 2 * kBattleRound);
+					mount::DropFromHorse(victim);
+					SetBattleLag(victim, 2);
 					to_char = "повалило $N3 на землю";
 					to_vict = "повредило вам колено, повалив на землю";
 					break;
-				case 6:    // foot damaged, speed/2
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 9);
+		case 6:    // foot damaged, speed/2
+					hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual) / 9), 23);
 					to_char = "замедлило движения $N1";
 					to_vict = "сломало вам лодыжку";
 					victim->battle_affects.set(kEafSlow);
@@ -83,59 +90,63 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					if (GET_EQ(victim, EEquipPos::kLegs))
 						DamageEquipment(victim, EEquipPos::kLegs, 100, 100);
 					else {
-						hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 8);
+						hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual)) / 8, 25);
 						to_char = "замедлило движения $N1";
 						to_vict = "сломало вам ногу";
-						af[0].type = ESpell::kBattle;
-						af[0].bitvector = to_underlying(EAffect::kNoFlee);
+						af[0].location = EApply::kBind;
+						af[0].modifier = 1;
+						af[0].affect_type = EAffect::kInsidiousWound;
 						victim->battle_affects.set(kEafSlow);
 					}
 					break;
 				case 8:    // femor damaged, no speed
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 7);
+					hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual)) / 7, 29);
 					to_char = "сильно замедлило движения $N1";
 					to_vict = "сломало вам бедро";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].location = EApply::kBind;
+					af[0].modifier = 1;
+					af[0].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 20);
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 10:    // genus damaged, no speed, -2HR
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 7);
+					hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual)) / 7, 29);
 					to_char = "сильно замедлило движения $N1";
 					to_vict = "раздробило вам колено";
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kHitroll;
 					af[0].modifier = -2;
-					af[0].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kInsidiousWound;
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 11:    // femor damaged, no speed, no attack
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 7);
+					hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual)) / 7, 29);
 					to_char = "вывело $N3 из строя";
 					to_vict = "раздробило вам бедро";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
-					af[1].type = ESpell::kBattle;
-					af[1].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 20);
 					victim->battle_affects.set(kEafSlow);
 					break;
 				default:    // femor damaged, no speed, no attack
 					if (hit_data.dam_critic > 12)
-						hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 5);
+						hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					else
-						hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 6);
+						hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					to_char = "вывело $N3 из строя";
 					to_vict = "изуродовало вам ногу";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
-					af[1].type = ESpell::kBattle;
-					af[1].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 50);
 					victim->battle_affects.set(kEafSlow);
 					break;
@@ -149,78 +160,82 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					// nothing
 					return;
 				case 4:    // waits 1d6
-					SetWaitState(victim, number(2, 6) * kBattleRound);
+					SetBattleLag(victim, number(2, 6));
 					to_char = "сбило $N2 дыхание";
 					to_vict = "сбило вам дыхание";
 					break;
 
-				case 5:    // abdomin damaged, waits 1, speed/2
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 8);
-					SetWaitState(victim, 2 * kBattleRound);
+		case 5:    // abdomin damaged, waits 1, speed/2
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 8, 25);
+					SetBattleLag(victim, 2);
 					to_char = "ранило $N3 в живот";
 					to_vict = "ранило вас в живот";
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 6:    // armor damaged else dam*3, waits 1d6
-					SetWaitState(victim, number(2, 6) * kBattleRound);
+					SetBattleLag(victim, number(2, 6));
 					if (GET_EQ(victim, EEquipPos::kWaist))
 						DamageEquipment(victim, EEquipPos::kWaist, 100, 100);
 					else
-						hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 7);
+						hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual)) / 7, 29);
 					to_char = "повредило $N2 живот";
 					to_vict = "повредило вам живот";
 					break;
 				case 7:
 				case 8:    // abdomin damage, speed/2, HR-2
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 6);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					to_char = "ранило $N3 в живот";
 					to_vict = "ранило вас в живот";
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kHitroll;
 					af[0].modifier = -2;
-					af[0].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kInsidiousWound;
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 9:    // armor damaged, abdomin damaged, speed/2, HR-2
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 5);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					DamageEquipment(victim, EEquipPos::kBody, 100, 100);
 					to_char = "ранило $N3 в живот";
 					to_vict = "ранило вас в живот";
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kHitroll;
 					af[0].modifier = -2;
-					af[0].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kInsidiousWound;
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 20);
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 10:    // abdomin damaged, no speed, no attack
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 4);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 4, 67);
 					to_char = "повредило $N2 живот";
 					to_vict = "повредило вам живот";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
-					af[1].type = ESpell::kBattle;
-					af[1].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 20);
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 11:    // abdomin damaged, no speed, no attack
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 3);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 3, 67);
 					to_char = "разорвало $N2 живот";
 					to_vict = "разорвало вам живот";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
-					af[1].type = ESpell::kBattle;
-					af[1].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 40);
 					victim->battle_affects.set(kEafSlow);
 					break;
 				default:    // abdomin damaged, hits = 0
-					hit_data.dam *= ch->GetSkill(ESkill::kPunctual) / 2;
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 2, 100);
 					to_char = "размозжило $N2 живот";
 					to_vict = "размозжило вам живот";
 					ImposeHaemorrhage(victim, 60);
@@ -237,96 +252,98 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					// nothing
 					return;
 				case 4:    // waits 1d4, bashed
-					SetWaitState(victim, number(2, 5) * kBattleRound);
+					SetBattleLag(victim, number(2, 5));
 					if (victim->GetPosition() > EPosition::kSit)
 						victim->SetPosition(EPosition::kSit);
-					victim->DropFromHorse();
+					mount::DropFromHorse(victim);
 					to_char = "повредило $N2 грудь, свалив $S с ног";
 					to_vict = "повредило вам грудь, свалив вас с ног";
 					break;
 				case 5:    // chest damaged, waits 1, speed/2
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 6);
-					SetWaitState(victim, 2 * kBattleRound);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
+					SetBattleLag(victim, 2);
 					to_char = "повредило $N2 туловище";
 					to_vict = "повредило вам туловище";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].location = EApply::kBind;
+					af[0].modifier = 1;
+					af[0].affect_type = EAffect::kInsidiousWound;
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 6:    // shield damaged, chest damaged, speed/2
 					DamageEquipment(victim, EEquipPos::kShield, 100, 100);
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 6);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					to_char = "повредило $N2 туловище";
 					to_vict = "повредило вам туловище";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].location = EApply::kBind;
+					af[0].modifier = 1;
+					af[0].affect_type = EAffect::kInsidiousWound;
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 7:    // srmor damaged, chest damaged, speed/2, HR-2
 					DamageEquipment(victim, EEquipPos::kBody, 100, 100);
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 5);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					to_char = "повредило $N2 туловище";
 					to_vict = "повредило вам туловище";
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kHitroll;
 					af[0].modifier = -2;
-					af[0].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kInsidiousWound;
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 8:    // chest damaged, no speed, no attack
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 5);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					to_char = "вывело $N3 из строя";
 					to_vict = "повредило вам туловище";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
-					af[1].type = ESpell::kBattle;
-					af[1].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 20);
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 9:    // chest damaged, speed/2, HR-2
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 4);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 4, 67);
 					to_char = "заставило $N3 ослабить натиск";
 					to_vict = "сломало вам ребра";
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kHitroll;
 					af[0].modifier = -2;
-					af[1].type = ESpell::kBattle;
-					af[1].bitvector = to_underlying(EAffect::kNoFlee);
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 20);
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 10:    // chest damaged, no speed, no attack
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 4);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 4, 67);
 					to_char = "вывело $N3 из строя";
 					to_vict = "сломало вам ребра";
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
-					af[1].type = ESpell::kBattle;
-					af[1].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 40);
 					victim->battle_affects.set(kEafSlow);
 					break;
 				case 11:    // chest crushed, hits 0
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
-					hit_data.dam *= ch->GetSkill(ESkill::kPunctual) / 2;
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 2, 100);
 					ImposeHaemorrhage(victim, 50);
 					to_char = "вывело $N3 из строя";
 					to_vict = "разорвало вам грудь";
 					break;
 				default:    // chest crushed, killing
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
-					hit_data.dam *= ch->GetSkill(ESkill::kPunctual) / 2;
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 2, 100);
 					ImposeHaemorrhage(victim, 60);
 					to_char = "вывело $N3 из строя";
 					to_vict = "размозжило вам грудь";
@@ -369,7 +386,6 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					to_vict = "сломало вам руку";
 					if (GET_EQ(victim, EEquipPos::kShield))
 						unequip_pos = EEquipPos::kShield;
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kHitroll;
 					af[0].modifier = -2;
 					break;
@@ -379,26 +395,26 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					else
 						DamageEquipment(victim, EEquipPos::kHands, 100, 100);
 					if (!GET_EQ(victim, EEquipPos::kArms) && !GET_EQ(victim, EEquipPos::kHands))
-						hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 7);
+						hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual)) / 7, 29);
 					to_char = "ослабило атаку $N1";
 					to_vict = "повредило вам руку";
 					break;
 				case 8:    // shield damaged, hands damaged, waits 1
 					DamageEquipment(victim, EEquipPos::kShield, 100, 100);
-					SetWaitState(victim, 2 * kBattleRound);
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 7);
+					SetBattleLag(victim, 2);
+					hit_data.dam *= std::min((GetSkill(ch, ESkill::kPunctual)) / 7, 29);
 					to_char = "придержало $N3";
 					to_vict = "повредило вам руку";
 					break;
 				case 9:    // weapon putdown, hands damaged, waits 1d4
-					SetWaitState(victim, number(2, 4) * kBattleRound);
+					SetBattleLag(victim, number(2, 4));
 					if (GET_EQ(victim, EEquipPos::kBoths))
 						unequip_pos = EEquipPos::kBoths;
 					else if (GET_EQ(victim, EEquipPos::kWield))
 						unequip_pos = EEquipPos::kWield;
 					else if (GET_EQ(victim, EEquipPos::kHold))
 						unequip_pos = EEquipPos::kHold;
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 6);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					to_char = "придержало $N3";
 					to_vict = "повредило вам руку";
 					break;
@@ -406,24 +422,21 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					if (!AFF_FLAGGED(victim, EAffect::kStopRight)) {
 						to_char = "ослабило атаку $N1";
 						to_vict = "изуродовало вам правую руку";
-						af[0].type = ESpell::kBattle;
-						af[0].bitvector = to_underlying(EAffect::kStopRight);
-						af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-						af[0].battleflag = kAfBattledec | kAfPulsedec;
+						af[0].affect_type = EAffect::kStopRight;
+						af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+						af[0].battleflag = {kAfBattledec, kAfPulsedec};
 					} else if (!AFF_FLAGGED(victim, EAffect::kStopLeft)) {
 						to_char = "ослабило атаку $N1";
 						to_vict = "изуродовало вам левую руку";
-						af[0].type = ESpell::kBattle;
-						af[0].bitvector = to_underlying(EAffect::kStopLeft);
-						af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-						af[0].battleflag = kAfBattledec | kAfPulsedec;
+						af[0].affect_type = EAffect::kStopLeft;
+						af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+						af[0].battleflag = {kAfBattledec, kAfPulsedec};
 					} else {
 						to_char = "вывело $N3 из строя";
 						to_vict = "вывело вас из строя";
-						af[0].type = ESpell::kBattle;
-						af[0].bitvector = to_underlying(EAffect::kStopFight);
-						af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-						af[0].battleflag = kAfBattledec | kAfPulsedec;
+						af[0].affect_type = EAffect::kStopFight;
+						af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+						af[0].battleflag = {kAfBattledec, kAfPulsedec};
 					}
 					ImposeHaemorrhage(victim, 20);
 					break;
@@ -431,30 +444,28 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					if (!AFF_FLAGGED(victim, EAffect::kStopRight)) {
 						to_char = "ослабило натиск $N1";
 						to_vict = "изуродовало вам правую руку";
-						af[0].type = ESpell::kBattle;
-						af[0].bitvector = to_underlying(EAffect::kStopRight);
-						af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-						af[0].battleflag = kAfBattledec | kAfPulsedec;
+						af[0].affect_type = EAffect::kStopRight;
+						af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+						af[0].battleflag = {kAfBattledec, kAfPulsedec};
 					} else if (!AFF_FLAGGED(victim, EAffect::kStopLeft)) {
 						to_char = "ослабило натиск $N1";
 						to_vict = "изуродовало вам левую руку";
-						af[0].type = ESpell::kBattle;
-						af[0].bitvector = to_underlying(EAffect::kStopLeft);
-						af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-						af[0].battleflag = kAfBattledec | kAfPulsedec;
+						af[0].affect_type = EAffect::kStopLeft;
+						af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+						af[0].battleflag = {kAfBattledec, kAfPulsedec};
 					} else {
 						to_char = "вывело $N3 из строя";
 						to_vict = "вывело вас из строя";
-						af[0].type = ESpell::kBattle;
-						af[0].bitvector = to_underlying(EAffect::kStopFight);
-						af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-						af[0].battleflag = kAfBattledec | kAfPulsedec;
+						af[0].affect_type = EAffect::kStopFight;
+						af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+						af[0].battleflag = {kAfBattledec, kAfPulsedec};
 					}
-					af[1].type = ESpell::kBattle;
-					af[1].bitvector = to_underlying(EAffect::kNoFlee);
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					ImposeHaemorrhage(victim, 30);
 					if (hit_data.dam_critic >= 13)
-						hit_data.dam *= ch->GetSkill(ESkill::kPunctual) / 5;
+						hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 5, 40);
 					victim->battle_affects.set(kEafSlow);
 					break;
 			}
@@ -467,124 +478,122 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 					// nothing
 					return;
 				case 4:    // waits 1d6
-					SetWaitState(victim, number(2, 6) * kBattleRound);
+					SetBattleLag(victim, number(2, 6));
 					to_char = "помутило $N2 сознание";
 					to_vict = "помутило ваше сознание";
 					break;
 
 				case 5:    // head damaged, cap putdown, waits 1, HR-2 if no cap
-					SetWaitState(victim, 2 * kBattleRound);
+					SetBattleLag(victim, 2);
 					if (GET_EQ(victim, EEquipPos::kHead))
 						unequip_pos = EEquipPos::kHead;
 					else {
-						af[0].type = ESpell::kBattle;
 						af[0].location = EApply::kHitroll;
 						af[0].modifier = -2;
 					}
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 4);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 4, 67);
 					to_char = "повредило $N2 голову";
 					to_vict = "повредило вам голову";
 					break;
 				case 6:    // head damaged
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kHitroll;
 					af[0].modifier = -2;
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 4);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 4, 67);
 					to_char = "повредило $N2 голову";
 					to_vict = "повредило вам голову";
 					break;
 				case 7:    // cap damaged, waits 1d6, speed/2, HR-4
-					SetWaitState(victim, 2 * kBattleRound);
+					SetBattleLag(victim, 2);
 					DamageEquipment(victim, EEquipPos::kHead, 100, 100);
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kHitroll;
 					af[0].modifier = -4;
-					af[0].bitvector = to_underlying(EAffect::kNoFlee);
+					af[0].affect_type = EAffect::kInsidiousWound;
+					af[1].location = EApply::kBind;
+					af[1].modifier = 1;
+					af[1].affect_type = EAffect::kInsidiousWound;
 					to_char = "ранило $N3 в голову";
 					to_vict = "ранило вас в голову";
 					break;
 				case 8:    // cap damaged, hits 0
-					SetWaitState(victim, 4 * kBattleRound);
+					SetBattleLag(victim, 4);
 					DamageEquipment(victim, EEquipPos::kHead, 100, 100);
 					//dam = GET_HIT(victim);
-					hit_data.dam *= ch->GetSkill(ESkill::kPunctual) / 2;
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 2, 100);
 					to_char = "отбило у $N1 сознание";
 					to_vict = "отбило у вас сознание";
 					ImposeHaemorrhage(victim, 20);
 					break;
 				case 9:    // head damaged, no speed, no attack
-					af[0].type = ESpell::kBattle;
-					af[0].bitvector = to_underlying(EAffect::kStopFight);
-					af[0].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[0].battleflag = kAfBattledec | kAfPulsedec;
+					af[0].affect_type = EAffect::kStopFight;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[0].battleflag = {kAfBattledec, kAfPulsedec};
 					ImposeHaemorrhage(victim, 30);
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 3);
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 3, 67);
 					to_char = "повергло $N3 в оцепенение";
 					to_vict = "повергло вас в оцепенение";
 					break;
 				case 10:    // head damaged, -1 INT/WIS/CHA
-					hit_data.dam *= (ch->GetSkill(ESkill::kPunctual) / 2);
-					af[0].type = ESpell::kBattle;
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 2, 100);
 					af[0].location = EApply::kInt;
 					af[0].modifier = -1;
-					af[0].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[0].battleflag = kAfDeadkeep;
-					af[1].type = ESpell::kBattle;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[0].battleflag = {kAfDeadkeep};
+					af[0].affect_type = EAffect::kContusion;
 					af[1].location = EApply::kWis;
 					af[1].modifier = -1;
-					af[1].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[1].battleflag = kAfDeadkeep;
-					af[2].type = ESpell::kBattle;
+					af[1].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[1].battleflag = {kAfDeadkeep};
+					af[1].affect_type = EAffect::kContusion;
 					af[2].location = EApply::kCha;
 					af[2].modifier = -1;
-					af[2].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[2].battleflag = kAfDeadkeep;
-					af[3].type = ESpell::kBattle;
-					af[3].bitvector = to_underlying(EAffect::kStopFight);
-					af[3].duration = CalcDuration(victim, 8, 0, 0, 0, 0);
-					af[3].battleflag = kAfBattledec | kAfPulsedec;
+					af[2].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[2].battleflag = {kAfDeadkeep};
+					af[2].affect_type = EAffect::kContusion;
+					af[3].affect_type = EAffect::kStopFight;
+					af[3].duration = CalcDuration(victim, victim, ESkill::kUndefined, 8, 0, 0, 0);
+					af[3].battleflag = {kAfBattledec, kAfPulsedec};
 					ImposeHaemorrhage(victim, 50);
 					to_char = "сорвало у $N1 крышу";
 					to_vict = "сорвало у вас крышу";
 					break;
 				case 11:    // hits 0, WIS/2, INT/2, CHA/2
-					hit_data.dam *= ch->GetSkill(ESkill::kPunctual) / 2;
-					af[0].type = ESpell::kBattle;
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 2, 100);
 					af[0].location = EApply::kInt;
 					af[0].modifier = -victim->get_int() / 2;
-					af[0].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[0].battleflag = kAfDeadkeep;
-					af[1].type = ESpell::kBattle;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[0].battleflag = {kAfDeadkeep};
+					af[0].affect_type = EAffect::kContusion;
 					af[1].location = EApply::kWis;
 					af[1].modifier = -victim->get_wis() / 2;
-					af[1].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[1].battleflag = kAfDeadkeep;
-					af[2].type = ESpell::kBattle;
+					af[1].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[1].battleflag = {kAfDeadkeep};
+					af[1].affect_type = EAffect::kContusion;
 					af[2].location = EApply::kCha;
 					af[2].modifier = -victim->get_cha() / 2;
-					af[2].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[2].battleflag = kAfDeadkeep;
+					af[2].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[2].battleflag = {kAfDeadkeep};
+					af[2].affect_type = EAffect::kContusion;
 					ImposeHaemorrhage(victim, 60);
 					to_char = "сорвало у $N1 крышу";
 					to_vict = "сорвало у вас крышу";
 					break;
 				default:    // killed
-					af[0].type = ESpell::kBattle;
 					af[0].location = EApply::kInt;
 					af[0].modifier = -victim->get_int() / 2;
-					af[0].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[0].battleflag = kAfDeadkeep;
-					af[1].type = ESpell::kBattle;
+					af[0].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[0].battleflag = {kAfDeadkeep};
+					af[0].affect_type = EAffect::kContusion;
 					af[1].location = EApply::kWis;
 					af[1].modifier = -victim->get_wis() / 2;
-					af[1].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[1].battleflag = kAfDeadkeep;
-					af[2].type = ESpell::kBattle;
+					af[1].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[1].battleflag = {kAfDeadkeep};
+					af[1].affect_type = EAffect::kContusion;
 					af[2].location = EApply::kCha;
 					af[2].modifier = -victim->get_cha() / 2;
-					af[2].duration = CalcDuration(victim, number(1, 6) * 24, 0, 0, 0, 0);
-					af[2].battleflag = kAfDeadkeep;
-					hit_data.dam *= ch->GetSkill(ESkill::kPunctual) / 2;
+					af[2].duration = CalcDuration(victim, victim, ESkill::kUndefined, number(1, 6) * 24, 0, 0, 0);
+					af[2].battleflag = {kAfDeadkeep};
+					af[2].affect_type = EAffect::kContusion;
+					hit_data.dam *= std::min(GetSkill(ch, ESkill::kPunctual) / 2, 100);
 					to_char = "размозжило $N2 голову";
 					to_vict = "размозжило вам голову";
 					ImposeHaemorrhage(victim, 90);
@@ -593,57 +602,65 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 			break;
 	}
 	if (to_char) {
-		sprintf(buf, "&G&qВаше точное попадание %s.&Q&n", to_char);
-		act(buf, false, ch, nullptr, victim, kToChar);
-		sprintf(buf, "Точное попадание $n1 %s.", to_char);
-		act(buf, true, ch, nullptr, victim, kToNotVict | kToArenaListen);
+		act(fmt::format("&G&qВаше точное попадание {}.&Q&n", to_char), false, ch, nullptr, victim, kToChar);
+		act(fmt::format("Точное попадание $n1 {}.", to_char),
+			true, ch, nullptr, victim, kToNotVict | kToArenaListen);
 	}
 
 	if (to_vict) {
-		sprintf(buf, "&R&qМеткое попадание $n1 %s.&Q&n", to_vict);
-		act(buf, false, ch, nullptr, victim, kToVict);
+		act(fmt::format("&R&qМеткое попадание $n1 {}.&Q&n", to_vict), false, ch, nullptr, victim, kToVict);
 	}
 	if (unequip_pos && GET_EQ(victim, unequip_pos)) {
 		obj = UnequipChar(victim, unequip_pos, CharEquipFlags());
+		// Четыре ветки различались только глаголом и хвостом фразы, всё остальное совпадало.
+		const char *unequip_to_vict = nullptr;
+		const char *unequip_to_room = nullptr;
 		switch (unequip_pos) {
 			case 6:        //WEAR_HEAD
-				sprintf(buf, "%s слетел%s с вашей головы.", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_SUF_1(obj));
-				act(buf, false, ch, nullptr, victim, kToVict);
-				sprintf(buf, "%s слетел%s с головы $N1.", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_SUF_1(obj));
-				act(buf, false, ch, nullptr, victim, kToChar);
-				act(buf, true, ch, nullptr, victim, kToNotVict | kToArenaListen);
+				unequip_to_vict = "{} слетел{} с вашей головы.";
+				unequip_to_room = "{} слетел{} с головы $N1.";
 				break;
 
 			case 11:    //WEAR_SHIELD
-				sprintf(buf, "%s слетел%s с вашей руки.", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_SUF_1(obj));
-				act(buf, false, ch, nullptr, victim, kToVict);
-				sprintf(buf, "%s слетел%s с руки $N1.", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_SUF_1(obj));
-				act(buf, false, ch, nullptr, victim, kToChar);
-				act(buf, true, ch, nullptr, victim, kToNotVict | kToArenaListen);
+				unequip_to_vict = "{} слетел{} с вашей руки.";
+				unequip_to_room = "{} слетел{} с руки $N1.";
 				break;
 
 			case 16:    //WEAR_WIELD
 			case 17:    //WEAR_HOLD
-				sprintf(buf, "%s выпал%s из вашей руки.", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_SUF_1(obj));
-				act(buf, false, ch, nullptr, victim, kToVict);
-				sprintf(buf, "%s выпал%s из руки $N1.", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_SUF_1(obj));
-				act(buf, false, ch, nullptr, victim, kToChar);
-				act(buf, true, ch, nullptr, victim, kToNotVict | kToArenaListen);
+				unequip_to_vict = "{} выпал{} из вашей руки.";
+				unequip_to_room = "{} выпал{} из руки $N1.";
 				break;
 
 			case 18:    //WEAR_BOTHS
-				sprintf(buf, "%s выпал%s из ваших рук.", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_SUF_1(obj));
-				act(buf, false, ch, nullptr, victim, kToVict);
-				sprintf(buf, "%s выпал%s из рук $N1.", obj->get_PName(ECase::kNom).c_str(), GET_OBJ_SUF_1(obj));
-				act(buf, false, ch, nullptr, victim, kToChar);
-				act(buf, true, ch, nullptr, victim, kToNotVict | kToArenaListen);
+				unequip_to_vict = "{} выпал{} из ваших рук.";
+				unequip_to_room = "{} выпал{} из рук $N1.";
 				break;
 		}
-		if (!victim->IsNpc() && ROOM_FLAGGED(victim->in_room, ERoomFlag::kArena))
+		if (unequip_to_vict) {
+			const std::string name = obj->get_PName(grammar::ECase::kNom);
+			const char *ending = grammar::ObjSexEnding(obj->get_sex(), 1);
+			act(fmt::format(fmt::runtime(unequip_to_vict), name, ending),
+				false, ch, nullptr, victim, kToVict);
+			const std::string to_room = fmt::format(fmt::runtime(unequip_to_room), name, ending);
+			act(to_room, false, ch, nullptr, victim, kToChar);
+			act(to_room, true, ch, nullptr, victim, kToNotVict | kToArenaListen);
+		}
+		if (!victim->IsNpc() && ROOM_FLAGGED(victim->in_room, ERoomFlag::kArena)) {
 			PlaceObjToInventory(obj, victim);
-		else
+		} else {
+			// issue #3563: точный стиль выбил вещь НА ЗЕМЛЮ (не в инвентарь). Логируем для
+			// игрока и чармиса игрока -- иначе непонятно, куда делось оружие (валяется в
+			// комнате, владелец не находит). Обычных мобов не логируем, чтобы не шуметь.
+			const std::string who = ObjHolderLogDesc(victim);
+			if (!who.empty()) {
+				log("[Punctual -> ground] %s выбил точным стилем '%s' (vnum %d) из рук %s -> комната [%d] %s",
+						GET_NAME(ch), obj->get_PName(grammar::ECase::kNom).c_str(), GET_OBJ_VNUM(obj),
+						who.c_str(), world[victim->in_room]->vnum, world[victim->in_room]->name);
+			}
 			PlaceObjToRoom(obj, victim->in_room);
-		CheckObjDecay(obj);
+			CheckObjDecay(obj);
+		}
 	}
 	if (!victim->IsNpc()) {
 		hit_data.dam /= 5;
@@ -653,37 +670,48 @@ void PerformPunctualHit(CharData *ch, CharData *victim, HitData &hit_data) {
 	}
 	hit_data.dam = ApplyResist(victim, EResist::kVitality, hit_data.dam);
 	for (auto & i : af) {
-		if (i.type > ESpell::kUndefined) {
-			ImposeAffect(victim, i, true, false, true, false);
+		if (i.affect_type != EAffect::kUndefined) {
+			ImposeAffectNoRecalc(victim, i, true, false, true, false);
 		}
 	}
+}
+
+// Размах срока кровотечения: чем крепче телом жертва, тем короче. Формула писалась под кап тела 30
+// (оттуда и "31 - тело"), а кап давно зависит от профессии -- 50 у колдунов, 75 у ловкачей, 90 у
+// воинов. При теле выше 30 верхняя граница уходила в минус, number() менял границы местами и
+// возвращал отрицательное, а CalcDuration принимал base беззнаковым: минус оборачивался в
+// 2147483618 тиков, и у игрока светилось "кровотечение (35790110 часов)" без всякой возможности
+// снять. Считаем от капа профессии: (кап + 10) - тело, то есть у самого крепкого остаётся десятка,
+// а не единица. Нижняя граница держится на всякий случай -- тело бывает выше капа (боги, мобы).
+int CalcHaemorrhageBand(CharData *victim) {
+	const int cap = victim->IsNpc()
+						? kDefaultBaseStatCap
+						: MUD::Class(victim->GetClass()).GetBaseStatCap(EBaseStat::kCon);
+	return std::max(1, cap + 10 - GetRealCon(victim));
 }
 
 void ImposeHaemorrhage(CharData *ch, int percent) {
 	Affect<EApply> af[3];
 
-	af[0].type = ESpell::kHaemorrhage;
+	const int band = CalcHaemorrhageBand(ch);
 	af[0].location = EApply::kHpRegen;
 	af[0].modifier = -percent;
-	//TODO: Отрицательное время, если тело больше 31?
-	af[0].duration = CalcDuration(ch, number(1, 31 - GetRealCon(ch)), 0, 0, 0, 0);
-	af[0].bitvector = 0;
-	af[0].battleflag = 0;
-	af[1].type = ESpell::kHaemorrhage;
+	af[0].duration = CalcDuration(ch, ch, ESkill::kUndefined, number(1, band), 0, 0, 0);
+	af[0].affect_type = EAffect::kHaemorrhage;
+	af[0].battleflag = {kAfCurable};
 	af[1].location = EApply::kMoveRegen;
 	af[1].modifier = -percent;
 	af[1].duration = af[0].duration;
-	af[1].bitvector = 0;
-	af[1].battleflag = 0;
-	af[2].type = ESpell::kHaemorrhage;
+	af[1].affect_type = EAffect::kHaemorrhage;
+	af[1].battleflag = {kAfCurable};
 	af[2].location = EApply::kManaRegen;
 	af[2].modifier = -percent;
 	af[2].duration = af[0].duration;
-	af[2].bitvector = 0;
-	af[2].battleflag = 0;
+	af[2].affect_type = EAffect::kHaemorrhage;
+	af[2].battleflag = {kAfCurable};
 
 	for (auto &i : af) {
-		ImposeAffect(ch, i, true, false, true, false);
+		ImposeAffectNoRecalc(ch, i, true, false, true, false);
 	}
 }
 
@@ -707,7 +735,7 @@ int CalcPunctualCritDmg(CharData *ch, CharData * /*victim*/, ObjData *wielded) {
 	else
 		dam_critic = RollDices(4, 5);
 
-	const int skill = 1 + ch->GetSkill(ESkill::kPunctual) / 6;
+	const int skill = 1 + GetSkill(ch, ESkill::kPunctual) / 6;
 	dam_critic = std::min(number(4, skill), dam_critic);
 
 	return dam_critic;

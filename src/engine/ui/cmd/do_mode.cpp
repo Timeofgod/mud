@@ -2,9 +2,15 @@
 // Created by Sventovit on 07.09.2024.
 //
 #include "engine/entities/char_data.h"
+#include "engine/db/global_objects.h"
+#include "gameplay/economics/currencies.h"
+#include "utils/grammar/declensions.h"
+#include "do_mode.h"
+#include "engine/network/descriptor_data.h"
 #include "do_toggle.h"
 #include "gameplay/clans/house.h"
 #include "engine/ui/table_wrapper.h"
+#include "utils/utils_string.h"
 #include "gameplay/communication/remember.h"
 
 const int kToggleOff{0};
@@ -17,6 +23,33 @@ void SetScreen(CharData *ch, char *argument, int flag);
 void SetNotifyEchange(CharData *ch, char *argument);
 void SetAutolootMode(CharData *ch, char *argument);
 bool TogglePrfFlag(CharData *ch, EPrf flag);
+
+const char *GetBriefShieldsModeMessage(const CharData *ch) {
+	switch (ch->GetBriefShieldsMode()) {
+		case EBriefShieldsMode::kBrief: return "Показ сообщений при срабатывании магических щитов: краткий.";
+		case EBriefShieldsMode::kCompact: return "Показ сообщений при срабатывании магических щитов: компактный.";
+		case EBriefShieldsMode::kCompressed: return "Показ сообщений при срабатывании магических щитов: сжатый.";
+		case EBriefShieldsMode::kOff:
+		default: return "Показ сообщений при срабатывании магических щитов: полный.";
+	}
+}
+
+void CycleBriefShieldsMode(CharData *ch) {
+	EBriefShieldsMode next_mode = EBriefShieldsMode::kBrief;
+	switch (ch->GetBriefShieldsMode()) {
+		case EBriefShieldsMode::kOff: next_mode = EBriefShieldsMode::kBrief;
+			break;
+		case EBriefShieldsMode::kBrief: next_mode = EBriefShieldsMode::kCompact;
+			break;
+		case EBriefShieldsMode::kCompact: next_mode = EBriefShieldsMode::kCompressed;
+			break;
+		case EBriefShieldsMode::kCompressed: next_mode = EBriefShieldsMode::kOff;
+			break;
+	}
+
+	ch->SetBriefShieldsMode(next_mode);
+	SendMsgToChar(GetBriefShieldsModeMessage(ch), ch);
+}
 
 enum EScmd {
   kScmdNosummon,
@@ -36,6 +69,7 @@ enum EScmd {
   kScmdSlowns,
   kScmdAutoexit,
   kScmdTrack,
+  KScmdColor,      //теперь свободно
   kScmdCoderinfo,
   kScmdAutomem,
   kScmdCompress,
@@ -74,7 +108,8 @@ enum EScmd {
   kScmdBlind,
   kScmdMapper,
   kScmdTester,
-  kScmdIpcontrol
+  kScmdIpcontrol,
+  kScmdLineWrap
 };
 
 const char *gen_tog_type[] = {"автовыходы", "autoexits",
@@ -108,6 +143,7 @@ const char *gen_tog_type[] = {"автовыходы", "autoexits",
 							  "брать куны", "automoney",
 							  "арена", "arena",
 							  "ширина", "length",
+							  "перенос строк", "linewrap",
 							  "высота", "width",
 							  "экран", "screen",
 							  "новости", "news",
@@ -173,6 +209,7 @@ struct gen_tog_param_type {
 			0, kScmdAutomoney, false}, {
 			0, kScmdNoarena, false}, {
 			0, kScmdLength, false}, {
+			0, kScmdLineWrap, false}, {
 			0, kScmdWidth, false}, {
 			0, kScmdScreen, false}, {
 			0, kScmdNewsMode, false}, {
@@ -199,21 +236,34 @@ struct gen_tog_param_type {
 			0, kScmdIpcontrol, false}
 	};
 
+// Поиск режима по названию. Не search_block: тот сравнивает строку целиком, посимвольно,
+// и на многословном названии понимает только сокращение первого слова ("флаги" вместо
+// "флаги комнат"). IsEqual разбирает точку и подчёркивание как разделители слов, поэтому
+// работает привычное по остальным командам "фл.ком" -- как "меч.неизв" у предметов.
+static int FindModeIndex(const char *name) {
+	for (int i = 0; *gen_tog_type[i] != '\n'; ++i) {
+		if (utils::IsEqual(name, gen_tog_type[i])) {
+			return i;
+		}
+	}
+	return -1;
+}
+
 void DoMode(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	if (ch->IsNpc()) {
 		return;
 	}
 
-	argument = one_argument(argument, arg);
-//	skip_spaces(&argument);
+	char mode_arg[kMaxInputLength];
+	argument = one_argument(argument, mode_arg);
 	int i{0};
 	bool showhelp{false};
-	if (!*arg) {
+	if (!*mode_arg) {
 		do_toggle(ch, argument, 0, 0);
 		return;
-	} else if (*arg == '?') {
+	} else if (*mode_arg == '?') {
 		showhelp = true;
-	} else if ((i = search_block(arg, gen_tog_type, false)) < 0) {
+	} else if ((i = FindModeIndex(mode_arg)) < 0) {
 		showhelp = true;
 	} else if ((GetRealLevel(ch) < gen_tog_param[i >> 1].level)
 		|| (!GET_GOD_FLAG(ch, EGf::kAllowTesterMode) && gen_tog_param[i >> 1].tester)) {
@@ -253,7 +303,7 @@ void do_gen_tog(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			{"К вам можно обратиться.\r\n",
 			 "Вы глухи к обращениям.\r\n"},
 			{"Вам будут выводиться сообщения аукциона.\r\n",
-			 "Вы отключены от участия в аукционе.\r\n"},
+			 "Вы отключены от участия в аукционе.\r\n"}, //5
 			{"Вы слышите то, что орут.\r\n",
 			 "Вы глухи к тому, что орут.\r\n"},
 			{"Вы слышите всю болтовню.\r\n",
@@ -261,9 +311,9 @@ void do_gen_tog(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			{"Вы слышите все поздравления.\r\n",
 			 "Вы глухи к поздравлениям.\r\n"},
 			{"You can now hear the Wiz-channel.\r\n",
-			 "You are now deaf to the Wiz-channel.\r\n"},
+			 "You are now deaf to the Wiz-channel.\r\n"},  
 			{"Вы больше не выполняете задания.\r\n",
-			 "Вы выполняете задание!\r\n"},
+			 "Вы выполняете задание!\r\n"}, //10
 			{"Вы больше не будете видеть флаги комнат.\r\n",
 			 "Вы способны различать флаги комнат.\r\n"},
 			{"Ваши сообщения будут дублироваться.\r\n",
@@ -273,23 +323,21 @@ void do_gen_tog(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			{"Nameserver_is_slow changed to NO; IP addresses will now be resolved.\r\n",
 			 "Nameserver_is_slow changed to YES; sitenames will no longer be resolved.\r\n"},
 			{"Показ выходов автоматически выключен.\r\n",
-			 "Показ выходов автоматически включен.\r\n"},
+			 "Показ выходов автоматически включен.\r\n"},  //15
 			{"Вы не можете более выследить сквозь двери.\r\n",
-			 "Вы способны выслеживать сквозь двери.\r\n"},
+			 "Вы способны выслеживать сквозь двери.\r\n"}, //16
 			{"\r\n",
-			 "\r\n"},
+			 "\r\n"}, //17
 			{"Режим показа дополнительной информации выключен.\r\n",
-			 "Режим показа дополнительной информации включен.\r\n"},
+			 "Режим показа дополнительной информации включен.\r\n"}, //18
 			{"Автозаучивание заклинаний выключено.\r\n",
-			 "Автозаучивание заклинаний включено.\r\n"},
+			 "Автозаучивание заклинаний включено.\r\n"}, //19
 			{"Сжатие запрещено.\r\n",
-			 "Сжатие разрешено.\r\n"},
-			{"\r\n",
-			 "\r\n"},
+			 "Сжатие разрешено.\r\n"},  //20
 			{"Вы слышите все крики.\r\n",
-			 "Вы глухи к крикам.\r\n"},
+			 "Вы глухи к крикам.\r\n"},  //21
 			{"Режим автозавершения (IAC GA) выключен.\r\n",
-			 "Режим автозавершения (IAC GA) включен.\r\n"},
+			 "Режим автозавершения (IAC GA) включен.\r\n"}, //22
 			{"При просмотре состава группы будут отображаться только персонажи и ваши последователи.\r\n",
 			 "При просмотре состава группы будут отображаться все персонажи и последователи.\r\n"},
 			{"Вы не будете автоматически помогать согрупникам.\r\n",
@@ -350,7 +398,9 @@ void do_gen_tog(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			{"Режим вывода тестовой информации выключен.\r\n",
 			 "Режим вывода тестовой информации включен.\r\n"},
 			{"Режим контроля смены IP-адреса персонажа выключен.\r\n",
-			 "Режим контроля смены IP-адреса персонажа включен.\r\n"}
+			 "Режим контроля смены IP-адреса персонажа включен.\r\n"},
+			{"Перенос длинных строк по ширине экрана выключен.\r\n",
+			 "Перенос длинных строк по ширине экрана включен.\r\n"}
 		};
 
 	if (ch->IsNpc())
@@ -418,6 +468,10 @@ void do_gen_tog(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			//}
 			break;
 		case kScmdIpcontrol: result = TogglePrfFlag(ch, EPrf::kIpControl);
+			break;
+			// Флаг -- выключатель, поэтому включённому режиму отвечает снятый флаг:
+			// перенос работает у всех, кто его не отключал, старым персонажам в том числе.
+		case kScmdLineWrap: result = !TogglePrfFlag(ch, EPrf::kNoLineWrap);
 			break;
 #if defined(HAVE_ZLIB)
 		case kScmdCompress: result = iosystem::toggle_compression(ch->desc);
@@ -509,8 +563,9 @@ void do_gen_tog(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			break;
 		case kScmdMisprint: result = TogglePrfFlag(ch, EPrf::kShowUnread);
 			break;
-		case kScmdBriefShields: result = TogglePrfFlag(ch, EPrf::kBriefShields);
-			break;
+		case kScmdBriefShields:
+			CycleBriefShieldsMode(ch);
+			return;
 		case kScmdAutoNosummon: result = TogglePrfFlag(ch, EPrf::kAutonosummon);
 			break;
 		default: SendMsgToChar(ch, "Введите параметр режима полностью.\r\n");
@@ -530,16 +585,18 @@ void SetScreen(CharData *ch, char *argument, int flag) {
 	skip_spaces(&argument);
 	int size = atoi(argument);
 
-	if (!flag && (size < 30 || size > 300))
-		SendMsgToChar("Ширина экрана должна быть в пределах 30 - 300 символов.\r\n", ch);
+	if (!flag && (size < kMinScreenWidth || size > kMaxScreenWidth))
+		SendMsgToChar(ch, "Ширина экрана должна быть в пределах %d - %d символов.\r\n",
+					  kMinScreenWidth, kMaxScreenWidth);
 	else if (flag == 1 && (size < 10 || size > 100))
 		SendMsgToChar("Высота экрана должна быть в пределах 10 - 100 строк.\r\n", ch);
 	else if (!flag) {
-		STRING_LENGTH(ch) = size;
-		SendMsgToChar("Ладушки.\r\n", ch);
+		ch->player_specials->saved.stringLength = size;
+		SendMsgToChar("Выводим тестовую строку:\r\n", ch);
+		SendMsgToChar(ch, "%s\r\n", ScreenRuler(static_cast<std::size_t>(size)).c_str());
 		ch->save_char();
 	} else if (flag == 1) {
-		STRING_WIDTH(ch) = size;
+		(ch)->player_specials->saved.stringWidth = size;
 		SendMsgToChar("Ладушки.\r\n", ch);
 		ch->save_char();
 	} else {
@@ -561,13 +618,13 @@ void SetNotifyEchange(CharData *ch, char *argument) {
 		SendMsgToChar(ch,
 					  "Вам будут приходить уведомления о продаже с базара ваших лотов стоимостью не менее чем %ld %s.\r\n",
 					  size,
-					  GetDeclensionInNumber(size, EWhat::kMoneyA));
-		NOTIFY_EXCH_PRICE(ch) = size;
+					  MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(size, grammar::ECase::kNom).c_str());
+		(ch)->player_specials->saved.ntfyExchangePrice = size;
 		ch->save_char();
 	} else if (size >= 0 && size < 100) {
 		SendMsgToChar(ch,
 					  "Вам не будут приходить уведомления о продаже с базара ваших лотов, так как указана цена меньше 100 кун.\r\n");
-		NOTIFY_EXCH_PRICE(ch) = 0;
+		(ch)->player_specials->saved.ntfyExchangePrice = 0;
 		ch->save_char();
 	} else {
 		SendMsgToChar(ch, "Укажите стоимость лота от 0 до %d\r\n", 0x7fffffff);
@@ -609,6 +666,22 @@ bool TogglePrfFlag(CharData *ch, EPrf flag) {
 	const auto flagged = ch->IsFlagged(flag);
 	ch->IsFlagged(flag) ? ch->UnsetFlag(flag) : ch->SetFlag(flag);
 	return (!flagged);
+}
+
+// Размер окна, присланный клиентом по NAWS: ширина уходит в перенос текста, высота --
+// в постраничный вывод. Клиент присылает его при подключении и при каждом изменении окна,
+// поэтому руками ширину задавать больше не нужно -- но команда остаётся для клиентов,
+// которые NAWS не умеют.
+void ApplyNawsScreenSize(DescriptorData *d) {
+	if (!d || !d->character || d->character->IsNpc()) {
+		return;
+	}
+	if (d->naws_width >= kMinScreenWidth && d->naws_width <= kMaxScreenWidth) {
+		d->character->player_specials->saved.stringLength = d->naws_width;
+	}
+	if (d->naws_height >= kMinScreenHeight && d->naws_height <= kMaxScreenHeight) {
+		d->character->player_specials->saved.stringWidth = d->naws_height;
+	}
 }
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

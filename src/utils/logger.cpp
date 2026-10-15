@@ -1,4 +1,13 @@
 #include "engine/db/global_objects.h"
+#include "utils/utils.h"
+#include "engine/structs/structs.h"
+#include "engine/core/comm.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/minions.h"
+#include "engine/entities/char_data.h"
+#include "utils/utils_encoding.h"
+#include "utils/native_text.h"
+#include "utils/utils_string.h"
 #include "engine/ui/color.h"
 #include "backtrace.h"
 
@@ -6,9 +15,10 @@
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
-#include <format>
+#include <fmt/chrono.h>
+#include <fmt/format.h>
 
-#if defined(__clang__)
+#if defined(__clang__) || defined(__CYGWIN__)
 #define HAS_TIME_ZONE 0
 #else
 #define HAS_TIME_ZONE 1
@@ -22,6 +32,24 @@
 // дескрипторы открытых файлов логов для сброса буфера при креше
 std::list<FILE *> opened_files;
 
+namespace {
+// Запись логов, которые идут прямо в файл мимо LogManager (shop/olc/imm и персональные).
+// Лог лежит в нативной кодировке, поэтому текст уходит как есть (issue #3787).
+void vfprintf_native(FILE *file, const char *format, va_list args) {
+	va_list measure;
+	va_copy(measure, args);
+	const int need = vsnprintf(nullptr, 0, format, measure);
+	va_end(measure);
+	if (need < 0) {
+		return;
+	}
+	std::string text(static_cast<std::size_t>(need) + 1, '\0');
+	vsnprintf(&text[0], text.size(), format, args);
+	text.resize(static_cast<std::size_t>(need));
+	fputs(text.c_str(), file);
+}
+}  // namespace
+
 void pers_log(CharData *ch, const char *format, ...) {
 	if (!ch) {
 		log("NULL character resieved! (%s %s %d)", __FILE__, __func__, __LINE__);
@@ -33,12 +61,12 @@ void pers_log(CharData *ch, const char *format, ...) {
 	}
 
 	if (!ch->desc->pers_log) {
-		char filename[128], name[64], *ptr;
-		strcpy(name, GET_NAME(ch));
-		for (ptr = name; *ptr; ptr++) {
-			*ptr = LOWER(AtoL(*ptr));
-		}
-		sprintf(filename, "../log/perslog/%s.log", name);
+		char filename[128];
+		// Имя файла персонального лога строится из байтов KOI8-R, как и до миграции
+		// (issue #3681).
+		std::string name = GET_NAME(ch);
+		CreateFileName(name);
+		sprintf(filename, "%s/perslog/%s.log", runtime_config.log_dir().c_str(), name.c_str());
 		ch->desc->pers_log = fopen(filename, "a");
 		if (!ch->desc->pers_log) {
 			log("SYSERR: error open %s (%s %s %d)", filename, __FILE__, __func__, __LINE__);
@@ -50,7 +78,7 @@ void pers_log(CharData *ch, const char *format, ...) {
 	write_time(ch->desc->pers_log);
 	va_list args;
 	va_start(args, format);
-	vfprintf(ch->desc->pers_log, format, args);
+	vfprintf_native(ch->desc->pers_log, format, args);
 	va_end(args);
 	fprintf(ch->desc->pers_log, "\n");
 }
@@ -58,67 +86,87 @@ void pers_log(CharData *ch, const char *format, ...) {
 // Файл для вывода
 FILE *logfile = nullptr;
 
-std::size_t vlog_buffer(char *buffer, const std::size_t buffer_size, const char *format, va_list args) {
-    std::size_t result = ~0u;
-    int timestamp_length = -1;
-
+static std::string make_timestamp() {
 #if HAS_TIME_ZONE
-    // Реализация с использованием std::chrono::time_zone
     const std::chrono::time_zone* time_zone;
     try {
         time_zone = std::chrono::current_zone();
     }
     catch(const std::runtime_error&) {
         puts("SYSERR: failed to get local timezone.");
-        return result;
+        return {};
     }
-
     const auto utc_now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
     const auto now = std::chrono::zoned_time{time_zone, utc_now};
-    const auto str = std::format("{:%Y-%m-%d %T}", now);
-    timestamp_length = snprintf(buffer, buffer_size, "%s :: ", str.c_str());
+    // fmt v12 не имеет formatter'а для zoned_time / local_time напрямую,
+    // подсовываем локальное time_point под видом sys_time -- для
+    // спецификаторов %Y-%m-%d %T fmt смотрит только на time_since_epoch.
+    const auto local_as_sys = std::chrono::sys_time<std::chrono::milliseconds>{
+        now.get_local_time().time_since_epoch()};
+    return fmt::format("{:%Y-%m-%d %T}", local_as_sys);
 #else
-    // Реализация без std::chrono::time_zone, используем std::chrono::local_time
     const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
-        const auto time_t_now = std::chrono::system_clock::to_time_t(now);
-        auto* local_tm = std::localtime(&time_t_now);
+    const auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    auto* local_tm = std::localtime(&time_t_now);
+    if (!local_tm) {
+        puts("SYSERR: failed to get local time.");
+        return {};
+    }
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    char time_str[64];
+    std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_tm);
+    std::snprintf(time_str + std::strlen(time_str), sizeof(time_str) - std::strlen(time_str), ".%03ld", ms.count());
+    return time_str;
+#endif
+}
 
-        if (!local_tm) {
-            puts("SYSERR: failed to get local time.");
-            return result;
-        }
-
-        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
-        char time_str[64];
-        std::strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", local_tm);
-        std::snprintf(time_str + std::strlen(time_str), sizeof(time_str) - std::strlen(time_str), ".%03ld", ms.count());
-        const std::string str = time_str;
-        timestamp_length = snprintf(buffer, buffer_size, "%s :: ", str.c_str());
-    #endif
-
-    if (0 > timestamp_length) {
-        puts("SYSERR: failed to print timestamp inside log() function.");
-        return result;
+static std::string format_log_message(const char *format, va_list args) {
+    const std::string ts = make_timestamp();
+    if (ts.empty()) {
+        return {};
     }
 
     va_list args_copy;
     va_copy(args_copy, args);
-    const int length = vsnprintf(buffer + timestamp_length, buffer_size - timestamp_length, format, args_copy);
+    const int len = vsnprintf(nullptr, 0, format, args_copy);
     va_end(args_copy);
 
-    if (0 > length) {
-        puts("SYSERR: failed to print message contents inside log() function.");
-        return result;
+    if (len < 0) {
+        puts("SYSERR: failed to format log message.");
+        return {};
     }
 
-    result = timestamp_length + length;
-    if (buffer_size <= result) {
-        const char truncated_suffix[] = "[TRUNCATED]";
-        snprintf(buffer, buffer_size - sizeof(truncated_suffix), "%s", truncated_suffix);
-    }
+    std::string msg(len, '\0');
+    va_copy(args_copy, args);
+    vsnprintf(&msg[0], len + 1, format, args_copy);
+    va_end(args_copy);
 
-    return result;
+    return ts + " :: " + msg;
 }
+
+// Имя потока, которое уезжает в атрибут log_type: по нему FileLogSender выбирает
+// файл, а Loki кладёт его в structured metadata (фильтр `| log_type="trade"`).
+static const char* stream_name_for_stream(EOutputStream stream) {
+	switch (stream) {
+		case SYSLOG:    return "syslog";
+		case ERRLOG:    return "errlog";
+		case IMLOG:     return "imlog";
+		case MSDP_LOG:  return "msdp";
+		case MONEY_LOG: return "money";
+		default:        return "syslog";
+	}
+}
+
+static const char* stream_name_for_file(FILE* file) {
+	for (int i = 0; i <= LAST_LOG; i++) {
+		const auto stream = static_cast<EOutputStream>(i);
+		if (runtime_config.logs(stream).handle() == file) {
+			return stream_name_for_stream(stream);
+		}
+	}
+	return "syslog";
+}
+
 
 void vlog(const char *format, va_list args, FILE *logfile) {
 	if (!runtime_config.logging_enabled()) {
@@ -135,20 +183,13 @@ void vlog(const char *format, va_list args, FILE *logfile) {
 		format = "SYSERR: log() received a NULL format.";
 	}
 
-	if (!runtime_config.output_thread()
-		&& runtime_config.log_stderr().empty()) {
-		const time_t ct = time(0);
-		const char *time_s = asctime(localtime(&ct));
-
-		fprintf(logfile, "%-15.15s :: ", time_s + 4);
-		vfprintf(logfile, format, args);
-		fprintf(logfile, "\n");
-	} else {
-		constexpr std::size_t BUFFER_SIZE = 4096;
-		std::shared_ptr<char> buffer(new char[BUFFER_SIZE], [](char *p) { delete[] p; });
-		const std::size_t length = vlog_buffer(buffer.get(), BUFFER_SIZE, format, args);
-		GlobalObjects::output_thread().output(OutputThread::message_t{buffer, length, logfile});
+	const std::string message = format_log_message(format, args);
+	if (message.empty()) {
+		return;
 	}
+
+	const char* stream_name = stream_name_for_file(logfile);
+	logging::LogManager::Info(message, {{"log_type", stream_name}});
 }
 
 void vlog(const char *format, va_list args) {
@@ -156,13 +197,48 @@ void vlog(const char *format, va_list args) {
 }
 
 void vlog(const EOutputStream steam, const char *format, va_list rargs) {
+	if (!runtime_config.logging_enabled()) {
+		return;
+	}
+
+	if (format == nullptr) {
+		format = "SYSERR: log() received a NULL format.";
+	}
+
 	va_list args;
 	va_copy(args, rargs);
-
-	const auto log = runtime_config.logs(steam).handle();
-	vlog(format, args, log);
-
+	const std::string message = format_log_message(format, args);
 	va_end(args);
+	if (message.empty()) {
+		return;
+	}
+
+	logging::LogManager::Info(message, {{"log_type", stream_name_for_stream(steam)}});
+}
+
+void log_event(const char *log_type, const std::map<std::string, std::string> &attributes, const char *format, ...) {
+	if (!runtime_config.logging_enabled()) {
+		return;
+	}
+
+	if (format == nullptr) {
+		format = "SYSERR: log_event() received a NULL format.";
+	}
+
+	va_list args;
+	va_start(args, format);
+	const std::string message = format_log_message(format, args);
+	va_end(args);
+	if (message.empty()) {
+		return;
+	}
+
+	// Атрибуты уходят в OTLP как structured metadata (Loki умеет по ним фильтровать
+	// и агрегировать без regex). Пишется ли событие ещё и в файл, решает
+	// FileLogSender по log_type: у чисто телеметрических типов файла нет.
+	std::map<std::string, std::string> attrs(attributes);
+	attrs["log_type"] = log_type ? log_type : "syslog";
+	logging::LogManager::Info(message, attrs);
 }
 
 void log(std::string format) {
@@ -184,11 +260,11 @@ void log(const char *format, ...) {
 }
 
 void shop_log(const char *format, ...) {
-	const char *filename = "../log/shop.log";
+	const auto filename = runtime_config.log_dir() + "/shop.log";
 
-	FILE *file = fopen(filename, "a");
+	FILE *file = fopen(filename.c_str(), "a");
 	if (!file) {
-		log("SYSERR: can't open %s!", filename);
+		log("SYSERR: can't open %s!", filename.c_str());
 		return;
 	}
 
@@ -198,7 +274,7 @@ void shop_log(const char *format, ...) {
 	write_time(file);
 	va_list args;
 	va_start(args, format);
-	vfprintf(file, format, args);
+	vfprintf_native(file, format, args);
 	va_end(args);
 	fprintf(file, "\n");
 
@@ -206,11 +282,11 @@ void shop_log(const char *format, ...) {
 }
 
 void olc_log(const char *format, ...) {
-	const char *filename = "../log/olc.log";
+	const auto filename = runtime_config.log_dir() + "/olc.log";
 
-	FILE *file = fopen(filename, "a");
+	FILE *file = fopen(filename.c_str(), "a");
 	if (!file) {
-		log("SYSERR: can't open %s!", filename);
+		log("SYSERR: can't open %s!", filename.c_str());
 		return;
 	}
 
@@ -220,7 +296,7 @@ void olc_log(const char *format, ...) {
 	write_time(file);
 	va_list args;
 	va_start(args, format);
-	vfprintf(file, format, args);
+	vfprintf_native(file, format, args);
 	va_end(args);
 	fprintf(file, "\n");
 
@@ -228,11 +304,11 @@ void olc_log(const char *format, ...) {
 }
 
 void imm_log(const char *format, ...) {
-	const char *filename = "../log/imm.log";
+	const auto filename = runtime_config.log_dir() + "/imm.log";
 
-	FILE *file = fopen(filename, "a");
+	FILE *file = fopen(filename.c_str(), "a");
 	if (!file) {
-		log("SYSERR: can't open %s!", filename);
+		log("SYSERR: can't open %s!", filename.c_str());
 		return;
 	}
 
@@ -242,7 +318,7 @@ void imm_log(const char *format, ...) {
 	write_time(file);
 	va_list args;
 	va_start(args, format);
-	vfprintf(file, format, args);
+	vfprintf_native(file, format, args);
 	va_end(args);
 	fprintf(file, "\n");
 
@@ -261,16 +337,54 @@ void err_log(const char *format, ...) {
 	mudlog(buf_, LGH, kLvlImmortal, SYSLOG, true);
 }
 
+
+void fatal_log(const char *format, ...) {
+	char buf_[kMaxRawInputLength];
+
+	va_list args;
+	va_start(args, format);
+	vsnprintf(buf_, sizeof(buf_), format, args);
+	va_end(args);
+
+	// Print to stderr so the user sees the error when running from terminal
+	fprintf(stderr, "FATAL: %s\n", buf_);
+
+	// Also write to syslog for post-mortem analysis
+	log("FATAL: %s", buf_);
+
+	exit(1);
+}
+
 void ip_log(const char *ip) {
 	FILE *iplog;
 
-	if (!(iplog = fopen("../log/ip.log", "a"))) {
-		log("SYSERR: ../log/ip.log");
+	const auto ip_log_path = runtime_config.log_dir() + "/ip.log";
+	if (!(iplog = fopen(ip_log_path.c_str(), "a"))) {
+		log("SYSERR: %s", ip_log_path.c_str());
 		return;
 	}
 
 	fprintf(iplog, "%s\n", ip);
 	fclose(iplog);
+}
+
+// Лог неудачных входов в админ-панель (Admin API) для fail2ban (issue #3388).
+// Формат строки языконезависимый и стабильный для разбора:
+//   <дата> :: accesadminpanel: login failed ip=<IP> user='<name>'
+void admin_panel_access_log(const char *ip, const char *username) {
+	const auto filename = runtime_config.log_dir() + "/accesadminpanel.log";
+
+	FILE *file = fopen(filename.c_str(), "a");
+	if (!file) {
+		log("SYSERR: can't open %s!", filename.c_str());
+		return;
+	}
+
+	write_time(file);
+	fprintf(file, "accesadminpanel: login failed ip=%s user='%s'\n",
+			ip && *ip ? ip : "unknown",
+			username ? username : "");
+	fclose(file);
 }
 
 /*
@@ -308,7 +422,8 @@ void mudlog(const char *str, LogMode type, int level, EOutputStream channel, boo
 	char time_buf[20];
 	time_t ct = time(0);
 	strftime(time_buf, sizeof(time_buf), "%d-%m-%y %H:%M:%S", localtime(&ct));
-	snprintf(tmpbuf, sizeof(tmpbuf), "[%s][ %s ]\r\n", time_buf, str);
+	// \r\n добавляем после переноса по ширине; в файл строка уже ушла сырой выше
+	snprintf(tmpbuf, sizeof(tmpbuf), "[%s][ %s ]", time_buf, str);
 	for (i = descriptor_list; i; i = i->next) {
 		if  (i->state != EConState::kPlaying || i->character->IsNpc())    // switch
 			continue;
@@ -322,7 +437,9 @@ void mudlog(const char *str, LogMode type, int level, EOutputStream channel, boo
 			continue;
 
 		SendMsgToChar(kColorGrn, i->character.get());
-		SendMsgToChar(tmpbuf, i->character.get());
+		// переносим строку лога по ширине вывода бога (stringLength == 0 -- без переноса)
+		SendMsgToChar(utils::WrapText(tmpbuf, i->character->player_specials->saved.stringLength) + "\r\n",
+				i->character.get());
 		SendMsgToChar(kColorNrm, i->character.get());
 	}
 }
@@ -403,10 +520,14 @@ void Logger::operator()(const char *format, ...) {
 		// instead of output just onto console:
 		const auto syslog_converter = runtime_config.syslog_converter();
 		if (syslog_converter) {
-			syslog_converter(buffer, static_cast<int>(length));
+			// Таблицы koi_to_win/koi_to_alt индексируются koi8-байтами, а текст у нас
+			// нативный, поэтому приводим его к KOI8-R прямо перед подстановкой (#3787).
+			std::string legacy = native_text::to_koi8(std::string(buffer, length));
+			syslog_converter(legacy.data(), static_cast<int>(legacy.size()));
+			std::cerr << legacy;
+		} else {
+			std::cerr << buffer;
 		}
-
-		std::cerr << buffer;
 	}
 }
 
@@ -417,7 +538,6 @@ OutputThread::OutputThread(const std::size_t queue_size) :
 }
 
 OutputThread::~OutputThread() {
-	log("~OutputThread()");
 	m_destroying = true;
 	m_output_queue.destroy();
 
@@ -438,13 +558,56 @@ void OutputThread::output_loop() {
 			if (!runtime_config.log_stderr().empty()) {
 				const auto syslog_converter = runtime_config.syslog_converter();
 				if (syslog_converter) {
-					syslog_converter(message.text.get(), static_cast<int>(message.size));
+					// То же, что и выше: таблица ждёт koi8-байты, текст в очереди нативный.
+					std::string legacy = native_text::to_koi8(std::string(message.text.get(), message.size));
+					syslog_converter(legacy.data(), static_cast<int>(legacy.size()));
+					output_message(legacy.c_str(), message.channel);
+					continue;
 				}
 			}
 
 			output_message(message.text.get(), message.channel);
 		}
 	}
+}
+
+// issue.chardata-cleaning: was CharData::send_to_TC -- a tester/coder/impl debug channel.
+void SendToTC(CharData *ch, bool to_impl, bool to_tester, bool to_coder, const char *msg, ...) {
+	bool needSend = false;
+	// проверка на ситуацию "чармис стоит, хозяина уже нет с нами"
+	if (IsCharmice(ch) && !ch->has_master()) {
+		mudlog(fmt::format("[WARNING] SendToTC. Чармис без хозяина: {}", ch->get_name()), CMP, kLvlGod, SYSLOG, true);
+		return;
+	}
+	if ((IsCharmice(ch) && ch->get_master()->IsNpc()) //если это чармис у нпц
+		|| (ch->IsNpc() && !IsCharmice(ch))) //просто непись
+		return;
+
+	if (to_impl &&
+		(privilege::IsImpl(ch) || (IsCharmice(ch) && privilege::IsImpl(ch->get_master()))))
+		needSend = true;
+	if (!needSend && to_coder &&
+		(ch->IsFlagged(EPrf::kCoderinfo) || (IsCharmice(ch) && (ch->get_master()->IsFlagged(EPrf::kCoderinfo)))))
+		needSend = true;
+	if (!needSend && to_tester &&
+		(ch->IsFlagged(EPrf::kTester) || (IsCharmice(ch) && (ch->get_master()->IsFlagged(EPrf::kTester)))))
+		needSend = true;
+	if (!needSend)
+		return;
+
+	va_list args;
+	char tmpbuf[kMaxStringLength];
+
+	va_start(args, msg);
+	vsnprintf(tmpbuf, sizeof(tmpbuf), msg, args);
+	va_end(args);
+
+	if (tmpbuf[0] == '\0') {
+		mudlog("[WARNING] SendToTC. Передано пустое сообщение", BRF, kLvlGod, SYSLOG, true);
+		return;
+	}
+	// проверка на нпц была ранее. Шлем хозяину чармиса или самому тестеру
+	SendMsgToChar(tmpbuf, IsCharmice(ch) ? ch->get_master() : ch);
 }
 
 /* vim: set ts=4 sw=4 tw=0 noet syntax=cpp :*/

@@ -7,20 +7,19 @@
 #include "engine/entities/char_data.h"
 #include "engine/entities/obj_data.h"
 #include "engine/db/world_objects.h"
-#include "engine/core/handler.h"
-#include "engine/boot/boot_constants.h"
+#include "engine/core/obj_handler.h"
+#include "gameplay/mechanics/inventory.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
-#include "third_party_libs/pugixml/pugixml.h"
+#include "utils/parser_wrapper.h"   // issue.lib-template: ParserWrapper вместо прямого pugixml
+#include "utils/utils_parse.h"
 
-extern pugi::xml_node XmlLoad(const char *PathToFile,
-							  const char *MainTag,
-							  const char *ErrorStr,
-							  pugi::xml_document &Doc);
+#include <fmt/format.h>
 
 namespace treasure_cases {
 
-#define CASES_FILE "cases.xml"
+namespace {
+using parse::AttrInt;
+} // namespace
 
 struct TreasureCase {
   ObjVnum vnum{};
@@ -30,19 +29,22 @@ struct TreasureCase {
 
 std::vector<TreasureCase> cases;
 
-void LoadTreasureCases() {
-	pugi::xml_document doc_cases;
-	pugi::xml_node case_, object_, file_case;
-	file_case = XmlLoad(LIB_MISC CASES_FILE, "cases", "Error loading cases file: cases.xml", doc_cases);
-	for (case_ = file_case.child("casef"); case_; case_ = case_.next_sibling("casef")) {
+// issue.lib-template: data = корень <cases> (CfgManager + ParserWrapper).
+void TreasureCasesLoader::Load(parser_wrapper::DataNode data) {
+	cases.clear();
+	for (auto &case_ : data.Children("casef")) {
 		TreasureCase treasure_case;
-		treasure_case.vnum = case_.attribute("vnum").as_int();
-		treasure_case.drop_chance = case_.attribute("drop_chance").as_int();
-		for (object_ = case_.child("object"); object_; object_ = object_.next_sibling("object")) {
-			treasure_case.vnum_objs.push_back(object_.attribute("vnum").as_int());
+		treasure_case.vnum = AttrInt(case_, "vnum");
+		treasure_case.drop_chance = AttrInt(case_, "drop_chance");
+		for (auto &object_ : case_.Children("object")) {
+			treasure_case.vnum_objs.push_back(AttrInt(object_, "vnum"));
 		}
 		cases.push_back(treasure_case);
 	}
+}
+
+void TreasureCasesLoader::Reload(parser_wrapper::DataNode data) {
+	Load(std::move(data));
 }
 
 void UnlockTreasureCase(CharData *ch, ObjData *obj) {
@@ -82,7 +84,7 @@ void UnlockTreasureCase(CharData *ch, ObjData *obj) {
 			}
 			ExtractObjFromWorld(obj);
 			obj = world_objects.create_from_prototype_by_rnum(r_num).get();
-			obj->set_crafter_uid(GET_UID(ch));
+			obj->set_crafter_uid(ch->get_uid());
 			PlaceObjToInventory(obj, ch);
 			act("$n завизжал$g от радости.", false, ch, nullptr, nullptr, kToRoom);
 			load_otrigger(obj);

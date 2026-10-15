@@ -6,7 +6,11 @@
 \detail Detail description.
 */
 
+#include <fmt/format.h>
 #include "engine/entities/char_data.h"
+#include "utils/russian_keys.h"
+#include "utils/native_text.h"
+#include "administration/privilege.h"
 #include "engine/db/obj_prototypes.h"
 #include "engine/db/global_objects.h"
 #include "engine/ui/color.h"
@@ -24,7 +28,7 @@ struct FilterType {
 };
 
 void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (ch->IsNpc() || (!IS_GRGOD(ch) && !ch->IsFlagged(EPrf::kCoderinfo))) {
+	if (ch->IsNpc() || (!privilege::IsGrGod(ch) && !ch->IsFlagged(EPrf::kCoderinfo))) {
 		SendMsgToChar("Чаво?\r\n", ch);
 		return;
 	}
@@ -33,8 +37,8 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	char tmpbuf[kMaxInputLength];
 	bool find_param = false;
 	while (*argument) {
-		switch (*argument) {
-			case 'М': argument = one_argument(++argument, tmpbuf);
+		switch (native_text::first_char_code(argument)) {
+			case rus::kEmUpper: argument = one_argument(argument + native_text::char_bytes(argument), tmpbuf);
 				if (utils::IsAbbr(tmpbuf, "булат")) {
 					filter.material = EObjMaterial::kBulat;
 				} else if (utils::IsAbbr(tmpbuf, "бронза")) {
@@ -77,7 +81,7 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				}
 				find_param = true;
 				break;
-			case 'Т': argument = one_argument(++argument, tmpbuf);
+			case rus::kTeUpper: argument = one_argument(argument + native_text::char_bytes(argument), tmpbuf);
 				if (utils::IsAbbr(tmpbuf, "броня") || utils::IsAbbr(tmpbuf, "armor")) {
 					filter.type = EObjType::kArmor;
 				} else if (utils::IsAbbr(tmpbuf, "легкие") || utils::IsAbbr(tmpbuf, "легкая")) {
@@ -92,7 +96,7 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				}
 				find_param = true;
 				break;
-			case 'О': argument = one_argument(++argument, tmpbuf);
+			case rus::kOUpper: argument = one_argument(argument + native_text::char_bytes(argument), tmpbuf);
 				if (utils::IsAbbr(tmpbuf, "тело")) {
 					filter.wear = EWearFlag::kBody;
 					filter.wear_message = 3;
@@ -117,9 +121,9 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				}
 				find_param = true;
 				break;
-			case 'А': {
+			case rus::kAUpper: {
 				bool tmp_find = false;
-				argument = one_argument(++argument, tmpbuf);
+				argument = one_argument(argument + native_text::char_bytes(argument), tmpbuf);
 				if (!strlen(tmpbuf)) {
 					SendMsgToChar("Неверный аффект предмета.\r\n", ch);
 					return;
@@ -141,10 +145,10 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				int num = 0;
 
 				for (int flag = 0; flag < 4; ++flag) {
-					for (/* тут ничего не надо */; *weapon_affects[num] != '\n'; ++num) {
-						if (strlen(weapon_affects[num]) < len)
+					for (/* тут ничего не надо */; *equipment_affects[num] != '\n'; ++num) {
+						if (strlen(equipment_affects[num]) < len)
 							continue;
-						if (!strncmp(weapon_affects[num], tmpbuf, len)) {
+						if (!strncmp(equipment_affects[num], tmpbuf, len)) {
 							filter.affect.push_back(num);
 							tmp_find = true;
 							break;
@@ -186,14 +190,14 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 					}
 				}
 				if (!tmp_find) {
-					sprintf(buf, "Неверный аффект предмета: '%s'.\r\n", tmpbuf);
-					SendMsgToChar(buf, ch);
+					SendMsgToChar(fmt::format("Неверный аффект предмета: '{}'.\r\n", tmpbuf), ch);
 					return;
 				}
 				find_param = true;
 				break;
 			}
-			default: ++argument;
+			// Незнакомая буква тоже пропускается целиком, иначе разбор съезжает на полсимвола.
+			default: argument += native_text::char_bytes(argument);
 		}
 	}
 	if (!find_param) {
@@ -217,7 +221,7 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	}
 	if (!filter.affect.empty()) {
 		for (const auto it : filter.affect) {
-			buffer += weapon_affects[it];
+			buffer += equipment_affects[it];
 			buffer += " ";
 		}
 	}
@@ -255,7 +259,7 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		bool find = true;
 		if (!filter.affect.empty()) {
 			for (int it : filter.affect) {
-				if (!CompareBits(i->get_affect_flags(), weapon_affects, it)) {
+				if (!CompareBits(i->get_affect_flags(), equipment_affects, it)) {
 					find = false;
 					break;
 				}
@@ -311,8 +315,8 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		out << "   "
 			<< std::setw(2) << it->first << " | "
 			<< std::setw(7) << obj->get_vnum() << " | "
-			<< std::setw(14) << material_name[obj->get_material()] << " | "
-			<< obj->get_PName(ECase::kNom) << "\r\n";
+			<< fmt::format("{:>14}", material_name[obj->get_material()]) << " | "
+			<< obj->get_PName(grammar::ECase::kNom) << "\r\n";
 
 		for (int i = 0; i < kMaxObjAffect; i++) {
 			auto drndice = obj->get_affected(i).location;
@@ -320,22 +324,21 @@ void DoPrintArmor(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			if (drndice == EApply::kNone || !drsdice) {
 				continue;
 			}
-			sprinttype(drndice, apply_types, buf2);
 			bool negative = IsNegativeApply(drndice);
 			if (!negative && drsdice < 0) {
 				negative = true;
 			} else if (negative && drsdice < 0) {
 				negative = false;
 			}
-			snprintf(buf, kMaxStringLength, "   %s%s%s%s%s%d%s\r\n",
-					 kColorCyn, buf2, kColorNrm,
-					 kColorCyn,
-					 negative ? " ухудшает на " : " улучшает на ", abs(drsdice), kColorNrm);
-			out << "      |         |                | " << buf;
+			out << "      |         |                | "
+				<< fmt::format("   {}{}{}{}{}{}{}\r\n",
+							   kColorCyn, GetTypeName(drndice, apply_types), kColorNrm,
+							   kColorCyn,
+							   negative ? " ухудшает на " : " улучшает на ", abs(drsdice), kColorNrm);
 		}
 	}
 	if (!out.str().empty()) {
-		SendMsgToChar(ch, "Всего найдено предметов: %lu\r\n\r\n", tmp_list.size());
+		SendMsgToChar(ch, "Всего найдено предметов: %zu\r\n\r\n", tmp_list.size());
 		page_string(ch->desc, out.str());
 	} else {
 		SendMsgToChar("Ничего не найдено.\r\n", ch);

@@ -7,11 +7,12 @@
 */
 
 #include "engine/entities/char_data.h"
+#include "gameplay/mechanics/mount.h"
 #include "engine/core/char_movement.h"
 #include "engine/db/global_objects.h"
 
 void DoHidemove(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (!ch->GetSkill(ESkill::kSneak)) {
+	if (!GetSkill(ch, ESkill::kSneak)) {
 		SendMsgToChar("Вы не умеете этого.\r\n", ch);
 		return;
 	}
@@ -27,26 +28,27 @@ void DoHidemove(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		SendMsgToChar("Неизвестное направление.\r\n", ch);
 		return;
 	}
-	if (ch->IsOnHorse()) {
-		act("Вам мешает $N.", false, ch, nullptr, ch->get_horse(), kToChar);
+	if (mount::IsOnHorse(ch)) {
+		act("Вам мешает $N.", false, ch, nullptr, mount::GetHorse(ch), kToChar);
 		return;
 	}
-	auto sneaking = IsAffectedBySpell(ch, ESpell::kSneak);
+	auto sneaking = IsAffectedFlagOnly(ch, EAffect::kSneak);
 	if (!sneaking) {
 		Affect<EApply> af;
-		af.type = ESpell::kSneak;
 		af.location = EApply::kNone;
 		af.modifier = 0;
 		af.duration = 1;
 		const int calculated_skill = CalcCurrentSkill(ch, ESkill::kSneak, nullptr);
 		const int chance = number(1, MUD::Skill(ESkill::kSneak).difficulty);
-		af.bitvector = (chance < calculated_skill) ? to_underlying(EAffect::kSneak) : 0;
-		af.battleflag = 0;
+		af.affect_type = EAffect::kSneak;
+		if (chance >= calculated_skill) {
+			af.battleflag.set(kAfFailed);
+		}
 		ImposeAffect(ch, af, false, false, false, false);
 	}
 	PerformMove(ch, dir, 0, true, nullptr);
-	if (!sneaking || IsAffectedBySpell(ch, ESpell::kGlitterDust)) {
-		RemoveAffectFromChar(ch, ESpell::kSneak);
+	if (!sneaking || IsAffected(ch, EAffect::kGlitterDust)) {
+		RemoveAffectFromChar(ch, EAffect::kSneak);
 		AFF_FLAGS(ch).unset(EAffect::kSneak);
 	}
 }

@@ -3,6 +3,11 @@
 // Part of Bylins http://www.mud.ru
 
 #include "glory.h"
+#include "utils/russian_keys.h"
+#include "utils/native_text.h"
+#include "engine/db/player_index.h"
+#include "administration/privilege.h"
+#include "utils/grammar/declensions.h"
 
 #include "administration/karma.h"
 #include "engine/core/conf.h"
@@ -19,7 +24,7 @@
 #include "engine/ui/modify.h"
 #include "glory_misc.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include <sstream>
 
@@ -134,9 +139,11 @@ void GloryNode::copy_glory(const GloryNodePtr& k) {
 
 // * Загрузка общего списка славы, проверка на валидность чара, славы, сверка мд5 файла.
 void load_glory() {
-	const char *glory_file = LIB_PLRSTUFF"glory.lst";
-	std::ifstream file(glory_file);
-	if (!file.is_open()) {
+	const char *glory_file = LIB_USERDATA"glory.lst";
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(glory_file));
+	if (file.str().empty()) {
 		log("Glory: не удалось открыть файл на чтение: %s", glory_file);
 		return;
 	}
@@ -272,14 +279,17 @@ void save_glory() {
 	// TODO: в file_crc систему это надо
 	out << Password::generate_md5_hash(fmt::format("{}", all_sum)) << "\n";
 
-	const char *glory_file = LIB_PLRSTUFF"glory.lst";
+	const char *glory_file = LIB_USERDATA"glory.lst";
 	std::ofstream file(glory_file);
 	if (!file.is_open()) {
 		log("Glory: не удалось открыть файл на запись: %s", glory_file);
 		return;
 	}
-	file << out.rdbuf();
-	file.close();
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 }
 
 // * Аналог бывшего макроса GET_GLORY().
@@ -307,7 +317,7 @@ void add_glory(long uid, int amount) {
 	DescriptorData *d = DescriptorByUid(uid);
 	if (d)
 		SendMsgToChar(d->character.get(), "Вы заслужили %d %s славы.\r\n",
-					  amount, GetDeclensionInNumber(amount, EWhat::kPoint));
+					  amount, grammar::GetDeclensionInNumber(amount, grammar::EWhat::kPoint));
 }
 
 /**
@@ -376,7 +386,7 @@ bool parse_denial_check(CharData *ch, int stat) {
 				if (ch->GetInbornCha() == ch->desc->glory->olc_cha)
 					stop = true;
 				break;
-			default: log("Glory: невалидный номер стат: %d (uid: %ld, name: %s)", stat, GET_UID(ch), GET_NAME(ch));
+			default: log("Glory: невалидный номер стат: %d (uid: %ld, name: %s)", stat, ch->get_uid(), GET_NAME(ch));
 				stop = true;
 		}
 		if (stop) {
@@ -427,7 +437,7 @@ bool parse_remove_stat(CharData *ch, int stat) {
 			return true;
 		}
 	}
-	log("Glory: не найден стат при вычитании в олц (stat: %d, uid: %ld, name: %s)", stat, GET_UID(ch), GET_NAME(ch));
+	log("Glory: не найден стат при вычитании в олц (stat: %d, uid: %ld, name: %s)", stat, ch->get_uid(), GET_NAME(ch));
 	return true;
 }
 
@@ -475,57 +485,57 @@ void parse_add_stat(CharData *ch, int stat) {
 
 // * Парс олц меню 'слава'.
 bool parse_spend_glory_menu(CharData *ch, const char *arg) {
-	switch (*arg) {
-		case 'А':
-		case 'а':
+	switch (native_text::first_char_code(arg)) {
+		case rus::kAUpper:
+		case rus::kA:
 			if (ch->desc->glory->olc_add_str >= 1) {
 				if (!parse_remove_stat(ch, G_STR)) break;
 				ch->desc->glory->olc_str -= 1;
 				ch->desc->glory->olc_add_str -= 1;
 			}
 			break;
-		case 'Б':
-		case 'б':
+		case rus::kBeUpper:
+		case rus::kBe:
 			if (ch->desc->glory->olc_add_dex >= 1) {
 				if (!parse_remove_stat(ch, G_DEX)) break;
 				ch->desc->glory->olc_dex -= 1;
 				ch->desc->glory->olc_add_dex -= 1;
 			}
 			break;
-		case 'Г':
-		case 'г':
+		case rus::kGeUpper:
+		case rus::kGe:
 			if (ch->desc->glory->olc_add_int >= 1) {
 				if (!parse_remove_stat(ch, G_INT)) break;
 				ch->desc->glory->olc_int -= 1;
 				ch->desc->glory->olc_add_int -= 1;
 			}
 			break;
-		case 'Д':
-		case 'д':
+		case rus::kDeUpper:
+		case rus::kDe:
 			if (ch->desc->glory->olc_add_wis >= 1) {
 				if (!parse_remove_stat(ch, G_WIS)) break;
 				ch->desc->glory->olc_wis -= 1;
 				ch->desc->glory->olc_add_wis -= 1;
 			}
 			break;
-		case 'Е':
-		case 'е':
+		case rus::kIeUpper:
+		case rus::kIe:
 			if (ch->desc->glory->olc_add_con >= 1) {
 				if (!parse_remove_stat(ch, G_CON)) break;
 				ch->desc->glory->olc_con -= 1;
 				ch->desc->glory->olc_add_con -= 1;
 			}
 			break;
-		case 'Ж':
-		case 'ж':
+		case rus::kZheUpper:
+		case rus::kZhe:
 			if (ch->desc->glory->olc_add_cha >= 1) {
 				if (!parse_remove_stat(ch, G_CHA)) break;
 				ch->desc->glory->olc_cha -= 1;
 				ch->desc->glory->olc_add_cha -= 1;
 			}
 			break;
-		case 'З':
-		case 'з':
+		case rus::kZeUpper:
+		case rus::kZe:
 			if (ch->desc->glory->olc_node->free_glory >= 1000
 				&& ch->desc->glory->olc_add_spend_glory < MAX_STATS_BY_GLORY) {
 				parse_add_stat(ch, G_STR);
@@ -533,8 +543,8 @@ bool parse_spend_glory_menu(CharData *ch, const char *arg) {
 				ch->desc->glory->olc_add_str += 1;
 			}
 			break;
-		case 'И':
-		case 'и':
+		case rus::kIUpper:
+		case rus::kI:
 			if (ch->desc->glory->olc_node->free_glory >= 1000
 				&& ch->desc->glory->olc_add_spend_glory < MAX_STATS_BY_GLORY) {
 				parse_add_stat(ch, G_DEX);
@@ -542,8 +552,8 @@ bool parse_spend_glory_menu(CharData *ch, const char *arg) {
 				ch->desc->glory->olc_add_dex += 1;
 			}
 			break;
-		case 'К':
-		case 'к':
+		case rus::kKaUpper:
+		case rus::kKa:
 			if (ch->desc->glory->olc_node->free_glory >= 1000
 				&& ch->desc->glory->olc_add_spend_glory < MAX_STATS_BY_GLORY) {
 				parse_add_stat(ch, G_INT);
@@ -551,8 +561,8 @@ bool parse_spend_glory_menu(CharData *ch, const char *arg) {
 				ch->desc->glory->olc_add_int += 1;
 			}
 			break;
-		case 'Л':
-		case 'л':
+		case rus::kElUpper:
+		case rus::kEl:
 			if (ch->desc->glory->olc_node->free_glory >= 1000
 				&& ch->desc->glory->olc_add_spend_glory < MAX_STATS_BY_GLORY) {
 				parse_add_stat(ch, G_WIS);
@@ -560,8 +570,8 @@ bool parse_spend_glory_menu(CharData *ch, const char *arg) {
 				ch->desc->glory->olc_add_wis += 1;
 			}
 			break;
-		case 'М':
-		case 'м':
+		case rus::kEmUpper:
+		case rus::kEm:
 			if (ch->desc->glory->olc_node->free_glory >= 1000
 				&& ch->desc->glory->olc_add_spend_glory < MAX_STATS_BY_GLORY) {
 				parse_add_stat(ch, G_CON);
@@ -569,8 +579,8 @@ bool parse_spend_glory_menu(CharData *ch, const char *arg) {
 				ch->desc->glory->olc_add_con += 1;
 			}
 			break;
-		case 'Н':
-		case 'н':
+		case rus::kEnUpper:
+		case rus::kEn:
 			if (ch->desc->glory->olc_node->free_glory >= 1000
 				&& ch->desc->glory->olc_add_spend_glory < MAX_STATS_BY_GLORY) {
 				parse_add_stat(ch, G_CHA);
@@ -578,8 +588,8 @@ bool parse_spend_glory_menu(CharData *ch, const char *arg) {
 				ch->desc->glory->olc_add_cha += 1;
 			}
 			break;
-		case 'В':
-		case 'в': {
+		case rus::kVeUpper:
+		case rus::kVe: {
 			// проверка, чтобы не записывать зря, а только при изменения
 			// и чтобы нельзя было из стата славу вытащить
 			if ((ch->desc->glory->olc_str == ch->GetInbornStr()
@@ -592,7 +602,7 @@ bool parse_spend_glory_menu(CharData *ch, const char *arg) {
 				return false;
 			}
 
-			auto it = glory_list.find(GET_UID(ch));
+			auto it = glory_list.find(ch->get_uid());
 			if (it == glory_list.end()
 				|| ch->desc->glory->check_spend_glory != it->second->spend_glory
 				|| ch->desc->glory->check_free_glory != it->second->free_glory
@@ -639,8 +649,8 @@ bool parse_spend_glory_menu(CharData *ch, const char *arg) {
 			SendMsgToChar("Ваши изменения сохранены.\r\n", ch);
 			return true;
 		}
-		case 'Х':
-		case 'х': ch->desc->glory.reset();
+		case rus::kHaUpper:
+		case rus::kHa: ch->desc->glory.reset();
 			ch->desc->state = EConState::kPlaying;
 			SendMsgToChar("Редактирование прервано.\r\n", ch);
 			return true;
@@ -708,7 +718,7 @@ void spend_glory_menu(CharData *ch) {
 
 	int diff = ch->desc->glory->olc_node->spend_glory - ch->desc->glory->olc_add_spend_glory;
 	if (diff > 0) {
-		out << "  Вы должны распределить вложенные ранее " << diff << " " << GetDeclensionInNumber(diff, EWhat::kPoint) << "\r\n";
+		out << "  Вы должны распределить вложенные ранее " << diff << " " << grammar::GetDeclensionInNumber(diff, grammar::EWhat::kPoint) << "\r\n";
 	} else if (ch->desc->glory->olc_add_spend_glory > ch->desc->glory->olc_node->spend_glory
 		|| ch->desc->glory->olc_str != ch->GetInbornStr()
 		|| ch->desc->glory->olc_dex != ch->GetInbornDex()
@@ -754,8 +764,8 @@ void print_glory(CharData *ch, GloryListType::iterator &it) {
 
 // * Команда 'слава' - вложение имеющейся у игрока славы в статы без участия иммов.
 void do_spend_glory(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	auto it = glory_list.find(GET_UID(ch));
-	if (it == glory_list.end() || IS_IMMORTAL(ch)) {
+	auto it = glory_list.find(ch->get_uid());
+	if (it == glory_list.end() || privilege::IsImmortal(ch)) {
 		SendMsgToChar("Вам это не нужно...\r\n", ch);
 		return;
 	}
@@ -908,7 +918,7 @@ void timers_update() {
 * \return 0 - ничего не снято, 1 - снято сколько просили
 */
 bool remove_stats(CharData *ch, CharData *god, int amount) {
-	auto it = glory_list.find(GET_UID(ch));
+	auto it = glory_list.find(ch->get_uid());
 	if (it == glory_list.end()) {
 		SendMsgToChar(god, "У %s нет вложенной славы.\r\n", GET_PAD(ch, 1));
 		return false;
@@ -951,7 +961,7 @@ bool remove_stats(CharData *ch, CharData *god, int amount) {
 				  "С %s снято %d %s вложенной ранее славы.\r\n",
 				  GET_PAD(ch, 1),
 				  removed,
-				  GetDeclensionInNumber(removed, EWhat::kPoint));
+				  grammar::GetDeclensionInNumber(removed, grammar::EWhat::kPoint));
 	// надо пересчитать хп на случай снятия с тела
 	check_max_hp(ch);
 	save_glory();
@@ -963,12 +973,12 @@ bool remove_stats(CharData *ch, CharData *god, int amount) {
 * что было у передающего (свободная слава плюсуется).
 */
 void transfer_stats(CharData *ch, CharData *god, const std::string& name, char *reason) {
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		SendMsgToChar(god, "Трансфер славы с бессмертных на других персонажей запрещен.\r\n");
 		return;
 	}
 
-	auto it = glory_list.find(GET_UID(ch));
+	auto it = glory_list.find(ch->get_uid());
 	if (it == glory_list.end()) {
 		SendMsgToChar(god, "У %s нет славы.\r\n", GET_PAD(ch, 1));
 		return;
@@ -1001,7 +1011,7 @@ void transfer_stats(CharData *ch, CharData *god, const std::string& name, char *
 	}
 
 	// дальше у нас принимающий vict в любом случае
-	if (IS_IMMORTAL(vict)) {
+	if (privilege::IsImmortal(vict.get())) {
 		SendMsgToChar(god, "Трансфер славы на бессмертного - это глупо.\r\n");
 		return;
 	}
@@ -1023,14 +1033,13 @@ void transfer_stats(CharData *ch, CharData *god, const std::string& name, char *
 	vict_it->second->copy_glory(it->second);
 	vict_it->second->denial = DISPLACE_TIMER;
 
-	snprintf(buf, kMaxStringLength,
-			 "%s: перекинуто (%s -> %s) славы: %d, статов: %d",
-			 GET_NAME(god), GET_NAME(ch), GET_NAME(vict), it->second->free_glory,
-			 vict_it->second->spend_glory - was_stats);
-	imm_log("%s", buf);
-	mudlog(buf, DEF, kLvlImmortal, SYSLOG, true);
-	AddKarma(ch, buf, reason);
-	GloryMisc::add_log(GloryMisc::TRANSFER_GLORY, 0, buf, std::string(reason), vict.get());
+	const std::string log_line = fmt::format("{}: перекинуто ({} -> {}) славы: {}, статов: {}",
+											 GET_NAME(god), GET_NAME(ch), GET_NAME(vict), it->second->free_glory,
+											 vict_it->second->spend_glory - was_stats);
+	imm_log("%s", log_line.c_str());
+	mudlog(log_line, DEF, kLvlImmortal, SYSLOG, true);
+	AddKarma(ch, log_line.c_str(), reason);
+	GloryMisc::add_log(GloryMisc::TRANSFER_GLORY, 0, log_line, std::string(reason), vict.get());
 
 	// если принимающий чар онлайн - сетим сразу ему статы
 	if (d_vict) {
@@ -1058,14 +1067,14 @@ void transfer_stats(CharData *ch, CharData *god, const std::string& name, char *
 			}
 		}
 	}
-	AddKarma(vict.get(), buf, reason);
+	AddKarma(vict.get(), log_line.c_str(), reason);
 	vict->save_char();
 
 	// удаляем запись чара, с которого перекидывали
 	glory_list.erase(it);
 	// и выставляем ему новые статы (он то полюбому уже загружен канеш,
 	// но тут стройная картина через дескриптор везде) и если он был оффлайн - обнулится при входе
-	DescriptorData *k = DescriptorByUid(GET_UID(ch));
+	DescriptorData *k = DescriptorByUid(ch->get_uid());
 	if (k) {
 		GloryMisc::recalculate_stats(k->character.get());
 	}
@@ -1075,7 +1084,7 @@ void transfer_stats(CharData *ch, CharData *god, const std::string& name, char *
 
 // * Показ свободной и вложенной славы у чара (glory имя).
 void show_glory(CharData *ch, CharData *god) {
-	auto it = glory_list.find(GET_UID(ch));
+	auto it = glory_list.find(ch->get_uid());
 	if (it == glory_list.end()) {
 		SendMsgToChar(god, "У %s совсем не славы.\r\n", GET_PAD(ch, 1));
 		return;
@@ -1102,7 +1111,7 @@ void hide_char(CharData *vict, CharData *god, char const *const mode) {
 		return;
 	}
 	bool ok = true;
-	auto it = glory_list.find(GET_UID(vict));
+	auto it = glory_list.find(vict->get_uid());
 	if (it != glory_list.end()) {
 		if (!str_cmp(mode, "on") || !str_cmp(mode, "off")) {
 			it->second->hide = true;
@@ -1137,13 +1146,13 @@ void remove_freeze(long uid) {
 
 // * Во избежание разного рода недоразумений с фризом таймеров - проверяем эту тему при входе в игру.
 void check_freeze(CharData *ch) {
-	auto it = glory_list.find(GET_UID(ch));
+	auto it = glory_list.find(ch->get_uid());
 	if (it != glory_list.end())
 		it->second->freeze = ch->IsFlagged(EPlrFlag::kFrozen) ? true : false;
 }
 
 void set_stats(CharData *ch) {
-	auto it = glory_list.find(GET_UID(ch));
+	auto it = glory_list.find(ch->get_uid());
 	if (it == glory_list.end()) {
 		return;
 	}
@@ -1170,7 +1179,7 @@ void set_stats(CharData *ch) {
 }
 
 int get_spend_glory(CharData *ch) {
-	auto i = glory_list.find(GET_UID(ch));
+	auto i = glory_list.find(ch->get_uid());
 	if (i != glory_list.end()) {
 		return i->second->spend_glory;
 	}

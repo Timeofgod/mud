@@ -18,6 +18,7 @@
 #include "engine/core/conf.h"
 #include "engine/network/descriptor_data.h"
 #include "engine/entities/entities_constants.h"
+#include "utils/utils_parse.h"   // issue.interpreter-cleaning: parsing helpers moved here (transitional bridge)
 
 #include <string>
 
@@ -25,34 +26,23 @@ class CharData;    // to avoid inclusion of "char.hpp"
 
 void DoMove(CharData *ch, char *, int, int subcmd);
 
-#define CMD_IS(cmd_name) (!strn_cmp(cmd_name, cmd_info[cmd].command, strlen(cmd_name)))
+#define CMD_IS(cmd_name) (utils::IsAbbr(cmd_name, cmd_info[cmd].command))
 
 void command_interpreter(CharData *ch, char *argument);
-int search_block(const char *target_string, const char **list, int exact);
-int search_block(const std::string &block, const char **list, int exact);
-int fill_word(const char *argument);
-void half_chop(char const *string, char *arg1, char *arg2);
-void nanny(DescriptorData *d, char *argument);
+// half_chop moved to mud_string.h
 
-int is_number(const char *str);
+// is_number moved to utils_string.h
 int find_command(const char *command);
-// блок подобной же фигни для стрингов
-void GetOneParam(std::string &buffer, std::string &buffer2);
-bool CompareParam(const std::string &buffer, const char *str, bool full = false);
-bool CompareParam(const std::string &buffer, const std::string &buffer2, bool full = false);
-DescriptorData *DescriptorByUid(long uid);
-int GetUniqueByName(std::string_view name, bool god = false);
-std::string GetNameByUnique(long unique, bool god = false);
-bool IsActiveUser(long unique);
-void CreateFileName(std::string &name);
-std::string ExpFormat(long long exp);
-void name_convert(std::string &text);
 int special(CharData *ch, int cmd, char *argument, int fnum);
+int GetSpecprocFnum();
+void do_specproc(CharData *ch, char *argument, int cmd, int subcmd);
+void do_specword(CharData *ch, char *argument, int cmd, int subcmd);
+void do_receive(CharData *ch, char *argument, int cmd, int subcmd);
 int find_name(const char *name);
 
 void check_hiding_cmd(CharData *ch, int percent);
 
-char *delete_doubledollar(char *string);
+// delete_doubledollar moved to utils_string.h
 // Cоответствие классов и религий (Кард)
 extern const int class_religion[];
 
@@ -121,38 +111,7 @@ struct SortStruct {
 extern SortStruct *cmd_sort_info;
 extern int num_of_cmds;
 
-/**
-* copy the first non-fill-word, space-delimited argument of 'argument'
-* to 'first_arg'; return a pointer to the remainder of the string.
-*/
-char *one_argument(char *argument, char *first_arg);
-const char *one_argument(const char *argument, char *first_arg);
-
-///
-/// same as one_argument except that it doesn't ignore fill words
-/// как бы декларируем, что first_arg должен быть не менее kMaxInputLength
-///
-char *any_one_arg(char *argument, char *first_arg);
-const char *any_one_arg(const char *argument, char *first_arg);
-
-/**
-* Same as one_argument except that it takes two args and returns the rest;
-* ignores fill words
-*/
-template<typename T>
-T two_arguments(T argument, char *first_arg, char *second_arg) {
-	return (one_argument(one_argument(argument, first_arg), second_arg));
-}
-
-template<typename T>
-T three_arguments(T argument, char *first_arg, char *second_arg, char *third_arg) {
-	return (one_argument(one_argument(one_argument(argument, first_arg), second_arg), third_arg));
-}
-
-// читает все аргументы из arguments в out
-void SplitArgument(const char *arguments, std::vector<std::string> &out);
-void SplitArgument(const char *arguments, std::vector<short> &out);
-void SplitArgument(const char *arguments, std::vector<int> &out);
+// one_argument, two_arguments, three_arguments, SplitArgument moved to mud_string.h
 
 void SortCommands();
 

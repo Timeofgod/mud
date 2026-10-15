@@ -12,7 +12,7 @@
 #include <list>
 
 namespace ShopExt {
-extern int spent_today;
+extern int spent_since_boot;
 
 class GoodsStorage {
  public:
@@ -72,7 +72,7 @@ class ItemNode {
 	ItemNode(const ObjVnum vnum, const long price) : m_vnum(vnum), m_price(price) {}
 	ItemNode(const ObjVnum vnum, const long price, const uid_t uid) : m_vnum(vnum), m_price(price) { add_uid(uid); }
 
-	const std::string &get_item_name(int keeper_vnum, ECase name_case = ECase::kNom) const;
+	const std::string &get_item_name(int keeper_vnum, grammar::ECase name_case = grammar::ECase::kNom) const;
 
 	void add_desc(const MobVnum vnum, const item_desc_node &desc) { m_descs[vnum] = desc; }
 	void replace_descs(ObjData *obj, const int vnum) const;
@@ -88,15 +88,23 @@ class ItemNode {
 	const auto vnum() const { return m_vnum; }
 
 	const auto get_price() const { return m_price; }
-	void set_price(const long _) { m_price = _; }
 
  private:
 	int m_vnum;                        // VNUM of the item's prototype
-	long m_price;                    // Price of the item
+	// Цена узла -- та, что задана в cfg/economics/shops.xml (или стоимость вещи, с которой
+	// узел завёлся). Для лежащих на полке экземпляров она не годится: см. CalcSalePrice.
+	long m_price;
 
 	temporary_ids_t m_item_uids;    // List of uids of this item in the shop
 	item_descriptions_t m_descs;
 };
+
+// Цена, по которой вещь уйдёт покупателю. У сданных игроками экземпляров стоимость своя:
+// на одном узле (один vnum) лежат и шкура за 90, и шкура за 405, а цена у узла одна. Магазин
+// платил по экземпляру, а продавал по цене узла -- на этом делали деньги из воздуха
+// (issue #3953). Пустой узел -- это товар, который создаётся из прототипа, ему цена узла и
+// нужна; shelf_item там нет.
+long CalcSalePrice(const ItemNode &node, const CObjectPrototype *shelf_item);
 
 class ItemsList {
  public:
@@ -141,7 +149,7 @@ class shop_node : public DictionaryItem {
 	const auto &items_list() const { return m_items_list; }
 
 	void add_mob_vnum(const MobVnum vnum) { m_mob_vnums.push_back(vnum); }
-	void remove_mob_vnum(auto it) { m_mob_vnums.erase(it); }
+	void remove_mob_vnum(mob_vnums_t::const_iterator it) { m_mob_vnums.erase(it); }
 
 	const auto &mob_vnums() const { return m_mob_vnums; }
 
@@ -159,6 +167,7 @@ class shop_node : public DictionaryItem {
  private:
 	void put_to_storage(ObjData *object) { m_storage.add(object); }
 	ObjData *get_from_shelve(const size_t index) const;
+	long get_sale_price(const size_t index) const;
 	void remove_from_storage(ObjData *obj);
 	unsigned get_item_num(std::string &item_name, int keeper_vnum) const;
 	int can_sell_count(const int item_index) const;

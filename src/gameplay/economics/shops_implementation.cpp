@@ -1,4 +1,8 @@
 #include "shops_implementation.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/sight.h"
+#include "utils/grammar/declensions.h"
+#include "gameplay/mechanics/identify.h"
 
 #include "engine/db/obj_prototypes.h"
 #include "utils/logger.h"
@@ -7,9 +11,14 @@
 #include "engine/entities/char_data.h"
 #include "gameplay/mechanics/glory.h"
 #include "gameplay/mechanics/glory_const.h"
-#include "ext_money.h"
+#include "gameplay/economics/currencies.h"
+#include "gameplay/quests/daily_quest.h"
+#include "currencies.h"
+#include "engine/db/global_objects.h"
 #include "engine/db/world_objects.h"
-#include "engine/core/handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "gameplay/mechanics/inventory.h"
 #include "engine/ui/modify.h"
 #include "gameplay/mechanics/named_stuff.h"
 #include "gameplay/fight/pk.h"
@@ -18,44 +27,47 @@
 #include "gameplay/communication/talk.h"
 #include "engine/ui/cmd_god/do_echo.h"
 #include "gameplay/core/base_stats.h"
+#include "gameplay/ai/special_messages.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 #include <sstream>
 
-extern int do_social(CharData *ch, char *argument);    // implemented in the act.social.cpp
-extern char *diag_weapon_to_char(const CObjectPrototype *obj,
-								 int show_wear);    // implemented in the act.informative.cpp
-extern char *diag_timer_to_char(const ObjData *obj);    // implemented in the act.informative.cpp
 extern int invalid_anti_class(CharData *ch, const ObjData *obj);    // implemented in class.cpp
 extern int invalid_unique(CharData *ch, const ObjData *obj);    // implemented in class.cpp
 extern int invalid_no_class(CharData *ch, const ObjData *obj);    // implemented in class.cpp
-char *find_exdesc(const char *word, const ExtraDescription::shared_ptr &list); // implemented in act.informative.cpp
+extern int invalid_anti_class_proto(CharData *ch, const CObjectPrototype *obj);    // implemented in class.cpp
+extern int invalid_no_class_proto(CharData *ch, const CObjectPrototype *obj);    // implemented in class.cpp
+const char *sight::find_exdesc(const char *word, const std::vector<ExtraDescription> &list); // implemented in act.informative.cpp
 namespace ShopExt {
 const int IDENTIFY_COST = 110;
 
-int spent_today = 0;
+// issue.specials Phase 2: shop keeper messages live in shop_msg.xml. ShopMsg() returns the raw text;
+// callers add the trailing "\r\n" for SendMsgToChar, fmt::format(fmt::runtime(..)) for named args.
+using specials::ShopMsg;
+using ESM = specials::EShopMsg;
+
+// The keeper's "no money" flavour reaction (shared by process_buy and Характеристики): a random scold
+// (kSwearing, an act line wrapped in the social colour &K..&n) or a drink emote (gender picks the
+// beverage). Both are data-driven messages now.
+static void KeeperNoMoneyReaction(CharData *keeper, CharData *ch) {
+	switch (number(0, 3)) {
+		case 0:
+			act(("&K" + ShopMsg(ESM::kSwearing) + "&n").c_str(), false, keeper, nullptr, ch, kToRoom);
+			break;
+		case 1: {
+			char local_buf[kMaxInputLength];
+			snprintf(local_buf, kMaxInputLength, "%s",
+					 ShopMsg(IsMale(keeper) ? ESM::kDrinkEmoteMale : ESM::kDrinkEmoteFemale).c_str());
+			do_echo(keeper, local_buf, 0, kScmdEmote);
+			break;
+		}
+	}
+}
+
+int spent_since_boot = 0;
 
 bool check_money(CharData *ch, long price, const std::string &currency) {
-	if (currency == "слава") {
-		const auto total_glory = GloryConst::get_glory(GET_UID(ch));
-		return total_glory >= price;
-	}
-
-	if (currency == "куны") {
-		return ch->get_gold() >= price;
-	}
-
-	if (currency == "лед") {
-		return ch->get_ice_currency() >= price;
-	}
-	if (currency == "гривны") {
-		return ch->get_hryvn() >= price;
-	}
-	if (currency == "ногаты") {
-		return ch->get_nogata() >= price;
-	}
-
-	return false;
+	return currencies::GetHand(*ch, currency) >= price;
 }
 
 void GoodsStorage::ObjectUIDChangeObserver::notify(ObjData &object, const int old_uid) {
@@ -144,7 +156,7 @@ void GoodsStorage::clear() {
 	m_objects_by_uid.clear();
 }
 
-const std::string &ItemNode::get_item_name(int keeper_vnum, ECase name_case /*= ECase::kNom*/) const {
+const std::string &ItemNode::get_item_name(int keeper_vnum, grammar::ECase name_case /*= ECase::kNom*/) const {
 	const auto desc_i = m_descs.find(keeper_vnum);
 	if (desc_i != m_descs.end()) {
 		return desc_i->second.PNames[name_case];
@@ -170,19 +182,19 @@ void ItemNode::replace_descs(ObjData *obj, const int vnum) const {
 	obj->set_description(desc.description);
 	obj->set_aliases(desc.name);
 	obj->set_short_description(desc.short_description.c_str());
-	obj->set_PName(ECase::kNom, desc.PNames[ECase::kNom].c_str());
-	obj->set_PName(ECase::kGen, desc.PNames[ECase::kGen].c_str());
-	obj->set_PName(ECase::kDat, desc.PNames[ECase::kDat].c_str());
-	obj->set_PName(ECase::kAcc, desc.PNames[ECase::kAcc].c_str());
-	obj->set_PName(ECase::kIns, desc.PNames[ECase::kIns].c_str());
-	obj->set_PName(ECase::kPre, desc.PNames[ECase::kPre].c_str());
+	obj->set_PName(grammar::ECase::kNom, desc.PNames[grammar::ECase::kNom].c_str());
+	obj->set_PName(grammar::ECase::kGen, desc.PNames[grammar::ECase::kGen].c_str());
+	obj->set_PName(grammar::ECase::kDat, desc.PNames[grammar::ECase::kDat].c_str());
+	obj->set_PName(grammar::ECase::kAcc, desc.PNames[grammar::ECase::kAcc].c_str());
+	obj->set_PName(grammar::ECase::kIns, desc.PNames[grammar::ECase::kIns].c_str());
+	obj->set_PName(grammar::ECase::kPre, desc.PNames[grammar::ECase::kPre].c_str());
 	obj->set_sex(desc.sex);
 
 	if (!desc.trigs.empty()) {
 		obj->attach_triggers(desc.trigs);
 	}
 
-	obj->set_ex_description(nullptr); //Пока в конфиге нельзя указать экстраописания - убираем нафиг
+	obj->ex_descriptions().clear(); //Пока в конфиге нельзя указать экстраописания - убираем нафиг
 
 	if ((obj->get_type() == EObjType::kLiquidContainer)
 		&& (GET_OBJ_VAL(obj, 1) > 0)) //Если работаем с непустой емкостью...
@@ -218,7 +230,7 @@ void shop_node::process_buy(CharData *ch, CharData *keeper, char *argument) {
 	utils::Trim(buffer2);
 
 	if (buffer1.empty()) {
-		tell_to_char(keeper, ch, "ЧТО ты хочешь купить?");
+		tell_to_char(keeper, ch, ShopMsg(ESM::kBuyWhat).c_str());
 		return;
 	}
 
@@ -257,19 +269,19 @@ void shop_node::process_buy(CharData *ch, CharData *keeper, char *argument) {
 			item_count = 1000;
 		}
 	} else {
-		tell_to_char(keeper, ch, "ЧТО ты хочешь купить?");
+		tell_to_char(keeper, ch, ShopMsg(ESM::kBuyWhat).c_str());
 		return;
 	}
 
 	if (!item_count
 		|| !item_num
 		|| static_cast<size_t>(item_num) > m_items_list.size()) {
-		tell_to_char(keeper, ch, "Протри глаза, у меня нет такой вещи.");
+		tell_to_char(keeper, ch, ShopMsg(ESM::kNoSuchItem).c_str());
 		return;
 	}
 
 	if (item_count >= 1000) {
-		tell_to_char(keeper, ch, "А морда не треснет?");
+		tell_to_char(keeper, ch, ShopMsg(ESM::kTooGreedy).c_str());
 		return;
 	}
 
@@ -283,7 +295,7 @@ void shop_node::process_buy(CharData *ch, CharData *keeper, char *argument) {
 
 		if (!tmp_obj) {
 			log("SYSERROR : не удалось прочитать предмет (%s:%d)", __FILE__, __LINE__);
-			SendMsgToChar("Ошибочка вышла.\r\n", ch);
+			SendMsgToChar(ShopMsg(ESM::kError) + "\r\n", ch);
 			return;
 		}
 
@@ -293,42 +305,35 @@ void shop_node::process_buy(CharData *ch, CharData *keeper, char *argument) {
 	auto proto = (tmp_obj ? tmp_obj : GetObjectPrototype(item->vnum()).get());
 	if (!proto) {
 		log("SYSERROR : не удалось прочитать прототип (%s:%d)", __FILE__, __LINE__);
-		SendMsgToChar("Ошибочка вышла.\r\n", ch);
+		SendMsgToChar(ShopMsg(ESM::kError) + "\r\n", ch);
 		return;
 	}
 
-	const long price = item->get_price();
+	// Блокируем продажу только для anti-класса ("Недоступен"): такую вещь нельзя
+	// ни носить, ни взять (обжигает). Вещи с no-классом ("Неудобен") продаём:
+	// носить их можно, к тому же в магазине покупают и чармисам (issue #3356).
+	if (invalid_anti_class_proto(ch, proto)) {
+		tell_to_char(keeper, ch, ShopMsg(ESM::kWrongClass).c_str());
+		return;
+	}
+
+	long price = CalcSalePrice(*item, tmp_obj);
 	if (!check_money(ch, price, currency)) {
-		snprintf(buf, kMaxStringLength,
-				 "У вас нет столько %s!", ExtMoney::name_currency_plural(currency).c_str());
-		tell_to_char(keeper, ch, buf);
-
-		char local_buf[kMaxInputLength];
-		switch (number(0, 3)) {
-			case 0: snprintf(local_buf, kMaxInputLength, "ругать %s!", GET_NAME(ch));
-				do_social(keeper, local_buf);
-				break;
-
-			case 1:
-				snprintf(local_buf, kMaxInputLength,
-						 "отхлебнул$g немелкий глоток %s",
-						 IS_MALE(keeper) ? "водки" : "медовухи");
-				do_echo(keeper, local_buf, 0, kScmdEmote);
-				break;
-		}
+		tell_to_char(keeper, ch, fmt::format(fmt::runtime(ShopMsg(ESM::kCantAfford)),
+				fmt::arg("currency", MUD::Currencies().FindAvailableItem(currency).GetPluralName(grammar::ECase::kGen))).c_str());
+		KeeperNoMoneyReaction(keeper, ch);
 		return;
 	}
 
 	if ((ch->GetCarryingQuantity() + 1 > CAN_CARRY_N(ch))
 		|| ((ch->GetCarryingWeight() + proto->get_weight()) > CAN_CARRY_W(ch))) {
 		const auto &name = obj_from_proto
-						   ? item->get_item_name(GET_MOB_VNUM(keeper), ECase::kAcc).c_str()
+						   ? item->get_item_name(GET_MOB_VNUM(keeper), grammar::ECase::kAcc).c_str()
 						   : tmp_obj->get_short_description().c_str();
-		snprintf(buf, kMaxStringLength,
-				 "%s, я понимаю, своя ноша карман не тянет,\r\n"
-				 "но %s вам явно некуда положить.\r\n",
-				 GET_NAME(ch), name);
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kHandsFull1)),
+				fmt::arg("name", GET_NAME(ch))) + "\r\n", ch);
+		SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kHandsFull2)),
+				fmt::arg("item", name)) + "\r\n", ch);
 		return;
 	}
 
@@ -345,6 +350,14 @@ void shop_node::process_buy(CharData *ch, CharData *keeper, char *argument) {
 		if (!item->empty()) {
 			obj = get_from_shelve(item_index);
 			if (obj != nullptr) {
+				// Каждый экземпляр на полке стоит своё: цена берётся у той вещи, что
+				// уходит покупателю, а не у узла, иначе шкура за 405 уезжает по цене
+				// соседней за 90 (issue #3953).
+				price = CalcSalePrice(*item, obj);
+				if (!check_money(ch, price, currency)) {
+					break;
+				}
+
 				item->remove_uid(obj->get_unique_id());
 				if (item->empty()) {
 					m_items_list.remove(item_index);
@@ -360,45 +373,26 @@ void shop_node::process_buy(CharData *ch, CharData *keeper, char *argument) {
 			load_otrigger(obj);
 			obj->set_vnum_zone_from(GetZoneVnumByCharPlace(ch));
 			if (obj->has_flag(EObjFlag::kBindOnPurchase)) {
-				obj->set_owner(GET_UID(ch));
+				obj->set_owner(ch->get_uid());
 			}
 			PlaceObjToInventory(obj, ch);
 			obj->set_where_obj(EWhereObj::kCharInventory);
-			if (currency == "слава") {
-				// книги за славу не фейлим
-				if (EObjType::kBook == obj->get_type()) {
-					obj->set_extra_flag(EObjFlag::KNofail);
-				}
-				// снятие и логирование славы
+			// книги, купленные не за основную валюту (золото), не ломаются
+			if (currency != currencies::kGold && EObjType::kBook == obj->get_type()) {
+				obj->set_extra_flag(EObjFlag::kNofail);
+			}
+			currencies::RemoveHand(*ch, currency, price);
+			if (currency == currencies::kGlory) {
+				// учёт постоянной славы во внешнем хранилище GloryConst
 				GloryConst::add_total_spent(price);
-				GloryConst::remove_glory(GET_UID(ch), price);
 				GloryConst::transfer_log("%s bought %s for %ld const glory",
-										 GET_NAME(ch), proto->get_PName(ECase::kNom).c_str(), price);
-			} else if (currency == "лед") {
-				// книги за лед, как и за славу, не фейлим
-				if (EObjType::kBook == obj->get_type()) {
-					obj->set_extra_flag(EObjFlag::KNofail);
-				}
-				ch->sub_ice_currency(price);
-			} else if (currency == "ногаты") {
-				// книги за лед, как и за славу, не фейлим
-				if (EObjType::kBook == obj->get_type()) {
-					obj->set_extra_flag(EObjFlag::KNofail);
-				}
-				ch->sub_nogata(price);
-			} else if (currency == "гривны") {
-				if (EObjType::kBook == obj->get_type()) {
-					obj->set_extra_flag(EObjFlag::KNofail);
-				}
-				ch->sub_hryvn(price);
-				ch->spent_hryvn_sub(price);
-				if (ch->get_spent_hryvn() > 1000) {
-					SendMsgToChar("Мессага о том, что гривны были сброшены.\r\n", ch);
-					ch->reset_daily_quest();
-				}
-			} else {
-				ch->remove_gold(price);
-				spent_today += price;
+										 GET_NAME(ch), proto->get_PName(grammar::ECase::kNom).c_str(), price);
+			} else if (currency == currencies::kGold) {
+				spent_since_boot += price;
+			}
+			// трата валюты может затронуть систему дейликов
+			if (DailyQuest::OnCurrencySpent(ch, currency, price)) {
+				SendMsgToChar(ShopMsg(ESM::kHryvnReset) + "\r\n", ch);
 			}
 			++bought;
 
@@ -406,64 +400,47 @@ void shop_node::process_buy(CharData *ch, CharData *keeper, char *argument) {
 		} else {
 			log("SYSERROR : не удалось загрузить предмет ObjVnum=%d (%s:%d)",
 				GET_OBJ_VNUM(proto), __FILE__, __LINE__);
-			SendMsgToChar("Ошибочка вышла.\r\n", ch);
+			SendMsgToChar(ShopMsg(ESM::kError) + "\r\n", ch);
 			return;
 		}
 	}
 
 	if (bought < item_count) {
+		std::string reply;
 		if (!check_money(ch, price, currency)) {
-			snprintf(buf, kMaxStringLength, "Мошенни%s, ты можешь оплатить только %d.",
-					 IS_MALE(ch) ? "к" : "ца", bought);
+			reply = fmt::format(fmt::runtime(ShopMsg(IsMale(ch) ? ESM::kCheaterMale : ESM::kCheaterFemale)),
+					fmt::arg("count", bought));
 		} else if (ch->GetCarryingQuantity() >= CAN_CARRY_N(ch)) {
-			snprintf(buf, kMaxStringLength, "Ты сможешь унести только %d.", bought);
+			reply = fmt::format(fmt::runtime(ShopMsg(ESM::kCarryOnly)), fmt::arg("count", bought));
 		} else if (ch->GetCarryingWeight() + proto->get_weight() > CAN_CARRY_W(ch)) {
-			snprintf(buf, kMaxStringLength, "Ты сможешь поднять только %d.", bought);
+			reply = fmt::format(fmt::runtime(ShopMsg(ESM::kLiftOnly)), fmt::arg("count", bought));
 		} else if (bought > 0) {
-			snprintf(buf, kMaxStringLength, "Я продам тебе только %d.", bought);
+			reply = fmt::format(fmt::runtime(ShopMsg(ESM::kSellOnly)), fmt::arg("count", bought));
 		} else {
-			snprintf(buf, kMaxStringLength, "Я не продам тебе ничего.");
+			reply = ShopMsg(ESM::kSellNothing);
 		}
 
-		tell_to_char(keeper, ch, buf);
+		tell_to_char(keeper, ch, reply.c_str());
 	}
-	auto suffix = GetDeclensionInNumber(total_money, EWhat::kMoneyU);
-	if (currency == "лед")
-		suffix = GetDeclensionInNumber(total_money, EWhat::kIceU);
-	if (currency == "слава")
-		suffix = GetDeclensionInNumber(total_money, EWhat::kGloryU);
-	if (currency == "гривны")
-		suffix = GetDeclensionInNumber(total_money, EWhat::kTorcU);
-	if (currency == "ногаты")
-		suffix = GetDeclensionInNumber(total_money, EWhat::kNogataU);
+	const std::string suffix = MUD::Currencies().FindAvailableItem(currency).GetNameWithAmount(total_money, grammar::ECase::kAcc);
 
-	snprintf(buf, kMaxStringLength, "Это будет стоить %d %s.", total_money, suffix);
-	tell_to_char(keeper, ch, buf);
+	tell_to_char(keeper, ch, fmt::format(fmt::runtime(ShopMsg(ESM::kPrice)),
+			fmt::arg("amount", total_money), fmt::arg("currency", suffix)).c_str());
 
 	if (obj) {
 		if ((obj->get_cost() * bought) > total_money) {
-
-			snprintf(buf,
-					 kMaxStringLength,
-					 "Персонаж %s купил предмет %d за %d при его стоимости %d и прайсе %ld.",
-					 ch->get_name().c_str(),
-					 GET_OBJ_VNUM(obj),
-					 total_money,
-					 obj->get_cost(),
-					 price);
-			mudlog(buf, CMP, kLvlImmortal, SYSLOG, true);
+			mudlog(fmt::format("Персонаж {} купил предмет {} за {} при его стоимости {} и прайсе {}.",
+							   ch->get_name(), GET_OBJ_VNUM(obj), total_money, obj->get_cost(), price),
+				   CMP, kLvlImmortal, SYSLOG, true);
 		}
-		SendMsgToChar(ch, "Теперь вы стали %s %s.\r\n",
-					  IS_MALE(ch) ? "счастливым обладателем" : "счастливой обладательницей",
-					  obj->item_count_message(bought, ECase::kGen).c_str());
+		SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(IsMale(ch) ? ESM::kHappyOwnerMale : ESM::kHappyOwnerFemale)),
+				fmt::arg("item", obj->item_count_message(bought, grammar::ECase::kGen))) + "\r\n", ch);
 	}
 }
 
 void shop_node::print_shop_list(CharData *ch, const std::string &arg, int keeper_vnum) const {
-	SendMsgToChar(ch,
-				  " ##    Доступно   Предмет                                      Цена (%s)\r\n"
-				  "---------------------------------------------------------------------------\r\n",
-				  currency.c_str());
+	SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kListHeader)), fmt::arg("currency", MUD::Currencies().FindAvailableItem(currency).GetPluralName(grammar::ECase::kNom))) + "\r\n"
+				  "---------------------------------------------------------------------------\r\n", ch);
 	int num = 1;
 	std::stringstream out;
 	std::string print_value;
@@ -490,11 +467,10 @@ void shop_node::print_shop_list(CharData *ch, const std::string &arg, int keeper
 			if (tmp_obj) {
 				print_value = tmp_obj->get_short_description();
 				name_value = tmp_obj->get_aliases();
-				item->set_price(tmp_obj->get_cost());
 			}
 		}
 
-		std::string numToShow = (count == -1 || count > 999 ? "Навалом" : fmt::format("{}", count));
+		std::string numToShow = (count == -1 || count > 999 ? ShopMsg(ESM::kBulk) : fmt::format("{}", count));
 
 		// имхо вполне логично раз уж мы получаем эту надпись в ней и искать
 		if (arg.empty()
@@ -503,7 +479,7 @@ void shop_node::print_shop_list(CharData *ch, const std::string &arg, int keeper
 				&& isname(arg, name_value))) {
 			auto color_count = std::count(print_value.begin(), print_value.end(), '&')*2 + 45;
 			auto format_str = fmt::format("{}{}{}",  "{:4})  {:10}  {:<", color_count,"} {:8}\r\n");
-			out << fmt::format(fmt::runtime(format_str), num++, numToShow, print_value, item->get_price());
+			out << fmt::format(fmt::runtime(format_str), num++, numToShow, print_value, get_sale_price(k));
 		} else {
 			num++;
 		}
@@ -519,22 +495,21 @@ void shop_node::filter_shop_list(CharData *ch, char *argument, int keeper_vnum) 
 	std::string print_value;
 	std::string name_value;
 
-	one_argument(argument, arg);
 	ParseFilter filter(ParseFilter::CLAN);
 
 	if (!filter.parse_filter(ch, filter, argument)) {
 			return;
 	}
 
-	SendMsgToChar(ch, "Выборка: %s\r\n", filter.print().c_str());
-	SendMsgToChar(ch,
-				  " ##      Доступно  Предмет                                       Цена (%s)\r\n"
-				  "---------------------------------------------------------------------------\r\n", currency.c_str());
+	SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kFilterSelection)),
+			fmt::arg("filter", filter.print())) + "\r\n", ch);
+	SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kFilterHeader)), fmt::arg("currency", MUD::Currencies().FindAvailableItem(currency).GetPluralName(grammar::ECase::kNom))) + "\r\n"
+				  "---------------------------------------------------------------------------\r\n", ch);
 	std::stringstream out;
 
 	for (auto k = 0u; k < m_items_list.size(); k++) {
 		int count = can_sell_count(num - 1);
-		std::string numToShow = count == -1 ? "Навалом" : fmt::format("{}", count);
+		std::string numToShow = count == -1 ? ShopMsg(ESM::kBulk) : fmt::format("{}", count);
 
 		print_value = "";
 		name_value = "";
@@ -552,10 +527,9 @@ void shop_node::filter_shop_list(CharData *ch, char *argument, int keeper_vnum) 
 			auto tmp_obj = world_objects.create_from_prototype_by_rnum(rnum);
 			if (tmp_obj && filter.check(tmp_obj.get(), ch)) {
 				out << fmt::format("{:>4})  {:>10}  {:<47} {:>8}\r\n",
-						 num, numToShow, print_value, item->get_price());
+						 num, numToShow, print_value, get_sale_price(k));
 			} 
 			if (tmp_obj) {
-				obj_proto.dec_number(tmp_obj->get_rnum());
 				world_objects.remove(tmp_obj);
 			}
 		} else {
@@ -564,9 +538,8 @@ void shop_node::filter_shop_list(CharData *ch, char *argument, int keeper_vnum) 
 				if (filter.check(tmp_obj, ch)) {
 					print_value = tmp_obj->get_short_description();
 					name_value = tmp_obj->get_aliases();
-					item->set_price(tmp_obj->get_cost());
 					out << fmt::format("{:>4})  {:>10}  {:<47} {:>8}\r\n",
-							   num, numToShow, print_value, item->get_price());
+							   num, numToShow, print_value, CalcSalePrice(*item, tmp_obj));
 				}
 			} else {
 				m_items_list.remove(k);    // remove from shop object that we cannot instantiate
@@ -586,13 +559,14 @@ void shop_node::process_cmd(CharData *ch, CharData *keeper, char *argument, cons
 	if (!can_buy
 		&& (cmd == "Продать"
 			|| cmd == "Оценить")) {
-		tell_to_char(keeper, ch, "Извини, у меня свои поставщики...");
+		tell_to_char(keeper, ch, ShopMsg(ESM::kOwnSuppliers).c_str());
 
 		return;
 	}
 
 	if (!*argument) {
-		tell_to_char(keeper, ch, (cmd + " ЧТО?").c_str());
+		tell_to_char(keeper, ch, fmt::format(fmt::runtime(ShopMsg(ESM::kCmdWhat)),
+				fmt::arg("cmd", cmd)).c_str());
 		return;
 	}
 
@@ -611,7 +585,8 @@ void shop_node::process_cmd(CharData *ch, CharData *keeper, char *argument, cons
 		ObjData *obj = get_obj_in_list_vis(ch, buffer, ch->carrying);
 
 		if (!obj) {
-			SendMsgToChar("У вас нет " + buffer + "!\r\n", ch);
+			SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kNoItem)),
+					fmt::arg("item", buffer.empty() ? buffer1 : buffer)) + "\r\n", ch);
 			return;
 		}
 
@@ -623,7 +598,7 @@ void shop_node::process_cmd(CharData *ch, CharData *keeper, char *argument, cons
 		}
 	} else {
 		skip_spaces(&argument);
-		int i, dotmode = find_all_dots(argument);
+		int i, dotmode = ParseAllPrefix(argument);
 		std::string buffer2(argument);
 		switch (dotmode) {
 			case kFindIndiv: {
@@ -638,7 +613,8 @@ void shop_node::process_cmd(CharData *ch, CharData *keeper, char *argument, cons
 						}
 						return;
 					}
-					SendMsgToChar("У вас нет " + buffer2 + "!\r\n", ch);
+					SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kNoItem)),
+							fmt::arg("item", buffer2)) + "\r\n", ch);
 					return;
 				}
 
@@ -660,7 +636,8 @@ void shop_node::process_cmd(CharData *ch, CharData *keeper, char *argument, cons
 			case kFindAlldot: {
 				auto obj = get_obj_in_list_vis(ch, buffer2, ch->carrying);
 				if (!obj) {
-					SendMsgToChar("У вас нет " + buffer2 + "!\r\n", ch);
+					SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kNoItem)),
+							fmt::arg("item", buffer2)) + "\r\n", ch);
 					return;
 				}
 
@@ -682,7 +659,7 @@ void shop_node::process_ident(CharData *ch, CharData *keeper, char *argument, co
 	utils::Trim(buffer);
 
 	if (buffer.empty()) {
-		tell_to_char(keeper, ch, "Характеристики ЧЕГО ты хочешь узнать?");
+		tell_to_char(keeper, ch, ShopMsg(ESM::kIdentWhat).c_str());
 		return;
 	}
 
@@ -701,7 +678,7 @@ void shop_node::process_ident(CharData *ch, CharData *keeper, char *argument, co
 
 	if (!item_num
 		|| item_num > items_list().size()) {
-		tell_to_char(keeper, ch, "Протри глаза, у меня нет такой вещи.");
+		tell_to_char(keeper, ch, ShopMsg(ESM::kNoSuchItem).c_str());
 		return;
 	}
 
@@ -727,22 +704,22 @@ void shop_node::process_ident(CharData *ch, CharData *keeper, char *argument, co
 
 	if (!ident_obj) {
 		log("SYSERROR : не удалось получить объект (%s:%d)", __FILE__, __LINE__);
-		SendMsgToChar("Ошибочка вышла.\r\n", ch);
+		SendMsgToChar(ShopMsg(ESM::kError) + "\r\n", ch);
 		return;
 	}
 
 	if (cmd == "Рассмотреть") {
 		std::stringstream tell;
-		tell << "Предмет " << ident_obj->get_short_description() << ": ";
-		tell << item_types[ident_obj->get_type()] << "\r\n";
-		tell << diag_weapon_to_char(ident_obj, true);
-		tell << diag_timer_to_char(ident_obj);
+		tell << fmt::format(fmt::runtime(ShopMsg(ESM::kInspectIntro)),
+				fmt::arg("item", ident_obj->get_short_description()),
+				fmt::arg("type", item_types[ident_obj->get_type()])) << "\r\n";
+		tell << sight::diag_weapon_to_char(ident_obj, true);
+		tell << sight::diag_timer_to_char(ident_obj);
 
 		if (CanUseFeat(ch, EFeat::kSkilledTrader)) {
-			sprintf(buf, "Материал : ");
-			sprinttype(ident_obj->get_material(), material_name, buf + strlen(buf));
-			sprintf(buf + strlen(buf), ".\r\n");
-			tell << buf;
+			char mat[kMaxInputLength];
+			sprinttype(ident_obj->get_material(), material_name, mat);
+			tell << fmt::format(fmt::runtime(ShopMsg(ESM::kMaterial)), fmt::arg("material", mat)) << "\r\n";
 		}
 
 		tell_to_char(keeper, ch, tell.str().c_str());
@@ -750,10 +727,11 @@ void shop_node::process_ident(CharData *ch, CharData *keeper, char *argument, co
 		// если есть расширенное описание - показываем отдельно
 		// т.к. в магазине можно обратиться к объекту по номеру -> неизвестно под каким именени обратились к объекту
 		// поэтому пытаемся найти расширенное описание по алиасам
-		const char *desc = find_exdesc(ident_obj->get_aliases().c_str(), ident_obj->get_ex_description());
+		const char *desc = sight::find_exdesc(ident_obj->get_aliases().c_str(), ident_obj->get_ex_description());
 		if (desc && strlen(desc)) {
 			tell.str(std::string());
-			tell << "Рассматривая " << ident_obj->get_short_description() << " вы смогли прочитать:\r\n";
+			tell << fmt::format(fmt::runtime(ShopMsg(ESM::kInspectExdesc)),
+					fmt::arg("item", ident_obj->get_short_description())) << "\r\n";
 			tell << desc;
 			SendMsgToChar(tell.str().c_str(), ch);
 		}
@@ -761,36 +739,23 @@ void shop_node::process_ident(CharData *ch, CharData *keeper, char *argument, co
 		if (invalid_anti_class(ch, ident_obj)
 			|| invalid_unique(ch, ident_obj)
 			|| NamedStuff::check_named(ch, ident_obj, 0)) {
-			tell.str("Но лучше бы тебе не заглядываться на эту вещь, не унесешь все равно.");
-			tell_to_char(keeper, ch, tell.str().c_str());
+			tell_to_char(keeper, ch, ShopMsg(ESM::kCantCarry).c_str());
 		}
 	}
 
 	if (cmd == "Характеристики") {
-		if (ch->get_gold() < IDENTIFY_COST) {
-			tell_to_char(keeper, ch, "У вас нет столько денег!");
-			char local_buf[kMaxInputLength];
-			switch (number(0, 3)) {
-				case 0: snprintf(local_buf, kMaxInputLength, "ругать %s!", GET_NAME(ch));
-					do_social(keeper, local_buf);
-					break;
-
-				case 1:
-					snprintf(local_buf, kMaxInputLength,
-							 "отхлебнул$g немелкий глоток %s",
-							 IS_MALE(keeper) ? "водки" : "медовухи");
-					do_echo(keeper, local_buf, 0, kScmdEmote);
-					break;
-			}
+		if (currencies::GetHand(*ch, currencies::kGold) < IDENTIFY_COST) {
+			tell_to_char(keeper, ch, ShopMsg(ESM::kNoMoney).c_str());
+			KeeperNoMoneyReaction(keeper, ch);
 		} else {
-			snprintf(buf, kMaxStringLength,
-					 "Эта услуга будет стоить %d %s.", IDENTIFY_COST,
-					 GetDeclensionInNumber(IDENTIFY_COST, EWhat::kMoneyU));
-			tell_to_char(keeper, ch, buf);
+			tell_to_char(keeper, ch, fmt::format(fmt::runtime(ShopMsg(ESM::kIdentCost)),
+					fmt::arg("amount", IDENTIFY_COST),
+					fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(IDENTIFY_COST, grammar::ECase::kNom).c_str())).c_str());
 
-			SendMsgToChar(ch, "Характеристики предмета: %s\r\n", ident_obj->get_PName(ECase::kNom).c_str());
-			mort_show_obj_values(ident_obj, ch, 200);
-			ch->remove_gold(IDENTIFY_COST);
+			SendMsgToChar(fmt::format(fmt::runtime(ShopMsg(ESM::kIdentResult)),
+					fmt::arg("item", ident_obj->get_PName(grammar::ECase::kNom))) + "\r\n", ch);
+			MortShowObjValues(ident_obj, ch, 200);
+			currencies::RemoveHand(*ch, currencies::kGold, IDENTIFY_COST);
 		}
 	}
 
@@ -821,12 +786,25 @@ ObjData *shop_node::GetObjFromShop(uid_t uid) const {
 	return m_storage.get_by_uid(uid);
 }
 
+long CalcSalePrice(const ItemNode &node, const CObjectPrototype *shelf_item) {
+	if (node.empty() || !shelf_item) {
+		return node.get_price();
+	}
+
+	return shelf_item->get_cost();
+}
+
+long shop_node::get_sale_price(const size_t index) const {
+	const auto &node = m_items_list.node(index);
+	return CalcSalePrice(*node, node->empty() ? nullptr : get_from_shelve(index));
+}
+
 ObjData *shop_node::get_from_shelve(const size_t index) const {
 	const auto node = m_items_list.node(index);
 	const auto uid = node->uid();
 	if (ItemNode::NO_UID == uid) {
-		sprintf(buf, "ERROR: get_from_shelve: вернул NULL, index: %zu", index);
-		mudlog(buf, LogMode::BRF, kLvlImplementator, SYSLOG, true);
+		mudlog(fmt::format("ERROR: get_from_shelve: вернул NULL, index: {}", index),
+			   LogMode::BRF, kLvlImplementator, SYSLOG, true);
 		return nullptr;
 	}
 
@@ -916,7 +894,7 @@ void shop_node::put_item_to_shop(ObjData *obj) {
 					continue;
 				}
 
-				if (obj->get_type() != EObjType::kMagicIngredient //а у них всех один рнум
+				if (obj->get_type() != EObjType::kMagicComponent //а у них всех один рнум
 					|| obj->get_short_description() == tmp_obj->get_short_description()) {
 					item->add_uid(obj->get_unique_id());
 					put_to_storage(obj);
@@ -957,26 +935,30 @@ void shop_node::do_shop_cmd(CharData *ch, CharData *keeper, ObjData *obj, std::s
 		|| obj->has_flag(EObjFlag::kArmored)
 		|| obj->has_flag(EObjFlag::kSharpen)
 		|| obj->has_flag(EObjFlag::kNodrop)) {
-		tell_to_char(keeper, ch, std::string("Я не собираюсь иметь дела с этой вещью.").c_str());
+		tell_to_char(keeper, ch, ShopMsg(ESM::kWontDeal).c_str());
 		return;
 	}
 
-	if (GET_OBJ_VAL(obj, 2) == 0
+	if (obj->GetPotionValueKey(ObjVal::EValueKey::kCurCharges) <= 0
 		&& (obj->get_type() == EObjType::kWand
 			|| obj->get_type() == EObjType::kStaff)) {
-		tell_to_char(keeper, ch, "Я не покупаю использованные вещи!");
+		tell_to_char(keeper, ch, ShopMsg(ESM::kNoUsedItems).c_str());
 		return;
 	}
 
 	if (obj->get_type() == EObjType::kContainer
 		&& cmd != "Чинить") {
 		if (obj->get_contains()) {
-			tell_to_char(keeper, ch, "Не надо предлагать мне кота в мешке.");
+			tell_to_char(keeper, ch, ShopMsg(ESM::kNoPigInPoke).c_str());
 			return;
 		}
 	}
 
 	long buy_price = obj->get_cost();
+	// валюта выплаты при скупке: валюта магазина, если её разрешено выдавать; иначе золото
+	const std::string &payout_currency =
+		(currency == currencies::kGlory || !MUD::Currencies().FindAvailableItem(currency).MerchantPayout())
+		? currencies::kGold : currency;
 	long buy_price_old = get_sell_price(obj);
 
 	int repair = obj->get_maximum_durability() - obj->get_current_durability();
@@ -994,24 +976,27 @@ void shop_node::do_shop_cmd(CharData *ch, CharData *keeper, ObjData *obj, std::s
 		buy_price = buy_price_old;
 	}
 
-	std::string price_to_show = fmt::format("{} {}", buy_price, GetDeclensionInNumber(buy_price, EWhat::kMoneyU));
 	if (cmd == "Оценить") {
 		if (bloody::is_bloody(obj)) {
-			tell_to_char(keeper, ch, "Иди от крови отмой сначала!");
+			tell_to_char(keeper, ch, ShopMsg(ESM::kBloodyValue).c_str());
 			return;
 		}
 
+		// Условия те же, что в ветке "Продать": иначе торговец называл цену за предмет, который
+		// потом отказывался брать. Дешёвая вещь схлопывается до одной куны ("кожаная фляга" за
+		// две куны при любом profit), а продажа за куну и меньше запрещена -- вот он и обещал
+		// то, чего не сделает.
 		if (obj->has_flag(EObjFlag::kNosell)
 			|| obj->has_flag(EObjFlag::kNamed)
 			|| obj->has_flag(EObjFlag::kRepopDecay)
-			|| obj->has_flag(EObjFlag::kZonedacay)) {
-			tell_to_char(keeper, ch, "Такое я не покупаю.");
+			|| obj->has_flag(EObjFlag::kZonedecay)
+			|| buy_price <= 1) {
+			tell_to_char(keeper, ch, ShopMsg(ESM::kWontBuy).c_str());
 			return;
 		} else {
-			tell_to_char(keeper,
-						 ch,
-						 ("Я, пожалуй, куплю " + std::string(obj->get_PName(ECase::kAcc)) + " за " + price_to_show
-							 + ".").c_str());
+			tell_to_char(keeper, ch, fmt::format(fmt::runtime(ShopMsg(ESM::kValueOffer)),
+					fmt::arg("item", obj->get_PName(grammar::ECase::kAcc)), fmt::arg("amount", buy_price),
+					fmt::arg("currency", MUD::Currencies().FindAvailableItem(payout_currency).GetNameWithAmount(buy_price, grammar::ECase::kNom).c_str())).c_str());
 		}
 	}
 
@@ -1020,31 +1005,34 @@ void shop_node::do_shop_cmd(CharData *ch, CharData *keeper, ObjData *obj, std::s
 			|| obj->has_flag(EObjFlag::kNamed)
 			|| obj->has_flag(EObjFlag::kRepopDecay)
 			|| (buy_price <= 1)
-			|| obj->has_flag(EObjFlag::kZonedacay)
+			|| obj->has_flag(EObjFlag::kZonedecay)
 			|| bloody::is_bloody(obj)) {
 			if (bloody::is_bloody(obj)) {
-				tell_to_char(keeper, ch, "Пшел вон убивец, и руки от крови отмой!");
+				tell_to_char(keeper, ch, ShopMsg(ESM::kBloodySell).c_str());
 			} else {
-				tell_to_char(keeper, ch, "Такое я не покупаю.");
+				tell_to_char(keeper, ch, ShopMsg(ESM::kWontBuy).c_str());
 			}
 
 			return;
 		} else {
 			RemoveObjFromChar(obj);
-			tell_to_char(keeper, ch, ("Получи за " + std::string(obj->get_PName(ECase::kAcc)) + " " + price_to_show + ".").c_str());
-			ch->add_gold(buy_price);
+			tell_to_char(keeper, ch, fmt::format(fmt::runtime(ShopMsg(ESM::kSellPaid)),
+					fmt::arg("item", obj->get_PName(grammar::ECase::kAcc)), fmt::arg("amount", buy_price),
+					fmt::arg("currency", MUD::Currencies().FindAvailableItem(payout_currency).GetNameWithAmount(buy_price, grammar::ECase::kNom).c_str())).c_str());
+			currencies::AddHand(*ch, payout_currency, buy_price);
 			put_item_to_shop(obj);
 			obj->set_where_obj(EWhereObj::kSeller);
 		}
 	}
 	if (cmd == "Чинить") {
 		if (bloody::is_bloody(obj)) {
-			tell_to_char(keeper, ch, "Я не буду чинить окровавленные вещи!");
+			tell_to_char(keeper, ch, ShopMsg(ESM::kBloodyRepair).c_str());
 			return;
 		}
 
 		if (repair <= 0) {
-			tell_to_char(keeper, ch, (std::string(obj->get_PName(ECase::kAcc)) + " не нужно чинить.").c_str());
+			tell_to_char(keeper, ch, fmt::format(fmt::runtime(ShopMsg(ESM::kNoRepairNeeded)),
+					fmt::arg("item", obj->get_PName(grammar::ECase::kAcc))).c_str());
 			return;
 		}
 
@@ -1080,25 +1068,25 @@ void shop_node::do_shop_cmd(CharData *ch, CharData *keeper, ObjData *obj, std::s
 			|| obj->has_flag(EObjFlag::kDecay)
 			|| obj->has_flag(EObjFlag::kNosell)
 			|| obj->has_flag(EObjFlag::kNodrop)) {
-			tell_to_char(keeper,
-						 ch,
-						 ("Я не буду тратить свое драгоценное время на " + obj->get_PName(ECase::kAcc) + ".").c_str());
+			tell_to_char(keeper, ch, fmt::format(fmt::runtime(ShopMsg(ESM::kWontRepair)),
+					fmt::arg("item", obj->get_PName(grammar::ECase::kAcc))).c_str());
 			return;
 		}
-		std::string tell = fmt::format("Починка {} обойдется в {} {}.",
-				obj->get_PName(ECase::kGen), repair_price, GetDeclensionInNumber(repair_price, EWhat::kMoneyU));
+		std::string tell = fmt::format(fmt::runtime(ShopMsg(ESM::kRepairCost)),
+				fmt::arg("item", obj->get_PName(grammar::ECase::kGen)), fmt::arg("amount", repair_price),
+				fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(repair_price, grammar::ECase::kNom).c_str()));
 		tell_to_char(keeper, ch, tell.c_str());
 
-		if (!IS_GOD(ch) && repair_price > ch->get_gold()) {
-			act("А вот их у тебя как-раз то и нет.", false, ch, 0, 0, kToChar);
+		if (!privilege::IsGod(ch) && repair_price > currencies::GetHand(*ch, currencies::kGold)) {
+			act(ShopMsg(ESM::kCantAffordRepair).c_str(), false, ch, 0, 0, kToChar);
 			return;
 		}
 
-		if (!IS_GOD(ch)) {
-			ch->remove_gold(repair_price);
+		if (!privilege::IsGod(ch)) {
+			currencies::RemoveHand(*ch, currencies::kGold, repair_price);
 		}
 
-		act("$n сноровисто починил$g $o3.", false, keeper, obj, 0, kToRoom);
+		act(ShopMsg(ESM::kRepaired).c_str(), false, keeper, obj, 0, kToRoom);
 
 		obj->set_current_durability(obj->get_maximum_durability());
 	}

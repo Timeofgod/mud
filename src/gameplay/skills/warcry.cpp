@@ -1,18 +1,23 @@
 #include "warcry.h"
+#include "administration/privilege.h"
+#include "skill_messages.h"
 
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/abilities/timed_abilities.h"
 #include "engine/ui/color.h"
 #include "gameplay/magic/magic_utils.h"
 #include "gameplay/magic/spells_info.h"
 #include "engine/db/global_objects.h"
 #include "gameplay/mechanics/weather.h"
 
+#include <fmt/format.h>
+
 void do_warcry(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	if (ch->IsNpc() && AFF_FLAGGED(ch, EAffect::kCharmed))
 		return;
 
-	if (!ch->GetSkill(ESkill::kWarcry)) {
-		SendMsgToChar("Но вы не знаете как.\r\n", ch);
+	if (!GetSkill(ch, ESkill::kWarcry)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kWarcry, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 
@@ -27,21 +32,28 @@ void do_warcry(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	wc_name.erase(wc_name.begin(), std::find_if_not(wc_name.begin(), wc_name.end(), isspace));
 
 	if (wc_name.empty()) {
-		sprintf(buf, "Вам доступны :\r\n");
-		auto cnt{0};;
+		std::string out("Вам доступны :\r\n");
+		auto cnt{0};
 		for (auto spell_id = ESpell::kFirst; spell_id <= ESpell::kLast; ++spell_id) {
 			const char *realname = MUD::Spell(spell_id).GetCName();
 
 			if (realname
 				&& MUD::Spell(spell_id).IsFlagged(kMagWarcry)
-				&& ch->GetSkill(ESkill::kWarcry) >= MUD::Spell(spell_id).GetManaChange()) {
+				&& GetSkill(ch, ESkill::kWarcry) >= MUD::Spell(spell_id).GetManaChange()) {
 				if (!IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kKnow | ESpellType::kTemp))
 					continue;
-				sprintf(buf + strlen(buf), "%s%2d%s) %s%s%s\r\n",
-						kColorGrn, cnt++, kColorNrm, MUD::Spell(spell_id).IsViolent() ? kColorBoldRed : kColorBoldGrn, realname, kColorNrm);
+				// (issue.ambiguous-spells) Catalog row has no concrete target, so colour
+				// reflects the spell's intrinsic kind: red for Y, green for N, yellow for A.
+				const char *row_color;
+				switch (MUD::Spell(spell_id).GetViolent()) {
+					case spells::EViolent::kYes:       row_color = "&R"; break;
+					case spells::EViolent::kAmbiguous: row_color = "&Y"; break;
+					default:                           row_color = "&G"; break;
+				}
+				out += fmt::format("&g{:2}&n) {}{}&n\r\n", cnt++, row_color, realname);
 			}
 		}
-		SendMsgToChar(buf, ch);
+		SendMsgToChar(out, ch);
 		return;
 	}
 
@@ -54,7 +66,7 @@ void do_warcry(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	auto spell_id = FixNameAndFindSpellId(wc_name);
 
 	if (spell_id == ESpell::kUndefined
-		|| (ch->GetSkill(ESkill::kWarcry) < MUD::Spell(spell_id).GetManaChange())
+		|| (GetSkill(ch, ESkill::kWarcry) < MUD::Spell(spell_id).GetManaChange())
 		|| !IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kKnow | ESpellType::kTemp)) {
 		SendMsgToChar("И откуда вы набрались таких выражений?\r\n", ch);
 		return;
@@ -89,10 +101,10 @@ void do_warcry(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 	SaySpell(ch, spell_id, nullptr, nullptr);
 
-	if (CallMagic(ch, nullptr, nullptr, nullptr, spell_id, GetRealLevel(ch)) >= 0) {
-		if (!IS_IMMORTAL(ch)) {
+	if (CallMagic(ch, nullptr, nullptr, nullptr, spell_id, GetRealLevel(ch)) != ECastResult::kTargetDied) {
+		if (!privilege::IsImmortal(ch)) {
 			if (ch->get_wait() <= 0) {
-				SetWaitState(ch, kBattleRound);
+				SetBattleLag(ch, 1);
 			}
 			ImposeTimedSkill(ch, &timed);
 			ch->set_move(ch->get_move() - MUD::Spell(spell_id).GetMaxMana());

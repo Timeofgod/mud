@@ -1,50 +1,55 @@
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "skill_messages.h"
+#include "engine/db/global_objects.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/mechanics/liquid.h"
 #include "gameplay/mechanics/poison.h"
 #include "engine/core/utils_char_obj.inl"
+#include "utils/utils_string.h"
+
+#include <fmt/format.h>
 
 void DoPoisoning(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (!ch->GetSkill(ESkill::kPoisoning)) {
-		SendMsgToChar("Вы не умеете этого.", ch);
+	if (!GetSkill(ch, ESkill::kPoisoning)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kPoisoning, ESkillMsg::kDontKnowSkill), ch);
 		return;
 	}
 
-	argument = one_argument(argument, arg);
-	skip_spaces(&argument);
+	std::string remains;
+	const std::string weapon_name = utils::ExtractFirstArgumentLower(argument, remains);
 
-	if (!*arg) {
-		SendMsgToChar("Что вы хотите отравить?\r\n", ch);
+	if (weapon_name.empty()) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kPoisoning, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
-	} else if (!*argument) {
+	} else if (remains.empty()) {
 		SendMsgToChar("Из чего вы собираете взять яд?\r\n", ch);
 		return;
 	}
 
 	ObjData *weapon = nullptr;
 	CharData *dummy = nullptr;
-	int result = generic_find(arg, EFind::kObjInventory | EFind::kObjEquip, ch, &dummy, &weapon);
+	int result = generic_find(weapon_name, EFind::kObjInventory | EFind::kObjEquip, ch, &dummy, &weapon);
 
 	if (!weapon || !result) {
-		SendMsgToChar(ch, "У вас нет \'%s\'.\r\n", arg);
+		SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", weapon_name), ch);
 		return;
 	} else if (weapon->get_type() != EObjType::kWeapon) {
 		SendMsgToChar("Вы можете нанести яд только на оружие.\r\n", ch);
 		return;
 	}
 
-	ObjData *cont = get_obj_in_list_vis(ch, argument, ch->carrying);
+	ObjData *cont = get_obj_in_list_vis(ch, remains, ch->carrying);
 	if (!cont) {
-		SendMsgToChar(ch, "У вас нет \'%s\'.\r\n", argument);
+		SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", remains), ch);
 		return;
 	} else if (cont->get_type() != EObjType::kLiquidContainer) {
-		SendMsgToChar(ch, "%s не является емкостью.\r\n", cont->get_PName(ECase::kNom).c_str());
+		SendMsgToChar(ch, "%s не является емкостью.\r\n", cont->get_PName(grammar::ECase::kNom).c_str());
 		return;
 	} else if (GET_OBJ_VAL(cont, 1) <= 0) {
-		SendMsgToChar(ch, "В %s нет никакой жидкости.\r\n", cont->get_PName(ECase::kPre).c_str());
+		SendMsgToChar(ch, "В %s нет никакой жидкости.\r\n", cont->get_PName(grammar::ECase::kPre).c_str());
 		return;
 	} else if (!poison_in_vessel(GET_OBJ_VAL(cont, 2))) {
-		SendMsgToChar(ch, "В %s нет подходящего яда.\r\n", cont->get_PName(ECase::kPre).c_str());
+		SendMsgToChar(ch, "В %s нет подходящего яда.\r\n", cont->get_PName(grammar::ECase::kPre).c_str());
 		return;
 	}
 
@@ -57,8 +62,8 @@ void DoPoisoning(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 	set_weap_poison(weapon, cont->get_val(2));
 
-	snprintf(buf, sizeof(buf), "Вы осторожно нанесли немного %s на $o3.", drinks[cont->get_val(2)]);
-	act(buf, false, ch, weapon, nullptr, kToChar);
+	act(fmt::format("Вы осторожно нанесли немного {} на $o3.", drinks[cont->get_val(2)]),
+		false, ch, weapon, nullptr, kToChar);
 	act("$n осторожно нанес$q яд на $o3.",
 		false, ch, weapon, nullptr, kToRoom | kToArenaListen);
 }

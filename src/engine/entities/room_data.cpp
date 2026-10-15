@@ -6,7 +6,7 @@
 #include "utils/utils.h"
 ExitData::ExitData() : keyword(nullptr),
 					   vkeyword(nullptr),
-					   exit_info(0),
+					   exit_info(),
 					   lock_complexity(0),
 					   key(-1),
 					   to_room_(kNowhere) {
@@ -65,6 +65,16 @@ void ExitData::to_room(const RoomRnum _) {
 	to_room_ = _;
 }
 
+bool ExitData::is_empty() const {
+	return to_room_ == kNowhere
+		&& general_description.empty()
+		&& keyword == nullptr
+		&& vkeyword == nullptr
+		&& exit_info.none()
+		&& key <= 0
+		&& lock_complexity == 0;
+}
+
 RoomData::RoomData() : vnum(0),
 					   zone_rn(0),
 					   sector_type(0),
@@ -72,7 +82,6 @@ RoomData::RoomData() : vnum(0),
 					   name(nullptr),
 					   description_num(0),
 					   temp_description(nullptr),
-					   ex_description(nullptr),
 					   light(0),
 					   glight(0),
 					   gdark(0),
@@ -80,12 +89,11 @@ RoomData::RoomData() : vnum(0),
 					   proto_script(new ObjData::triggers_list_t()),
 					   script(new Script()),
 					   track(nullptr),
-					   contents(nullptr),
+					   contents(),
 					   people(0),
 					   affected(0),
 					   fires(0),
 					   ices(0),
-					   pkPenterUnique(0),
 					   holes(0),
 					   poison(0) {
 	for (auto i = 0; i < EDirection::kMaxDirNum; ++i) {

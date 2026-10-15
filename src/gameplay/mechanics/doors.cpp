@@ -9,17 +9,24 @@
  Тогда и scmd тут не понадобится и его можно будет либо убрать в do_gen_door, либо вообще удалить.
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/obj_data.h"
+#include "gameplay/magic/magic.h"
 #include "engine/entities/room_data.h"
 #include "engine/entities/char_data.h"
 #include "gameplay/mechanics/doors.h"
 #include "engine/core/comm.h"
 #include "utils/utils_string.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_movement.h"
+#include "engine/core/target_resolver.h"
 #include "treasure_cases.h"
 #include "gameplay/skills/pick.h"
 #include "administration/privilege.h"
 #include "named_stuff.h"
+#include "gameplay/magic/magic_rooms.h"          // issue.room-affect-trigger-improve: RunDoorTriggers
+#include "gameplay/abilities/talents_actions.h"  // EActionTrigger::kOpen
+#include "engine/db/player_index.h"
 
 enum EDoorError : int {
   kWrongDir = -1,
@@ -74,7 +81,7 @@ ObjVnum GetDoorKeyVnum(CharData *ch, ObjData *obj, EDirection dir) {
 
 bool IsdoorOpenable(CharData *ch, ObjData *obj, EDirection dir) {
 	if (obj) {
-		return (obj->get_type() == EObjType::kContainer) && OBJVAL_FLAGGED(obj, EContainerFlag::kCloseable);
+		return (obj->get_type() == EObjType::kContainer) && IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kCloseable));
 	} else {
 		return EXIT_FLAGGED(EXIT(ch, dir), EExitFlag::kHasDoor);
 	}
@@ -82,7 +89,7 @@ bool IsdoorOpenable(CharData *ch, ObjData *obj, EDirection dir) {
 
 bool IsDoorBroken(CharData *ch, ObjData *obj, EDirection dir) {
 	if (obj) {
-		return OBJVAL_FLAGGED(obj, EContainerFlag::kLockIsBroken);
+		return IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kLockIsBroken));
 	} else {
 		return EXIT_FLAGGED(EXIT(ch, dir), EExitFlag::kBrokenLock);
 	}
@@ -94,7 +101,7 @@ bool IdDoorExist(CharData *ch, EDirection dir) {
 
 bool IsDoorPickroof(CharData *ch, ObjData *obj, EDirection dir) {
 	if (obj) {
-		return OBJVAL_FLAGGED(obj, EContainerFlag::kUncrackable) || OBJVAL_FLAGGED(obj, EContainerFlag::kLockIsBroken);
+		return IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kUncrackable)) || IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kLockIsBroken));
 	} else {
 		return EXIT_FLAGGED(EXIT(ch, dir), EExitFlag::kPickroof)
 			|| EXIT_FLAGGED(EXIT(ch, dir), EExitFlag::kBrokenLock);
@@ -111,7 +118,7 @@ ubyte GetLockComplexity(CharData *ch, ObjData *obj, EDirection dir) {
 
 bool IsDoorOpen(CharData *ch, ObjData *obj, EDirection dir) {
 	if (obj) {
-		return !OBJVAL_FLAGGED(obj, EContainerFlag::kShutted);
+		return !IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kShutted));
 	} else {
             return !EXIT_FLAGGED(EXIT(ch, dir), EExitFlag::kClosed);
 	}
@@ -119,7 +126,7 @@ bool IsDoorOpen(CharData *ch, ObjData *obj, EDirection dir) {
 
 bool IsDoorUnlocked(CharData *ch, ObjData *obj, EDirection dir) {
 	if (obj) {
-		return !OBJVAL_FLAGGED(obj, EContainerFlag::kLockedUp);
+		return !IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kLockedUp));
 	} else {
 		return !EXIT_FLAGGED(EXIT(ch, dir), EExitFlag::kLocked);
 	}
@@ -275,8 +282,8 @@ void do_doorcmd(CharData *ch, ObjData *obj, int door, EDoorScmd scmd) {
 		back = world[other_room]->dir_option[rev_dir[door]];
 		if (back) {
 			if ((back->to_room() != ch->in_room)
-				|| ((EXITDATA(ch->in_room, door)->exit_info
-					^ EXITDATA(other_room, rev_dir[door])->exit_info)
+				|| ((EXITDATA(ch->in_room, door)->exit_info.get_plane(0)
+					^ EXITDATA(other_room, rev_dir[door])->exit_info.get_plane(0))
 					& (EExitFlag::kHasDoor | EExitFlag::kClosed | EExitFlag::kLocked))) {
 				back.reset();
 			}
@@ -292,11 +299,26 @@ void do_doorcmd(CharData *ch, ObjData *obj, int door, EDoorScmd scmd) {
 				return;
 			if (scmd == kScmdOpen && !obj && back && !open_wtrigger(world[other_room], ch, rev_dir[door], false))
 				return;
+			// issue.room-affect-trigger-improve (door affects): an affect on this door may react to the
+			// open (e.g. kFireTrap fireballs the opener) and refuse it via <trigger return="0">.
+			if (scmd == kScmdOpen && !obj
+				&& !room_spells::RunDoorTriggers(ch, world[ch->in_room], door, talents_actions::EActionTrigger::kOpen))
+				return;
 			if (scmd == kScmdClose && obj && !close_otrigger(obj, ch, false))
 				return;
 			if (scmd == kScmdClose && !obj && !close_wtrigger(world[ch->in_room], ch, door, false))
 				return;
 			if (scmd == kScmdClose && !obj && back && !close_wtrigger(world[other_room], ch, rev_dir[door], false))
+				return;
+			// issue.room-affect-trigger-improve (door affects): an affect may react to closing the door
+			// and refuse it via <trigger val="kClose" return="0">.
+			if (scmd == kScmdClose && !obj
+				&& !room_spells::RunDoorTriggers(ch, world[ch->in_room], door, talents_actions::EActionTrigger::kClose))
+				return;
+			// issue.obj-affects: a container affect may react to open/close and refuse it via <trigger return="0">.
+			if (scmd == kScmdOpen && obj && !RunObjAffectTrigger(obj, ch, talents_actions::EActionTrigger::kOpen))
+				return;
+			if (scmd == kScmdClose && obj && !RunObjAffectTrigger(obj, ch, talents_actions::EActionTrigger::kClose))
 				return;
 			OPEN_DOOR(ch->in_room, obj, door);
 			if (back) {
@@ -304,16 +326,14 @@ void do_doorcmd(CharData *ch, ObjData *obj, int door, EDoorScmd scmd) {
 			}
 			// вываливание и пурж кошелька
 			if (obj && system_obj::is_purse(obj)) {
-				sprintf(buf,
-						"<%s> {%d} открыл трупный кошелек %s.",
-						ch->get_name().c_str(),
-						GET_ROOM_VNUM(ch->in_room),
-						GetPlayerNameByUnique(GET_OBJ_VAL(obj, 3)));
-				mudlog(buf, NRM, kLvlGreatGod, MONEY_LOG, true);
+				mudlog(fmt::format("<{}> {{{}}} открыл трупный кошелек {}.",
+								   ch->get_name(), GET_ROOM_VNUM(ch->in_room),
+								   GetPlayerNameByUnique(GET_OBJ_VAL(obj, 3))),
+					   NRM, kLvlGreatGod, MONEY_LOG, true);
 				system_obj::process_open_purse(ch, obj);
 				return;
 			} else {
-				SendMsgToChar(OK, ch);
+				SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 			}
 			break;
 
@@ -331,6 +351,19 @@ void do_doorcmd(CharData *ch, ObjData *obj, int door, EDoorScmd scmd) {
 				return;
 			if (scmd == kScmdLock && !obj && back && !close_wtrigger(world[other_room], ch, rev_dir[door], true))
 				return;
+			// issue.room-affect-trigger-improve (door affects): an affect may react to the unlock and
+			// refuse it via <trigger val="kUnlock" return="0">.
+			if (scmd == kScmdUnlock && !obj
+				&& !room_spells::RunDoorTriggers(ch, world[ch->in_room], door, talents_actions::EActionTrigger::kUnlock))
+				return;
+			// ... and likewise to locking it, via <trigger val="kLock" return="0">.
+			if (scmd == kScmdLock && !obj
+				&& !room_spells::RunDoorTriggers(ch, world[ch->in_room], door, talents_actions::EActionTrigger::kLock))
+				return;
+			if (scmd == kScmdUnlock && obj && !RunObjAffectTrigger(obj, ch, talents_actions::EActionTrigger::kUnlock))
+				return;
+			if (scmd == kScmdLock && obj && !RunObjAffectTrigger(obj, ch, talents_actions::EActionTrigger::kLock))
+				return;
 			LOCK_DOOR(ch->in_room, obj, door);
 			if (back)
 				LOCK_DOOR(other_room, obj, rev_dir[door]);
@@ -347,6 +380,12 @@ void do_doorcmd(CharData *ch, ObjData *obj, int door, EDoorScmd scmd) {
 			if (!obj && !pick_wtrigger(world[ch->in_room], ch, door))
 				return;
 			if (!obj && back && !pick_wtrigger(world[other_room], ch, rev_dir[door]))
+				return;
+			// issue.room-affect-trigger-improve (door affects): an affect may react to the pick and
+			// refuse it via <trigger val="kPick" return="0">.
+			if (!obj && !room_spells::RunDoorTriggers(ch, world[ch->in_room], door, talents_actions::EActionTrigger::kPick))
+				return;
+			if (obj && !RunObjAffectTrigger(obj, ch, talents_actions::EActionTrigger::kPick))
 				return;
 			LOCK_DOOR(ch->in_room, obj, door);
 			if (back)
@@ -404,17 +443,17 @@ void go_gen_door(CharData *ch, char *type, char *dir, int where_bits, int subcmd
 			switch (door.error) {
 				case EDoorError::kWrongDir: SendMsgToChar("Уточните направление.\r\n", ch);
 					break;
-				case EDoorError::kWrongDirDoorName: sprintf(buf, "Вы не видите '%s' в этой комнате.\r\n", type);
-					SendMsgToChar(buf, ch);
+				case EDoorError::kWrongDirDoorName:
+					SendMsgToChar(fmt::format("Вы не видите '{}' в этой комнате.\r\n", type), ch);
 					break;
-				case EDoorError::kNoDoorGivenDir: sprintf(buf, "Вы не можете это '%s'.\r\n", a_cmd_door[subcmd]);
-					SendMsgToChar(buf, ch);
+				case EDoorError::kNoDoorGivenDir:
+					SendMsgToChar(fmt::format("Вы не можете это '{}'.\r\n", a_cmd_door[subcmd]), ch);
 					break;
-				case EDoorError::kDoorNameIsEmpty: sprintf(buf, "Что вы хотите '%s'?\r\n", a_cmd_door[subcmd]);
-					SendMsgToChar(buf, ch);
+				case EDoorError::kDoorNameIsEmpty:
+					SendMsgToChar(fmt::format("Что вы хотите '{}'?\r\n", a_cmd_door[subcmd]), ch);
 					break;
-				case EDoorError::kWrongDoorName: sprintf(buf, "Вы не видите здесь '%s'.\r\n", type);
-					SendMsgToChar(buf, ch);
+				case EDoorError::kWrongDoorName:
+					SendMsgToChar(fmt::format("Вы не видите здесь '{}'.\r\n", type), ch);
 					break;
 				default: SendMsgToChar("Что-то с дверью произошло непнятное, сообщите богам.", ch);
 					break;
@@ -424,7 +463,7 @@ void go_gen_door(CharData *ch, char *type, char *dir, int where_bits, int subcmd
 	}
 
 	if ((obj) || (door.dir != EDirection::kUndefinedDir)) {
-		if ((obj) && !IS_IMMORTAL(ch) && (obj->has_flag(EObjFlag::kNamed))
+		if ((obj) && !privilege::IsImmortal(ch) && (obj->has_flag(EObjFlag::kNamed))
 			&& NamedStuff::check_named(ch, obj, true))//Именной предмет открывать(закрывать) может только владелец
 		{
 			if (!NamedStuff::wear_msg(ch, obj))

@@ -1,0 +1,13 @@
+# Zone #2
+
+vnum: 2
+name: Системная зона 2 -- руны. (!OLC)
+top_room: 299
+lifespan: 1
+reset_mode: 0
+reset_idle: 0
+zone_type: 0
+mode: 1  # level
+entrance: 203
+under_construction: 0
+zone_group: 1  # solo

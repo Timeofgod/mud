@@ -8,13 +8,17 @@
 *  $Revision$                                                       *
 **************************************************************************/
 
+#include "utils/native_text.h"
 #include "engine/entities/obj_data.h"
+#include "utils/grammar/gender.h"
 #include "dg_scripts.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
+#include "engine/core/target_resolver.h"
 #include "engine/core/utils_char_obj.inl"
+#include "gameplay/mechanics/sight.h"
 
 extern DescriptorData *descriptor_list;
-// same as any_one_arg except that it stops at punctuation 
+// same as one_argument except that it stops at punctuation 
 char *any_one_name(char *argument, char *first_arg) {
 	char *arg;
 
@@ -28,10 +32,14 @@ char *any_one_name(char *argument, char *first_arg) {
 	 * Библиотечная функция ispunct() неправильно работает для русского языка
 	 * (по крайней мере у меня). Пока закоментировал.
 	 */
+	// Шагаем по символу, а не по байту: под UTF-8 русская буква занимает два, и побайтовое
+	// приведение к нижнему регистру ломало её (issue #3681).
 	for (arg = first_arg; *argument && !isspace(*argument) &&
-			(!ispunct(*argument) || *argument == '#' || *argument == '-');
-		 arg++, argument++)
-		*arg = LOWER(*argument);
+			(!ispunct(*argument) || *argument == '#' || *argument == '-');) {
+		const std::size_t written = native_text::copy_lower_char(argument, arg);
+		arg += written;
+		argument += written;
+	}
 	*arg = '\0';
 
 	return argument;
@@ -52,7 +60,7 @@ void sub_write_to_char(CharData *ch, char *tokens[], void *otokens[], char type[
 				else if ((CharData *) otokens[i] == ch)
 					strcat(sb, "Вы");
 				else
-					strcat(sb, PERS((CharData *) otokens[i], ch, 0));
+					strcat(sb, sight::PersonName((CharData *) otokens[i], ch, 0));
 				break;
 
 			case '@':
@@ -61,35 +69,35 @@ void sub_write_to_char(CharData *ch, char *tokens[], void *otokens[], char type[
 				else if ((CharData *) otokens[i] == ch)
 					strcat(sb, "ваш");
 				else {
-					strcat(sb, PERS((CharData *) otokens[i], ch, 1));
+					strcat(sb, sight::PersonName((CharData *) otokens[i], ch, 1));
 				}
 				break;
 
 			case '^':
-				if (!otokens[i] || !CAN_SEE(ch, (CharData *) otokens[i]))
+				if (!otokens[i] || !sight::CanSee(ch, (CharData *) otokens[i]))
 					strcat(sb, "чей-то");
 				else if (otokens[i] == ch)
 					strcat(sb, "ваш");
 				else
-					strcat(sb, HSHR((CharData *) otokens[i]));
+					strcat(sb, grammar::PossessivePronoun(((CharData *) otokens[i])->get_sex()));
 				break;
 
 			case '}':
-				if (!otokens[i] || !CAN_SEE(ch, (CharData *) otokens[i]))
+				if (!otokens[i] || !sight::CanSee(ch, (CharData *) otokens[i]))
 					strcat(sb, "Он");
 				else if (otokens[i] == ch)
 					strcat(sb, "Вы");
 				else
-					strcat(sb, HSSH((CharData *) otokens[i]));
+					strcat(sb, grammar::PersonalPronoun(((CharData *) otokens[i])->get_sex()));
 				break;
 
 			case '*':
-				if (!otokens[i] || !CAN_SEE(ch, (CharData *) otokens[i]))
+				if (!otokens[i] || !sight::CanSee(ch, (CharData *) otokens[i]))
 					strcat(sb, "ему");
 				else if (otokens[i] == ch)
 					strcat(sb, "вам");
 				else
-					strcat(sb, HMHR((CharData *) otokens[i]));
+					strcat(sb, grammar::DativePronoun(((CharData *) otokens[i])->get_sex()));
 				break;
 
 			case '`':
@@ -108,7 +116,7 @@ void sub_write_to_char(CharData *ch, char *tokens[], void *otokens[], char type[
 	SendMsgToChar(sb, ch);
 }
 
-void sub_write(char *arg, CharData *ch, byte find_invis, int targets) {
+void sub_write(char *arg, CharData *ch, int find_invis, int targets) {
 	char str[kMaxInputLength * 2];
 	char type[kMaxInputLength], name[kMaxInputLength];
 	char *tokens[kMaxInputLength], *s, *p;
@@ -133,7 +141,7 @@ void sub_write(char *arg, CharData *ch, byte find_invis, int targets) {
 				type[i] = *p;
 				*s = '\0';
 				p = any_one_name(++p, name);
-				otokens[i] = find_invis ? get_char(name) : get_char_room_vis(ch, name);
+				otokens[i] = find_invis ? get_char(name) : target_resolver::FindCharInRoomOrSelf(ch, name);
 				tokens[++i] = ++s;
 				break;
 
@@ -175,7 +183,7 @@ void sub_write(char *arg, CharData *ch, byte find_invis, int targets) {
 	}
 }
 
-void send_to_zone(char *messg, int zone_rnum) {
+void send_to_zone(const char *messg, int zone_rnum) {
 	DescriptorData *i;
 
 	if (!messg || !*messg)

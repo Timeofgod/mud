@@ -1,4 +1,8 @@
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
+#include "gameplay/magic/magic_rooms.h"  // room_spells::ERoomAffect
+#include "administration/privilege.h"
 #include "gameplay/fight/pk.h"
 #include "gameplay/mechanics/groups.h"
 
@@ -22,9 +26,10 @@ void DoTrample(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		return;
 	}
 
-	one_argument(argument, arg);
+	char target_arg[kMaxInputLength];
+	one_argument(argument, target_arg);
 
-	if ((!*arg) || ((tp = search_block(arg, targets, false)) == -1)) {
+	if ((!*target_arg) || ((tp = search_block(target_arg, targets, false)) == -1)) {
 		SendMsgToChar("Что вы хотите затоптать?\r\n", ch);
 		return;
 	}
@@ -58,8 +63,8 @@ void DoTrample(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 			//Find own rune label or first run label in room
 			for (auto affect_it = room->affected.begin(); affect_it != room->affected.end(); ++affect_it) {
-				if (affect_it->get()->type == ESpell::kRuneLabel) {
-					if (affect_it->get()->caster_id == GET_UID(ch)) {
+				if (affect_it->get()->affect_type == room_spells::ERoomAffect::kRuneLabel) {
+					if (affect_it->get()->caster_id == ch->get_uid()) {
 						aff_i = affect_it;
 						break;
 					}
@@ -77,21 +82,20 @@ void DoTrample(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 			if (aff_i != room->affected.end()
 				&& (AFF_FLAGGED(ch, EAffect::kDetectMagic)
-					|| IS_IMMORTAL(ch)
+					|| privilege::IsImmortal(ch)
 					|| ch->IsFlagged(EPrf::kCoderinfo))) {
 				SendMsgToChar("Шаркнув несколько раз по земле, вы стерли светящуюся надпись.\r\n", ch);
 				act("$n шаркнул$g несколько раз по светящимся рунам, полностью их уничтожив.",
 					false, ch, nullptr, nullptr, kToRoom | kToArenaListen);
 
 				const auto &aff = *aff_i;
-				if (GET_UID(ch) != aff->caster_id) {
+				if (ch->get_uid() != aff->caster_id) {
 					caster = find_char(aff->caster_id);
 					if (caster && !group::same_group(ch, caster)) {
 						pk_thiefs_action(ch, caster);
-						sprintf(buf,
-								"Послышался далекий звук лопнувшей струны, и перед вами промельнул призрачный облик %s.\r\n",
-								GET_PAD(ch, 1));
-						SendMsgToChar(buf, caster);
+						SendMsgToChar(fmt::format("Послышался далекий звук лопнувшей струны, "
+												  "и перед вами промельнул призрачный облик {}.\r\n",
+												  GET_PAD(ch, 1)), caster);
 					}
 				}
 				room_spells::RoomRemoveAffect(world[ch->in_room], aff_i);
@@ -104,8 +108,8 @@ void DoTrample(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		default: break;
 	}
 
-	if (!IS_IMMORTAL(ch)) {
-		SetWaitState(ch, lag * kBattleRound);
+	if (!privilege::IsImmortal(ch)) {
+		SetBattleLag(ch, lag);
 	}
 }
 

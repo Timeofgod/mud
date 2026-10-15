@@ -1,26 +1,30 @@
 #include "stun.h"
+#include "gameplay/mechanics/mount.h"
+#include "skill_messages.h"
 
 #include "gameplay/fight/pk.h"
 #include "gameplay/fight/common.h"
 #include "gameplay/fight/fight_hit.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/abilities/timed_abilities.h"
 #include "engine/db/global_objects.h"
+#include "gameplay/core/remort.h"
 
 void do_stun(CharData *ch, char *argument, int, int) {
-	if (ch->GetSkill(ESkill::kStun) < 1) {
-		SendMsgToChar("Вы не знаете как.\r\n", ch);
+	if (GetSkill(ch, ESkill::kStun) < 1) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStun, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
-	if (ch->HasCooldown(ESkill::kStun)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kStun)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStun, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	};
 
-	if (!ch->IsOnHorse()) {
-		SendMsgToChar("Вы привстали на стременах и поняли: 'лошадь украли!!!'\r\n", ch);
+	if (!mount::IsOnHorse(ch)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStun, ESkillMsg::kMustBeMounted) + "\r\n", ch);
 		return;
 	}
-	if ((ch->GetSkill(ESkill::kRiding) < 151) && (!ch->IsNpc())) {
+	if ((GetSkill(ch, ESkill::kRiding) < 151) && (!ch->IsNpc())) {
 		SendMsgToChar("Вы слишком неуверенно управляете лошадью, чтоб на ней пытаться ошеломить противника.\r\n", ch);
 		return;
 	}
@@ -29,23 +33,24 @@ void do_stun(CharData *ch, char *argument, int, int) {
 		return;
 	}
 	if (!ch->IsNpc() && !(GET_EQ(ch, EEquipPos::kWield) || GET_EQ(ch, EEquipPos::kBoths))) {
-		SendMsgToChar("Вы должны держать оружие в основной руке.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStun, ESkillMsg::kNeedWeapon) + "\r\n", ch);
 		return;
 	}
-	CharData *vict = FindVictim(ch, argument);
+	std::string target_name;
+	CharData *vict = FindVictim(ch, argument, target_name);
 	if (!vict) {
-		SendMsgToChar("Кто это так сильно путается у вас под руками?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStun, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 
 	if (vict == ch) {
-		SendMsgToChar("Вы БОЛЬНО стукнули себя по голове! 'А еще я туда ем', - подумали вы...\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStun, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 
 	if (!may_kill_here(ch, vict, argument))
 		return;
-	if (!check_pkill(ch, vict, arg))
+	if (!check_pkill(ch, vict, target_name))
 		return;
 
 	go_stun(ch, vict);
@@ -55,7 +60,7 @@ void go_stun(CharData *ch, CharData *vict) {
 	TimedSkill timed;
 
 	timed.skill = ESkill::kStun;
-	timed.time = std::clamp(7 - (ch->GetSkill(ESkill::kStun) - (MUD::Skill(ESkill::kStun).cap / 4 * 3)) / 10, 2, 7);
+	timed.time = std::clamp(7 - (GetSkill(ch, ESkill::kStun) - (MUD::Skill(ESkill::kStun).cap / 4 * 3)) / 10, 2, 7);
 	ImposeTimedSkill(ch, &timed);
 
 	int percent = number(1, MUD::Skill(ESkill::kStun).difficulty);
@@ -88,8 +93,8 @@ void go_stun(CharData *ch, CharData *vict) {
 			act("$n мощным ударом ошеломил$g $N3!", true, ch,
 				nullptr, vict, kToNotVict | kToArenaListen);
 		}
-		vict->SetPosition(EPosition::kIncap);
-		SetWaitState(vict, (2 + GetRealRemort(ch) / 5) * kBattleRound * ch->GetSkill(ESkill::kStun) / MUD::Skill(ESkill::kStun).cap);
+		vict->SetPosition(EPosition::kStun);   // issue #3658: kStun (не kIncap) -- ошеломление тоже можно стряхнуть (HitPrcnt)
+		SetWaitState(vict, (2 + remort::GetRealRemort(ch) / 5) * kBattleRound * GetSkill(ch, ESkill::kStun) / MUD::Skill(ESkill::kStun).cap);
 		ch->setSkillCooldown(ESkill::kStun, 3 * kBattleRound);
 		hit(ch, vict, ESkill::kUndefined, AFF_FLAGGED(vict, EAffect::kStopRight) ? fight::kOffHand : fight::kMainHand);
 	}

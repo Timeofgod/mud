@@ -1,8 +1,12 @@
 #include "do_mixture.h"
+#include "gameplay/mechanics/magic_item.h"
+
+#include <string>
 
 #include "gameplay/magic/spells.h"
+#include "utils/utils_string.h"
 #include "gameplay/magic/magic_utils.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
 #include "administration/privilege.h"
 #include "gameplay/magic/spells_info.h"
 #include "gameplay/mechanics/mem_queue.h"
@@ -11,7 +15,7 @@
 void do_mixture(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	if (ch->IsNpc())
 		return;
-	if (IS_IMMORTAL(ch) && !privilege::CheckFlag(ch, privilege::kUseSkills)) {
+	if (privilege::IsImmortal(ch) && !privilege::CheckFlag(ch, privilege::kUseSkills)) {
 		SendMsgToChar("Не положено...\r\n", ch);
 		return;
 	}
@@ -19,7 +23,6 @@ void do_mixture(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	CharData *tch;
 	ObjData *tobj;
 	RoomData *troom;
-	char *s, *t;
 	int target = 0;
 
 	if (!*argument) {
@@ -29,17 +32,29 @@ void do_mixture(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			SendMsgToChar("Что вы хотите смешать?\r\n", ch);
 		return;
 	}
-	s = strtok(argument, "'*!");
-	if (!str_cmp(s, argument)) {
+	std::string arg_str(argument);
+	auto quote1 = arg_str.find_first_of("'*!");
+	if (quote1 == std::string::npos) {
 		if (subcmd == SCMD_RUNES)
 			SendMsgToChar("Название вызываемой магии должно быть заключено в символы : * или !\r\n", ch);
 		else if (subcmd == SCMD_ITEMS)
 			SendMsgToChar("Название вызываемой смеси должно быть заключено в символы : * или !\r\n", ch);
 		return;
 	}
-	t = strtok(nullptr, "\0");
+	auto quote2 = arg_str.find_first_of("'*!", quote1 + 1);
+	std::string spell_name_str;
+	if (quote2 != std::string::npos) {
+		spell_name_str = arg_str.substr(quote1 + 1, quote2 - quote1 - 1);
+	} else {
+		spell_name_str = arg_str.substr(quote1 + 1);
+	}
+	std::string target_str;
+	if (quote2 != std::string::npos && quote2 + 1 < arg_str.size()) {
+		target_str = arg_str.substr(quote2 + 1);
+		utils::TrimLeft(target_str);
+	}
 
-	auto spell_id = FixNameAndFindSpellId(s);
+	auto spell_id = FixNameAndFindSpellId(spell_name_str);
 	if (spell_id == ESpell::kUndefined) {
 			if (subcmd == SCMD_RUNES)
 				SendMsgToChar("Вы бы еще сложить !абырвалг! попробовали!\r\n", ch);
@@ -51,7 +66,7 @@ void do_mixture(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	if (((!IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kItemCast)
 		&& subcmd == SCMD_ITEMS)
 		|| (!IS_SET(GET_SPELL_TYPE(ch, spell_id), ESpellType::kRunes)
-			&& subcmd == SCMD_RUNES)) && !IS_GOD(ch)) {
+			&& subcmd == SCMD_RUNES)) && !privilege::IsGod(ch)) {
 			if (subcmd == SCMD_RUNES)
 				SendMsgToChar("Что-то пошло не так...\r\n", ch);
 			else if (subcmd == SCMD_ITEMS)
@@ -71,12 +86,13 @@ void do_mixture(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	}
 
 	// Find the target
-	if (t != nullptr)
-		one_argument(t, arg);
-	else
-		*arg = '\0';
+	char target_name[kMaxInputLength];
+	*target_name = '\0';
+	if (!target_str.empty()) {
+		one_argument(target_str.data(), target_name);
+	}
 
-	target = FindCastTarget(spell_id, arg, ch, &tch, &tobj, &troom);
+	target = FindCastTarget(spell_id, target_name, ch, &tch, &tobj, &troom);
 
 	if (target && (tch == ch) && MUD::Spell(spell_id).IsViolent()) {
 		SendMsgToChar("Лекари не рекомендуют использовать ЭТО на себя!\r\n", ch);
@@ -88,7 +104,7 @@ void do_mixture(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		return;
 	}
 
-	if (tch != ch && !IS_IMMORTAL(ch) && MUD::Spell(spell_id).AllowTarget(kTarSelfOnly)) {
+	if (tch != ch && !privilege::IsImmortal(ch) && MUD::Spell(spell_id).AllowTarget(kTarSelfOnly)) {
 		SendMsgToChar("Вы можете колдовать это только на себя!\r\n", ch);
 		return;
 	}
@@ -108,7 +124,7 @@ void do_mixture(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 
 	if (CheckRecipeItems(ch, spell_id, subcmd == SCMD_ITEMS ? ESpellType::kItemCast : ESpellType::kRunes, true, tch)) {
 		if (!CalcCastSuccess(ch, tch, ESaving::kStability, spell_id)) {
-			SetWaitState(ch, kBattleRound);
+			SetBattleLag(ch, 1);
 			if (!tch || !SendSkillMessages(0, ch, tch, spell_id)) {
 				if (subcmd == SCMD_ITEMS)
 					SendMsgToChar("Вы неправильно смешали ингредиенты!\r\n", ch);
@@ -116,9 +132,9 @@ void do_mixture(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 					SendMsgToChar("Вы не смогли правильно истолковать значение рун!\r\n", ch);
 			}
 		} else {
-			if (CallMagic(ch, tch, tobj, world[ch->in_room], spell_id, GetRealLevel(ch)) >= 0) {
-				if (!(IS_IMMORTAL(ch) || ch->get_wait() > 0 ))
-					SetWaitState(ch, kBattleRound);
+			if (CallMagic(ch, tch, tobj, world[ch->in_room], spell_id, GetRealLevel(ch)) != ECastResult::kTargetDied) {
+				if (!(privilege::IsImmortal(ch) || ch->get_wait() > 0 ))
+					SetBattleLag(ch, 1);
 			}
 		}
 	}

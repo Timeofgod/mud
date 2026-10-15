@@ -1,9 +1,17 @@
 #include "engine/db/global_objects.h"
-#include "engine/core/handler.h"
+#include "utils/grammar/gender.h"
+#include "skill_messages.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/abilities/timed_abilities.h"
+#include "utils/utils_string.h"
+
+#include <fmt/format.h>
 
 void DoRepair(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (!ch->GetSkill(ESkill::kRepair)) {
-		SendMsgToChar("Вы не умеете этого.\r\n", ch);
+	if (!GetSkill(ch, ESkill::kRepair)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kRepair, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 	if (IsTimedBySkill(ch, ESkill::kRepair)) {
@@ -11,22 +19,21 @@ void DoRepair(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		return;
 	}
 
-	one_argument(argument, arg);
+	const std::string obj_name = utils::ExtractFirstArgumentLower(argument);
 
 	if (ch->GetEnemy()) {
 		SendMsgToChar("Вы не можете сделать это в бою!\r\n", ch);
 		return;
 	}
 
-	if (!*arg) {
-		SendMsgToChar("Что вы хотите ремонтировать?\r\n", ch);
+	if (obj_name.empty()) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kRepair, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 
 	ObjData *obj;
-	if (!(obj = get_obj_in_list_vis(ch, arg, ch->carrying))) {
-		snprintf(buf, kMaxInputLength, "У вас нет \'%s\'.\r\n", arg);
-		SendMsgToChar(buf, ch);
+	if (!(obj = get_obj_in_list_vis(ch, obj_name, ch->carrying))) {
+		SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", obj_name), ch);
 		return;
 	};
 
@@ -44,7 +51,7 @@ void DoRepair(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	TrainSkill(ch, ESkill::kRepair, prob <= percent, nullptr);
 	if (prob > percent) {
 		if (!percent) {
-			percent = ch->GetSkill(ESkill::kRepair) / 10;
+			percent = GetSkill(ch, ESkill::kRepair) / 10;
 		}
 		obj->set_current_durability(std::max(0, obj->get_current_durability() * percent / prob));
 		if (obj->get_current_durability()) {
@@ -53,12 +60,15 @@ void DoRepair(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			act("$n попытал$u починить $o3, но сломал$g $S еще больше.",
 				false, ch, obj, nullptr, kToRoom | kToArenaListen);
 			auto decay = (obj->get_maximum_durability() - obj->get_current_durability()) / 10;
-			decay = std::clamp(decay, 1, obj->get_maximum_durability()/20);
+			decay = std::clamp(decay, 1, std::max(1, obj->get_maximum_durability() / 20));   // issue #3631: hi>=lo
 			if (obj->get_maximum_durability() > decay) {
 				obj->set_maximum_durability(obj->get_maximum_durability() - decay);
 			} else {
 				obj->set_maximum_durability(1);
 			}
+			// issue #3618: максимальная прочность назад не поднимается -- вещь навсегда хуже
+			// прототипа, помечаем, чтобы правка прототипа в olc не вернула ее в исходный вид.
+			obj->set_extra_flag(EObjFlag::kTransformed);
 		} else {
 			act("Вы окончательно доломали $o3.",
 				false, ch, obj, nullptr, kToChar);
@@ -69,12 +79,12 @@ void DoRepair(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	} else {
 		TimedSkill timed;
 		timed.skill = ESkill::kRepair;
-		auto modif = ch->GetSkill(ESkill::kRepair) / 7 + number(1, 5);
+		auto modif = GetSkill(ch, ESkill::kRepair) / 7 + number(1, 5);
 		timed.time = std::max(1, 25 - modif);
 		ImposeTimedSkill(ch, &timed);
 		obj->set_current_durability(std::min(obj->get_maximum_durability(), obj->get_current_durability() * percent / prob + 1));
 		SendMsgToChar(ch, "Теперь %s выгляд%s лучше.\r\n",
-					  obj->get_PName(ECase::kNom).c_str(), GET_OBJ_POLY_1(ch, obj));
+					  obj->get_PName(grammar::ECase::kNom).c_str(), grammar::ObjPluralVerbEnding((obj)->get_sex()));
 		act("$n умело починил$g $o3.", false, ch, obj, nullptr, kToRoom | kToArenaListen);
 	}
 }

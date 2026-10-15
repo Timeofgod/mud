@@ -2,7 +2,10 @@
 // Copyright (c) 2010 Krodo
 // Part of Bylins http://www.mud.ru
 
+#include <fmt/format.h>
+
 #include "glory_misc.h"
+#include "administration/privilege.h"
 #include "glory.h"
 #include "glory_const.h"
 #include "gameplay/core/genchar.h"
@@ -11,6 +14,8 @@
 #include "engine/entities/char_player.h"
 #include "engine/ui/modify.h"
 #include "engine/db/global_objects.h"
+#include "utils/native_text.h"
+#include "gameplay/core/remort.h"
 
 namespace GloryMisc {
 
@@ -32,10 +37,10 @@ GloryLogType glory_log;
 
 // * Загрузка лога славы.
 void load_log() {
-	const char *glory_file = "../log/glory.log";
+	const auto glory_file = runtime_config.log_dir() + "/glory.log";
 	std::ifstream file(glory_file);
 	if (!file.is_open()) {
-		log("GloryLog: не удалось открыть файл на чтение: %s", glory_file);
+		log("GloryLog: не удалось открыть файл на чтение: %s", glory_file.c_str());
 		return;
 	}
 
@@ -74,7 +79,10 @@ void load_log() {
 		GloryLogPtr temp_node(new GloryLog);
 		temp_node->type = type;
 		temp_node->num = num;
-		temp_node->karma = buffer;
+		// Границы чтения тут не было вовсе, хотя в karma лежит русский текст наказания:
+		// он уходил в память дисковыми байтами и показывался богам мусором. Запись при этом
+		// всегда шла нативной, так что файл ещё и расходился сам с собой (issue #3787).
+		temp_node->karma = native_text::from_disk_line(buffer.c_str());
 		glory_log.insert(std::make_pair(time, temp_node));
 	}
 }
@@ -86,12 +94,13 @@ void save_log() {
 	for (GloryLogType::const_iterator it = glory_log.begin(); it != glory_log.end(); ++it)
 		out << it->first << " " << it->second->type << " " << it->second->num << " " << it->second->karma << "\n";
 
-	const char *glory_file = "../log/glory.log";
+	const auto glory_file = runtime_config.log_dir() + "/glory.log";
 	std::ofstream file(glory_file);
 	if (!file.is_open()) {
-		log("GloryLog: не удалось открыть файл на запись: %s", glory_file);
+		log("GloryLog: не удалось открыть файл на запись: %s", glory_file.c_str());
 		return;
 	}
+	// Зеркало к чтению: лог лежит в нативной кодировке, пишем как есть.
 	file << out.rdbuf();
 	file.close();
 }
@@ -187,46 +196,32 @@ bool bad_start_stats(CharData *ch) {
 }
 
 /**
-* Считаем реальные статы с учетом мортов и влитой славы.
-* \return 0 - все ок, любое другое число - все плохо
-*/
-int bad_real_stats(CharData *ch, int check) {
-	check -= kBaseStatsSum; // стартовые статы у всех по 95
-	check -= 6 * GetRealRemort(ch); // реморты
-	// влитая слава
-	check -= Glory::get_spend_glory(ch);
-	check -= GloryConst::main_stats_count(ch);
-	return check;
-}
-
-/**
 * Проверка стартовых и итоговых статов.
-* Если невалидные стартовые статы - чар отправляется на реролл.
-* Если невалидные только итоговые статы - идет перезапись со стартовых с учетом мортов и славы.
+* Невалидные стартовые статы (вне границ ролла) - чар отправляется на реролл.
+* issue.remort-system: иначе пересчитываем итоговые статы по ТЕКУЩЕЙ системе перевоплощения
+* (recalculate_stats) и, если они изменились (сменились правила перевоплощения или истекла слава),
+* сообщаем игроку и сохраняем чара, чтобы сообщение показалось один раз. Реролл стартовых статов в
+* этом случае НЕ требуется.
 */
 bool check_stats(CharData *ch) {
 	// иммов травмировать не стоит
-	if (IS_IMMORTAL(ch)) {
+	if (privilege::IsImmortal(ch)) {
 		return 1;
 	}
 
-	int have_stats = ch->GetInbornStr() + ch->GetInbornDex() + ch->GetInbornInt() + ch->GetInbornWis()
-		+ ch->GetInbornCon() + ch->GetInbornCha();
-
 	// чар со старым роллом статов или после попыток поправить статы в файле
 	if (bad_start_stats(ch)) {
-		snprintf(buf, kMaxStringLength, "\r\n%sВаши параметры за вычетом перевоплощений:\r\n"
-										 "Сила: %d, Ловкость: %d, Ум: %d, Мудрость: %d, Телосложение: %d, Обаяние: %d\r\n"
-										 "Просим вас заново распределить основные параметры персонажа.%s\r\n",
+		iosystem::write_to_output(fmt::format("\r\n{}Ваши стартовые параметры:\r\n"
+											 "Сила: {}, Ловкость: {}, Ум: {}, Мудрость: {}, Телосложение: {}, Обаяние: {}\r\n"
+											 "Просим вас заново распределить основные параметры персонажа.{}\r\n",
 				 kColorBoldGrn,
-				 ch->GetInbornStr() - GetRealRemort(ch),
-				 ch->GetInbornDex() - GetRealRemort(ch),
-				 ch->GetInbornInt() - GetRealRemort(ch),
-				 ch->GetInbornWis() - GetRealRemort(ch),
-				 ch->GetInbornCon() - GetRealRemort(ch),
-				 ch->GetInbornCha() - GetRealRemort(ch),
-				 kColorNrm);
-	iosystem::write_to_output(buf, ch->desc);
+				 ch->get_start_stat(G_STR),
+				 ch->get_start_stat(G_DEX),
+				 ch->get_start_stat(G_INT),
+				 ch->get_start_stat(G_WIS),
+				 ch->get_start_stat(G_CON),
+				 ch->get_start_stat(G_CHA),
+				 kColorNrm), ch->desc);
 
 		// данную фигню мы делаем для того, чтобы из ролла нельзя было случайно так просто выйти
 		// сразу, не раскидав статы, а то много любителей тригов и просто нажатий не глядя
@@ -242,31 +237,43 @@ bool check_stats(CharData *ch) {
 		ch->desc->state = EConState::kResetStats;
 		return false;
 	}
-	// стартовые статы в поряде, но слава не сходится (снялась по времени или иммом)
-	if (bad_real_stats(ch, have_stats)) {
-		recalculate_stats(ch);
+
+	// issue.remort-system: стартовые статы валидны -- пересчитываем итоговые по текущей системе
+	// перевоплощения + текущей славе. Если что-то поменялось -- уведомляем и сохраняем (один раз).
+	const int before_str = ch->GetInbornStr();
+	const int before_dex = ch->GetInbornDex();
+	const int before_int = ch->GetInbornInt();
+	const int before_wis = ch->GetInbornWis();
+	const int before_con = ch->GetInbornCon();
+	const int before_cha = ch->GetInbornCha();
+	recalculate_stats(ch);
+	if (before_str != ch->GetInbornStr() || before_dex != ch->GetInbornDex()
+		|| before_int != ch->GetInbornInt() || before_wis != ch->GetInbornWis()
+		|| before_con != ch->GetInbornCon() || before_cha != ch->GetInbornCha()) {
+		SendMsgToChar(ch,
+			"%sПараметры персонажа были изменены в связи с изменением правил перевоплощения.%s\r\n",
+			kColorBoldGrn, kColorNrm);
+		ch->save_char();
 	}
 	return true;
 }
 
 // * Пересчет статов чара на основании стартовых статов, ремортов и славы.
 void recalculate_stats(CharData *ch) {
-	// стартовые статы
-	ch->set_str(ch->get_start_stat(G_STR));
-	ch->set_dex(ch->get_start_stat(G_DEX));
-	ch->set_con(ch->get_start_stat(G_CON));
-	ch->set_int(ch->get_start_stat(G_INT));
-	ch->set_wis(ch->get_start_stat(G_WIS));
-	ch->set_cha(ch->get_start_stat(G_CHA));
-	// морты
-	if (GetRealRemort(ch)) {
-		ch->inc_str(GetRealRemort(ch));
-		ch->inc_dex(GetRealRemort(ch));
-		ch->inc_con(GetRealRemort(ch));
-		ch->inc_wis(GetRealRemort(ch));
-		ch->inc_int(GetRealRemort(ch));
-		ch->inc_cha(GetRealRemort(ch));
+	// issue.remort-system: стартовые статы + реморты по текущей системе перевоплощения
+	// (старая: +1 ко всем; points_buy: пропорционально -- см. remort::ApplyRemortStatGains).
+	int start[START_STATS_TOTAL];
+	int base[START_STATS_TOTAL];
+	for (int i = 0; i < START_STATS_TOTAL; ++i) {
+		start[i] = ch->get_start_stat(i);
 	}
+	remort::ApplyRemortStatGains(start, base, remort::GetRealRemort(ch));
+	ch->set_str(base[G_STR]);
+	ch->set_dex(base[G_DEX]);
+	ch->set_int(base[G_INT]);
+	ch->set_wis(base[G_WIS]);
+	ch->set_con(base[G_CON]);
+	ch->set_cha(base[G_CHA]);
 	// влитая слава
 	Glory::set_stats(ch);
 	GloryConst::set_stats(ch);

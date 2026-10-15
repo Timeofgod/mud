@@ -9,135 +9,95 @@
 *  $Revision$                                                      *
 ************************************************************************ */
 
-//#include "interpreter.h"
-#include "engine/core/handler.h"
+#include <fmt/format.h>
+
+#include "utils/native_text.h"
+#include "names.h"
+#include "utils/grammar/gender.h"
+
+#include "engine/entities/char_data.h"
+#include "engine/core/target_resolver.h"
 #include "engine/ui/color.h"
 #include "engine/entities/char_player.h"
+#include "engine/db/player_index.h"
+#include "engine/db/global_objects.h"
 
-#include "names.h"
 
 namespace NewNames {
 static void save();
 static void cache_add(CharData *ch);
 }
-extern void SendMsgToGods(char *text, bool demigod);
+extern void SendMsgToGods(const std::string &text, bool demigod);
 
 // Check if name agree (name must be parsed)
 int was_agree_name(DescriptorData *d) {
 	log("was_agree_name start");
-	FILE *fp;
-	char temp[kMaxInputLength];
 	char immname[kMaxInputLength];
 	char mortname[6][kMaxInputLength];
 	int immlev;
 	int sex;
 	int i;
 
-//1. Load list
-
-	if (!(fp = fopen(ANAME_FILE, "r"))) {
-		perror("SYSERR: Unable to open '" ANAME_FILE "' for reading");
-		log("was_agree_name end");
-		return (1);
-	}
-//2. Find name in list ...
-	while (get_line(fp, temp)) {
-		// Format First name/pad1/pad2/pad3/pad4/pad5/sex immname immlev
-		sscanf(temp, "%s %s %s %s %s %s %d %s %d", mortname[0],
-			   mortname[1], mortname[2], mortname[3], mortname[4], mortname[5], &sex, immname, &immlev);
+	// issue.misc-migrate: read the approved-names list via StateManager; get_line skipped blank and
+	// '*'-comment lines, so we do too.
+	for (const auto &line : MUD::StateManager().LoadLines(state::EStateFile::kApprovedNames)) {
+		if (line.empty() || line[0] == '*') {
+			continue;
+		}
+		sscanf(line.c_str(), "%s %s %s %s %s %s %d %s %d", mortname[0], mortname[1], mortname[2],
+			   mortname[3], mortname[4], mortname[5], &sex, immname, &immlev);
 		if (!strcmp(mortname[0], GET_NAME(d->character))) {
-			// We find char ...
 			for (i = 1; i < 6; i++) {
 				d->character->player_data.PNames[i] = std::string(mortname[i]);
 			}
 			d->character->set_sex(static_cast<EGender>(sex));
-			// Auto-Agree char ...
-			NAME_GOD(d->character) = immlev + 1000;
-			NAME_ID_GOD(d->character) = GetPlayerIdByName(immname);
-			sprintf(buf, "\r\nВаше имя одобрено!\r\n");
-			iosystem::write_to_output(buf, d);
-			sprintf(buf, "AUTOAGREE: %s was agreed by %s", GET_PC_NAME(d->character), immname);
-			log(buf, d);
-			fclose(fp);
+			(d->character)->player_specials->saved.NameGod = immlev + 1000;
+			(d->character)->player_specials->saved.NameIDGod = GetPlayerIdByName(immname);
+			iosystem::write_to_output("\r\nВаше имя одобрено!\r\n", d);
+			log("AUTOAGREE: %s was agreed by %s", GET_PC_NAME(d->character), immname);
 			log("was_agree_name end");
 			return (0);
 		}
 	}
-	fclose(fp);
 	log("was_agree_name end");
 	return (1);
 }
 
 int was_disagree_name(DescriptorData *d) {
 	log("was_disagree_name start");
-	FILE *fp;
-	char temp[kMaxInputLength];
 	char mortname[kMaxInputLength];
 	char immname[kMaxInputLength];
 	int immlev;
 
-	if (!(fp = fopen(DNAME_FILE, "r"))) {
-		perror("SYSERR: Unable to open '" DNAME_FILE "' for reading");
-		log("was_disagree_name end");
-		return (1);
-	}
-	//1. Load list
-	//2. Find name in list ...
-	//3. Compare names ... get next
-	while (get_line(fp, temp)) {
-		// Extract entities and
-		sscanf(temp, "%s %s %d", mortname, immname, &immlev);
+	for (const auto &line : MUD::StateManager().LoadLines(state::EStateFile::kDisallowedNames)) {
+		if (line.empty() || line[0] == '*') {
+			continue;
+		}
+		sscanf(line.c_str(), "%s %s %d", mortname, immname, &immlev);
 		if (!strcmp(mortname, GET_NAME(d->character))) {
-			// Char found all ok;
-
-			sprintf(buf, "\r\nВаше имя запрещено!\r\n");
-		iosystem::write_to_output(buf, d);
-			sprintf(buf, "AUTOAGREE: %s was disagreed by %s", GET_PC_NAME(d->character), immname);
-			log(buf, d);
-
-			fclose(fp);
+			iosystem::write_to_output("\r\nВаше имя запрещено!\r\n", d);
+			log("AUTOAGREE: %s was disagreed by %s", GET_PC_NAME(d->character), immname);
 			log("was_disagree_name end");
 			return (0);
-		};
+		}
 	}
-	fclose(fp);
 	log("was_disagree_name end");
 	return (1);
 }
 
 void rm_agree_name(CharData *d) {
-	FILE *fin;
-	FILE *fout;
-	char temp[kMaxInputLength];
-	char immname[kMaxInputLength];
-	char mortname[6][kMaxInputLength];
-	int immlev;
-	int sex;
-
-	// 1. Find name ...
-	if (!(fin = fopen(ANAME_FILE, "r"))) {
-		perror("SYSERR: Unable to open '" ANAME_FILE "' for read");
-		return;
-	}
-	if (!(fout = fopen("" ANAME_FILE ".tmp", "w"))) {
-		perror("SYSERR: Unable to open '" ANAME_FILE ".tmp' for writing");
-		fclose(fin);
-		return;
-	}
-	while (get_line(fin, temp)) {
-		// Get name ...
-		sscanf(temp, "%s %s %s %s %s %s %d %s %d", mortname[0],
-			   mortname[1], mortname[2], mortname[3], mortname[4], mortname[5], &sex, immname, &immlev);
-		if (strcmp(mortname[0], GET_NAME(d))) {
-			// Name un matches ... do copy ...
-			fprintf(fout, "%s\n", temp);
-		};
-	}
-
-	fclose(fin);
-	fclose(fout);
-	// Rewrite from tmp
-	rename(ANAME_FILE ".tmp", ANAME_FILE);
+	// issue.misc-migrate: drop this char's record via RewriteDropping (atomic tmp+rename). Blank and
+	// '*'-comment lines are dropped too, matching get_line's old skip behaviour.
+	const std::string name = GET_NAME(d);
+	MUD::StateManager().RewriteDropping(state::EStateFile::kApprovedNames,
+		[&name](const std::string &line) {
+			if (line.empty() || line[0] == '*') {
+				return true;
+			}
+			char mortname[kMaxInputLength] = {0};
+			sscanf(line.c_str(), "%s", mortname);
+			return strcmp(mortname, name.c_str()) == 0;
+		});
 }
 
 // список неодобренных имен, дубль2
@@ -161,16 +121,15 @@ static NewNameListType NewNameList;
 
 // сохранение списка в файл
 static void NewNames::save() {
-	std::ofstream file(NNAME_FILE);
-	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", NNAME_FILE, __FILE__, __func__, __LINE__);
-		return;
+	// issue.misc-migrate: atomic whole-file replace via StateManager.
+	std::vector<std::string> lines;
+	lines.reserve(NewNameList.size());
+	for (const auto &it : NewNameList) {
+		lines.push_back(it.first);
 	}
-
-	for (NewNameListType::const_iterator it = NewNameList.begin(); it != NewNameList.end(); ++it)
-		file << it->first << "\n";
-
-	file.close();
+	// Кодировку диска держит сам StateManager -- здесь конвертировать уже не надо,
+	// иначе получилась бы двойная конверсия (issue #3681).
+	MUD::StateManager().SaveLines(state::EStateFile::kPendingNames, lines);
 }
 
 // добавить в список без сохранения на диск
@@ -218,24 +177,21 @@ void NewNames::remove(const std::string &name, CharData *actor) {
 
 // лоад списка неодобренных имен
 void NewNames::load() {
-	std::ifstream file(NNAME_FILE);
-	if (!file.is_open()) {
-		log("Error open file: %s! (%s %s %d)", NNAME_FILE, __FILE__, __func__, __LINE__);
-		return;
+	// issue.misc-migrate: read names via StateManager (keeping the previous `>> buffer` tokenising),
+	// then re-save to normalise. A missing file just yields an empty list.
+	for (const auto &line : MUD::StateManager().LoadLines(state::EStateFile::kPendingNames)) {
+		std::istringstream iss(line);
+		std::string buffer;
+		while (iss >> buffer) {
+			// сразу проверяем не сделетился ли уже персонаж
+			Player t_tch;
+			Player *tch = &t_tch;
+			if (LoadPlayerCharacter(buffer.c_str(), tch, ELoadCharFlags::kFindId) < 0)
+				continue;
+			// не сделетился...
+			cache_add(tch);
+		}
 	}
-
-	std::string buffer;
-	while (file >> buffer) {
-		// сразу проверяем не сделетился ли уже персонаж
-		Player t_tch;
-		Player *tch = &t_tch;
-		if (LoadPlayerCharacter(buffer.c_str(), tch, ELoadCharFlags::kFindId) < 0)
-			continue;
-		// не сделетился...
-		cache_add(tch);
-	}
-
-	file.close();
 	save();
 }
 
@@ -272,66 +228,33 @@ int NewNames::auto_authorize(DescriptorData *d) {
 }
 
 static void rm_disagree_name(CharData *d) {
-	FILE *fin;
-	FILE *fout;
-	char temp[256];
-	char immname[256];
-	char mortname[256];
-	int immlev;
-
-	// 1. Find name ...
-	if (!(fin = fopen(DNAME_FILE, "r"))) {
-		perror("SYSERR: Unable to open '" DNAME_FILE "' for read");
-		return;
-	}
-	if (!(fout = fopen("" DNAME_FILE ".tmp", "w"))) {
-		perror("SYSERR: Unable to open '" DNAME_FILE ".tmp' for writing");
-		fclose(fin);
-		return;
-	}
-	while (get_line(fin, temp)) {
-		// Get name ...
-		sscanf(temp, "%s %s %d", mortname, immname, &immlev);
-		if (strcmp(mortname, GET_NAME(d)) != 0) {
-			// Name un matches ... do copy ...
-			fprintf(fout, "%s\n", temp);
-		};
-	}
-	fclose(fin);
-	fclose(fout);
-	rename(DNAME_FILE ".tmp", DNAME_FILE);
+	// issue.misc-migrate: drop this char's record via RewriteDropping (atomic tmp+rename).
+	const std::string name = GET_NAME(d);
+	MUD::StateManager().RewriteDropping(state::EStateFile::kDisallowedNames,
+		[&name](const std::string &line) {
+			if (line.empty() || line[0] == '*') {
+				return true;
+			}
+			char mortname[kMaxInputLength] = {0};
+			sscanf(line.c_str(), "%s", mortname);
+			return strcmp(mortname, name.c_str()) == 0;
+		});
 }
 
 static void add_agree_name(CharData *d, const char *immname, int immlev) {
-	FILE *fl;
-	if (!(fl = fopen(ANAME_FILE, "a"))) {
-		perror("SYSERR: Unable to open '" ANAME_FILE "' for writing");
-		return;
-	}
-	// Pos to the end ...
-	fprintf(fl,
-			"%s %s %s %s %s %s %d %s %d\r\n",
-			GET_NAME(d),
-			GET_PAD(d, 1),
-			GET_PAD(d, 2),
-			GET_PAD(d, 3),
-			GET_PAD(d, 4),
-			GET_PAD(d, 5),
-			static_cast<int>(d->get_sex()),
-			immname,
-			immlev);
-	fclose(fl);
+	// issue.misc-migrate: append the record via StateManager (LF terminator; readers strip any CR).
+	char line[kMaxInputLength];
+	snprintf(line, sizeof(line), "%s %s %s %s %s %s %d %s %d",
+			 GET_NAME(d), GET_PAD(d, 1), GET_PAD(d, 2), GET_PAD(d, 3), GET_PAD(d, 4), GET_PAD(d, 5),
+			 static_cast<int>(d->get_sex()), immname, immlev);
+	MUD::StateManager().AppendLine(state::EStateFile::kApprovedNames, line);
 }
 
 static void add_disagree_name(CharData *d, const char *immname, int immlev) {
-	FILE *fl;
-	if (!(fl = fopen(DNAME_FILE, "a"))) {
-		perror("SYSERR: Unable to open '" DNAME_FILE "' for writing");
-		return;
-	}
-	// Pos to the end ...
-	fprintf(fl, "%s %s %d\r\n", GET_NAME(d), immname, immlev);
-	fclose(fl);
+	// issue.misc-migrate: append the record via StateManager.
+	char line[kMaxInputLength];
+	snprintf(line, sizeof(line), "%s %s %d", GET_NAME(d), immname, immlev);
+	MUD::StateManager().AppendLine(state::EStateFile::kDisallowedNames, line);
 }
 
 static void disagree_name(CharData *d, const char *immname, int immlev) {
@@ -363,7 +286,7 @@ static void go_name(CharData *ch, CharData *vict, int action) {
 	}
 
 	// одобряем или нет
-	int lev = NAME_GOD(vict);
+	int lev = (vict)->player_specials->saved.NameGod;
 	if (lev > 1000)
 		lev = lev - 1000;
 	if (lev > god_level) {
@@ -372,28 +295,28 @@ static void go_name(CharData *ch, CharData *vict, int action) {
 	}
 
 	if (lev == god_level)
-		if (NAME_ID_GOD(vict) != GET_UID(ch))
+		if ((vict)->player_specials->saved.NameIDGod != ch->get_uid())
 			SendMsgToChar("Об этом имени уже позаботился другой бог вашего уровня.\r\n", ch);
 
 	if (action == NAME_AGREE) {
-		NAME_GOD(vict) = god_level + 1000;
-		NAME_ID_GOD(vict) = GET_UID(ch);
+		(vict)->player_specials->saved.NameGod = god_level + 1000;
+		(vict)->player_specials->saved.NameIDGod = ch->get_uid();
 		//SendMsgToChar("Имя одобрено!\r\n", ch);
 		SendMsgToChar(vict, "&GВаше имя одобрено!&n\r\n");
 		agree_name(vict, GET_NAME(ch), god_level);
-		sprintf(buf, "&c%s одобрил%s имя игрока %s.&n\r\n", GET_NAME(ch), GET_CH_SUF_1(ch), GET_NAME(vict));
-		SendMsgToGods(buf, true);
+		SendMsgToGods(fmt::format("&c{} одобрил{} имя игрока {}.&n\r\n",
+								  GET_NAME(ch), grammar::SexEnding((ch)->get_sex(), 1), GET_NAME(vict)), true);
 		// В этом теперь нет смысла
 		//mudlog(buf, CMP, kLevelGod, SYSLOG, true);
 
 	} else {
-		NAME_GOD(vict) = god_level;
-		NAME_ID_GOD(vict) = GET_UID(ch);
+		(vict)->player_specials->saved.NameGod = god_level;
+		(vict)->player_specials->saved.NameIDGod = ch->get_uid();
 		//SendMsgToChar("Имя запрещено!\r\n", ch);
 		SendMsgToChar(vict, "&RВаше имя запрещено!&n\r\n");
 		disagree_name(vict, GET_NAME(ch), god_level);
-		sprintf(buf, "&c%s запретил%s имя игрока %s.&n\r\n", GET_NAME(ch), GET_CH_SUF_1(ch), GET_NAME(vict));
-		SendMsgToGods(buf, true);
+		SendMsgToGods(fmt::format("&c{} запретил{} имя игрока {}.&n\r\n",
+								  GET_NAME(ch), grammar::SexEnding((ch)->get_sex(), 1), GET_NAME(vict)), true);
 		//mudlog(buf, CMP, kLevelGod, SYSLOG, true);
 
 	}
@@ -439,8 +362,8 @@ void do_name(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	}
 
 	CharData *vict;
-	if ((vict = get_player_vis(ch, name, EFind::kCharInWorld)) != nullptr) {
-		if (!(vict = get_player_pun(ch, name, EFind::kCharInWorld))) {
+	if ((vict = target_resolver::FindPlayerVis(ch, name)) != nullptr) {
+		if (!(vict = target_resolver::FindPlayer(ch, name))) {
 			SendMsgToChar("Нет такого игрока.\r\n", ch);
 			return;
 		}
@@ -475,9 +398,7 @@ int IsValidName(char *newname) {
 	// change to lowercase
 	char tempname[kMaxInputLength];
 	strcpy(tempname, newname);
-	for (std::size_t i = 0; tempname[i]; i++) {
-		tempname[i] = LOWER(tempname[i]);
-	}
+	native_text::to_lower(tempname);
 
 	// Does the desired name contain a string in the invalid list?
 	for (std::size_t i = 0; i < num_invalid; i++) {
@@ -503,24 +424,19 @@ bool IsNameOffline(char *newname) {
 }
 
 void ReadCharacterInvalidNamesList() {
-	FILE *fp;
-	char temp[256];
-
-	if (!(fp = fopen(XNAME_FILE, "r"))) {
-		perror("SYSERR: Unable to open '" XNAME_FILE "' for reading");
-		return;
-	}
-
+	// issue.misc-migrate: StateManager owns the file I/O. Preserve get_line's behaviour: skip blank
+	// lines and '*'-comment lines; a missing file yields an empty list.
 	num_invalid = 0;
-	while (get_line(fp, temp) && num_invalid < kMaxInvalidNames)
-		invalid_list[num_invalid++] = str_dup(temp);
-
-	if (num_invalid >= kMaxInvalidNames) {
-		log("SYSERR: Too many invalid names; change MAX_INVALID_NAMES in ban.c");
-		exit(1);
+	for (const auto &line : MUD::StateManager().LoadLines(state::EStateFile::kInvalidNameParts)) {
+		if (line.empty() || line[0] == '*') {
+			continue;
+		}
+		invalid_list[num_invalid++] = str_dup(line.c_str());
+		if (num_invalid >= kMaxInvalidNames) {
+			log("SYSERR: Too many invalid names; change MAX_INVALID_NAMES in ban.c");
+			exit(1);
+		}
 	}
-
-	fclose(fp);
 }
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

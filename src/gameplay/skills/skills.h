@@ -18,10 +18,9 @@
 #include <map>
 
 #include "gameplay/magic/spells_constants.h"
+#include "gameplay/fight/fight_constants.h"
 #include "engine/structs/structs.h"
 
-extern const int kZeroRemortSkillCap;
-extern const int kSkillCapBonusPerRemort;
 extern const int kMinTalentLevelDecrement;
 extern const long kMinImprove;
 
@@ -153,6 +152,8 @@ template<>
 ESkill ITEM_BY_NAME<ESkill>(const std::string &name);
 template<>
 const std::string &NAME_BY_ITEM<ESkill>(ESkill item);
+template<>
+const std::map<ESkill, std::string> &NAMES_OF<ESkill>();  // issue.vedun-editor: editor pick-list
 
 struct SkillRollResult {
 	bool success{true};
@@ -164,13 +165,12 @@ struct SkillRollResult {
 
 struct TimedSkill {
 	ESkill skill{ESkill::kUndefined};	// Used skill //
-	ubyte time{0};						// Time for next using //
-	TimedSkill *next{nullptr};
+	ubyte time{0};						// Time start use //
 };
 
-int SendSkillMessages(int dam, CharData *ch, CharData *vict, int attacktype, std::string add = "");
 int SendSkillMessages(int dam, CharData *ch, CharData *vict, ESkill skill_id, std::string add = "");
 int SendSkillMessages(int dam, CharData *ch, CharData *vict, ESpell spell_id, std::string add = "");
+int SendSkillMessages(int dam, CharData *ch, CharData *vict, fight::EDamageSource damage_source, std::string add = "");
 
 char *how_good(int skill_level, int skill_cap);
 int CalcCurrentSkill(CharData *ch, ESkill skill_id, CharData *vict, bool need_log = true);
@@ -191,6 +191,21 @@ void SendSkillBalanceMsg(CharData *ch, const std::string &skill_name, int percen
 int CalculateSkillAwakeModifier(CharData *killer, CharData *victim);
 bool CritLuckTest(CharData *ch, CharData *vict);
 int CalculateSkillRate(CharData *ch, const ESkill skill_id, CharData *vict);
+int CalcNoviceSkillBonus(CharData *ch, ESkill skill_id, unsigned skill_divisor);
+int CalcNoviceSkillBonusForValue(int skill, unsigned skill_divisor);
+// issue.duration-scale: uncapped duration bonus (full skill/divisor, no 75 clamp). CalcDuration
+// bounds it via <duration min/max>; the extra-hits bonus keeps CalcNoviceSkillBonus (75 cap).
+int CalcDurationSkillBonus(CharData *ch, ESkill skill_id, unsigned skill_divisor);
+int CalcDurationSkillBonusForValue(int skill, unsigned skill_divisor);
+// issue.chardata-cleaning: the skill-value accessors moved off CharData. They read the trained
+// level (CharacterSkills) plus equipment/talent/arena bonuses.
+[[nodiscard]] int GetSkillBonus(const CharData *ch, ESkill skill_id);
+[[nodiscard]] int GetSkill(const CharData *ch, ESkill skill_id);
+[[nodiscard]] int GetSkillWithoutEquip(const CharData *ch, ESkill skill_id);
+[[nodiscard]] int GetEquippedSkill(const CharData *ch, ESkill skill_id);
+[[nodiscard]] int GetTrainedSkill(const CharData *ch, ESkill skill_id);
+void SetSkill(CharData *ch, ESkill skill_id, int percent);
+
 #endif // SKILLS_H_
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

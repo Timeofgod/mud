@@ -75,12 +75,12 @@
  */
 
 // Standard C headers  *************************************************
-#include <stdio.h>
-#include <ctype.h>
-#include <stdarg.h>
+#include <cstdio>
+#include <cctype>
+#include <cstdarg>
 
 #ifdef HAVE_STRING_H
-#include <string.h>
+#include <cstring>
 #endif
 
 #ifdef HAVE_STRINGS_H
@@ -88,7 +88,7 @@
 #endif
 
 #if     (defined (STDC_HEADERS) || defined (__GNU_LIBRARY__))
-#include <stdlib.h>
+#include <cstdlib>
 
 #else				// No standard headers.
 
@@ -110,7 +110,7 @@ extern void abort(), exit();
 #endif
 
 #ifdef CIRCLE_WINDOWS
-# include <sys\types.h>
+# include <sys/types.h>
 #endif
 
 #ifdef HAVE_UNISTD_H
@@ -166,7 +166,14 @@ extern void abort(), exit();
 #endif
 
 #ifdef HAVE_CRYPT_H
+#if defined(__unix__) || defined(__unix) || defined(__APPLE__)
+#include <sys/param.h>
+#endif
+#ifdef BSD
+#include <unistd.h>
+#else
 #include <crypt.h>
+#endif
 #endif
 
 #ifdef TIME_WITH_SYS_TIME
@@ -190,57 +197,14 @@ extern void abort(), exit();
 #include <zlib.h>
 #endif
 
-// Header files only used in comm.cpp and some of the utils
+// Сетевые системные заголовки (sys/socket.h, netinet/in.h, signal.h и т.д.)
+// вынесены в sysdep_net.h. Файлы, которым нужна сетевая часть, инклудят
+// его явно. Остальные TU не платят за эти заголовки в препроцессинге.
 
-#if defined(__COMM_C__) || defined(CIRCLE_UTIL)
-
-#ifndef HAVE_STRUCT_IN_ADDR
-struct in_addr
-{
-	unsigned long int s_addr;	// for inet_addr, etc.
-}
-#endif
-#ifdef HAVE_SYS_SELECT_H
-#include <sys/select.h>
-#endif
-#if defined(HAVE_FCNTL_H)
-#include <fcntl.h>
-#elif defined(HAVE_SYS_FCNTL_H)
-#include <sys/fcntl.h>
-#endif
-#ifdef HAVE_SYS_SOCKET_H
-# include <sys/socket.h>
-#endif
-#ifdef HAVE_SYS_RESOURCE_H
-# include <sys/resource.h>
-#endif
-#ifdef HAVE_SYS_WAIT_H
-# include <sys/wait.h>
-#endif
-#ifdef HAVE_NETINET_IN_H
-# include <netinet/in.h>
-#endif
-#ifdef HAVE_ARPA_INET_H
-# include <arpa/inet.h>
-#endif
-#ifdef HAVE_NETDB_H
-# include <netdb.h>
-#endif
-#ifdef HAVE_SIGNAL_H
-# ifndef _POSIX_C_SOURCE
-#  define _POSIX_C_SOURCE 2
-#  include <signal.h>
-#  undef _POSIX_C_SOURCE
-# else
-#  include <signal.h>		// GNU libc 6 already defines _POSIX_C_SOURCE.
-# endif
-#endif
-#ifdef HAVE_SYS_UIO_H
-# include <sys/uio.h>
-#endif
-#endif                // __COMM_C__ && CIRCLE_UNIX
 // Basic system dependencies ******************************************
-#if !defined(__GNUC__)
+#if !defined(__GNUC__) && !defined(__clang__)
+// clang-cl defines _MSC_VER but not __GNUC__, yet it fully supports __attribute__ -- and no-oping
+// it here would strip __vector_size__ from clang's own intrinsic headers (mmintrin.h via <vector>).
 #define __attribute__(x)	// nothing //
 #endif
 #if defined(__MWERKS__)
@@ -256,9 +220,7 @@ struct in_addr
 #  pragma warn -pia		// to turn off possibly incorrect assignment. 'if (!(x=a))' //
 #  pragma warn -sig		// to turn off conversion may lose significant digits. //
 # endif
-# ifndef _WINSOCK2API_		// Winsock1 and Winsock 2 conflict. //
-#  include <winsock.h>
-# endif
+# include <winsock2.h>
 # ifndef FD_SETSIZE		// MSVC 6 is reported to have 64. //
 #  define FD_SETSIZE		1024
 # endif
@@ -392,7 +354,7 @@ int fprintf(FILE * strm, const char *format, /* args */ ...);
 #endif
 
 #ifdef NEED_FREAD_PROTO
-size_t fread(void *ptr, size_t size, size_t nitems, FILE * stream);
+size_t fread(void *ptr, size_t size, size_t n_items, FILE * stream);
 #endif
 
 #ifdef NEED_FSCANF_PROTO
@@ -404,7 +366,7 @@ int fseek(FILE * stream, long offset, int ptrname);
 #endif
 
 #ifdef NEED_FWRITE_PROTO
-size_t fwrite(const void *ptr, size_t size, size_t nitems, FILE * stream);
+size_t fwrite(const void *ptr, size_t size, size_t n_items, FILE * stream);
 #endif
 
 #ifdef NEED_GETPID_PROTO
@@ -451,111 +413,8 @@ int unlink(const char *path);
 int remove(const char *path);
 #endif
 
-// Function prototypes that are only used in comm.cpp and some of the utils
-
-#if defined(__COMM_C__) || defined(CIRCLE_UTIL)
-
-#ifdef NEED_ACCEPT_PROTO
-int accept(socket_t s, struct sockaddr *addr, int *addrlen);
-#endif
-
-#ifdef NEED_BIND_PROTO
-int bind(socket_t s, const struct sockaddr *name, int namelen);
-#endif
-
-#ifdef NEED_CHDIR_PROTO
-int chdir(const char *path);
-#endif
-
-#ifdef NEED_CLOSE_PROTO
-int close(int fildes);
-#endif
-
-#ifdef NEED_FCNTL_PROTO
-int fcntl(int fildes, int cmd, /* arg */ ...);
-#endif
-
-#ifdef NEED_FPUTC_PROTO
-int fputc(char c, FILE * stream);
-#endif
-
-#ifdef NEED_FPUTS_PROTO
-int fputs(const char *s, FILE * stream);
-#endif
-
-#ifdef NEED_GETPEERNAME_PROTO
-int getpeername(socket_t s, struct sockaddr *name, int *namelen);
-#endif
-
-#if defined(HAS_RLIMIT) && defined(NEED_GETRLIMIT_PROTO)
-int getrlimit(int resource, struct rlimit *rlp);
-#endif
-
-#ifdef NEED_GETSOCKNAME_PROTO
-int getsockname(socket_t s, struct sockaddr *name, int *namelen);
-#endif
-
-#ifdef NEED_HTONL_PROTO
-ulong htonl(u_long hostlong);
-#endif
-
-#ifdef NEED_HTONS_PROTO
-u_short htons(u_short hostshort);
-#endif
-
-#if defined(HAVE_INET_ADDR) && defined(NEED_INET_ADDR_PROTO)
-unsigned long int inet_addr(const char *cp);
-#endif
-
-#if defined(HAVE_INET_ATON) && defined(NEED_INET_ATON_PROTO)
-int inet_aton(const char *cp, struct in_addr *inp);
-#endif
-
-#ifdef NEED_INET_NTOA_PROTO
-char *inet_ntoa(const struct in_addr in);
-#endif
-
-#ifdef NEED_LISTEN_PROTO
-int listen(socket_t s, int backlog);
-#endif
-
-#ifdef NEED_NTOHL_PROTO
-u_long ntohl(u_long netlong);
-#endif
-
-#ifdef NEED_PRINTF_PROTO
-int printf(char *format, ...);
-#endif
-
-#ifdef NEED_READ_PROTO
-ssize_t read(int fildes, void *buf, size_t nbyte);
-#endif
-
-#ifdef NEED_SELECT_PROTO
-int select(int nfds, fd_set * readfds, fd_set * writefds, fd_set * exceptfds, struct timeval *timeout);
-#endif
-
-#ifdef NEED_SETITIMER_PROTO
-int setitimer(int which, const struct itimerval *value, struct itimerval *ovalue);
-#endif
-
-#if defined(HAS_RLIMIT) && defined(NEED_SETRLIMIT_PROTO)
-int setrlimit(int resource, const struct rlimit *rlp);
-#endif
-
-#ifdef NEED_SETSOCKOPT_PROTO
-int setsockopt(socket_t s, int level, int optname, const char *optval, int optlen);
-#endif
-
-#ifdef NEED_SOCKET_PROTO
-int socket(int domain, int type, int protocol);
-#endif
-
-#ifdef NEED_WRITE_PROTO
-ssize_t write(int fildes, const void *buf, size_t nbyte);
-#endif
-
-#endif                // __COMM_C__
+// Прототипы сетевых функций (accept, bind, htonl, inet_addr и т.д.)
+// перенесены в sysdep_net.h.
 
 #endif                // NO_LIBRARY_PROTOTYPES
 

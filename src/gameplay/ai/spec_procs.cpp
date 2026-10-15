@@ -12,10 +12,23 @@
 *  $Revision$                                                      *
 ************************************************************************ */
 
+#include "engine/core/char_handler.h"
+#include "gameplay/mechanics/equipment.h"
 #include "gameplay/ai/spec_procs.h"
+#include "administration/privilege.h"
+#include "gameplay/economics/currencies.h"
+#include "utils/grammar/gender.h"
+#include "utils/grammar/declensions.h"
+#include "utils/utils_string.h"
+#include "gameplay/mechanics/follow.h"
+#include "gameplay/ai/special_messages.h"
+
+#include <fmt/format.h>
+#include "gameplay/ai/subcmd_resolver.h"
 
 #include "engine/core/char_movement.h"
 #include "engine/core/utils_char_obj.inl"
+#include "engine/core/target_resolver.h"
 #include "engine/entities/char_player.h"
 #include "gameplay/mechanics/mount.h"
 #include "gameplay/mechanics/depot.h"
@@ -30,108 +43,117 @@
 #include "engine/ui/cmd/do_equip.h"
 #include "gameplay/mechanics/illumination.h"
 #include "gameplay/mechanics/doors.h"
+#include "gameplay/mechanics/sight.h"
 
 extern CharData *get_player_of_name(const char *name);
 
 // extern functions
 void DoDrop(CharData *ch, char *argument, int, int);
 void do_say(CharData *ch, char *argument, int cmd, int subcmd);
-int find_first_step(RoomRnum src, RoomRnum target, CharData *ch);
+int find_first_step(RoomRnum src, RoomRnum target, CharData *ch, bool complain = false);
 
 // local functions
-int dump(CharData *ch, void *me, int cmd, char *argument);
 int mayor(CharData *ch, void *me, int cmd, char *argument);
 
 // ********************************************************************
 // *  Special procedures for mobiles                                  *
 // ********************************************************************
 
-int horse_keeper(CharData *ch, void *me, int cmd, char *argument) {
+namespace {
+// issue.specials: horse-keeper subcommands. лошадь with no arg offers a horse (depends on state,
+// handled in the wrapper); лошадь купить/продать go through the resolver.
+enum class EHorseCmd { kBuy, kSell };
+
+int HorseBuy(CharData *ch, void *me, char * /*rest*/) {
 	CharData *victim = (CharData *) me, *horse = nullptr;
-
-	if (ch->IsNpc())
-		return (0);
-
-	if (!CMD_IS("лошадь") && !CMD_IS("horse"))
-		return (0);
-
-	if (ch->is_morphed()) {
-		SendMsgToChar("Лошадка испугается вас в таком виде... \r\n", ch);
-		return (true);
-	}
-
-	skip_spaces(&argument);
-
-	if (!*argument) {
-		if (ch->has_horse(false)) {
-			act("$N поинтересовал$U : \"$n, зачем тебе второй скакун? У тебя ведь одно седалище.\"",
-				false, ch, nullptr, victim, kToChar);
+		if (mount::HasHorse(ch, false)) {
+			act(specials::HorseMsg(specials::EHorseMsg::kBuyHaveAlready), false, ch, 0, victim, kToChar);
 			return (true);
 		}
-		sprintf(buf, "$N сказал$G : \"Я продам тебе скакуна за %d %s.\"",
-				kHorseCost, GetDeclensionInNumber(kHorseCost, EWhat::kMoneyA));
-		act(buf, false, ch, nullptr, victim, kToChar);
-		return (true);
-	}
-
-	if (!strn_cmp(argument, "купить", strlen(argument)) || !strn_cmp(argument, "buy", strlen(argument))) {
-		if (ch->has_horse(false)) {
-			act("$N засмеял$U : \"$n, ты шутишь, у тебя же есть скакун.\"", false, ch, 0, victim, kToChar);
+		if (currencies::GetHand(*ch, currencies::kGold) < mount::kHorseCost) {
+			act(specials::HorseMsg(specials::EHorseMsg::kBuyNoMoney), false, ch, 0, victim, kToChar);
 			return (true);
 		}
-		if (ch->get_gold() < kHorseCost) {
-			act("\"Ступай отсюда, злыдень, у тебя нет таких денег!\"-заорал$G $N",
-				false, ch, 0, victim, kToChar);
+		if (!(horse = ReadMobile(mount::kHorseVnum, kVirtual))) {
+			act(specials::HorseMsg(specials::EHorseMsg::kBuyNoHorse), false, ch, 0, victim, kToChar);
 			return (true);
 		}
-		if (!(horse = ReadMobile(kHorseVnum, kVirtual))) {
-			act("\"Извини, у меня нет для тебя скакуна.\"-смущенно произнес$Q $N",
-				false, ch, 0, victim, kToChar);
-			return (true);
-		}
-		make_horse(horse, ch);
+		// Сначала поместить коня в комнату, иначе add_follower внутри
+		// make_horse видит лошадь в kNowhere и логирует "попытка
+		// загрупить игроков в разных комнатах" (#3207).
 		PlaceCharToRoom(horse, ch->in_room);
-		sprintf(buf, "$N оседлал$G %s и отдал$G %s вам.", GET_PAD(horse, 3), HSHR(horse));
-		act(buf, false, ch, 0, victim, kToChar);
-		sprintf(buf, "$N оседлал$G %s и отдал$G %s $n2.", GET_PAD(horse, 3), HSHR(horse));
-		act(buf, false, ch, 0, victim, kToRoom);
-		ch->remove_gold(kHorseCost);
+		mount::MakeHorse(horse, ch);
+		act(fmt::format(fmt::runtime(specials::HorseMsg(specials::EHorseMsg::kBuyGiveChar)),
+				fmt::arg("horse", GET_PAD(horse, 3)), fmt::arg("pronoun", grammar::PossessivePronoun((horse)->get_sex()))),
+			false, ch, 0, victim, kToChar);
+		act(fmt::format(fmt::runtime(specials::HorseMsg(specials::EHorseMsg::kBuyGiveRoom)),
+				fmt::arg("horse", GET_PAD(horse, 3)), fmt::arg("pronoun", grammar::PossessivePronoun((horse)->get_sex()))),
+			false, ch, 0, victim, kToRoom);
+		currencies::RemoveHand(*ch, currencies::kGold, mount::kHorseCost);
 		ch->SetFlag(EPlrFlag::kCrashSave);
 		return (true);
-	}
+	return (1);
+}
 
-	if (!strn_cmp(argument, "продать", strlen(argument)) || !strn_cmp(argument, "sell", strlen(argument))) {
-		if (!ch->has_horse(true)) {
-			act("$N засмеял$U : \"$n, ты не влезешь в мое стойло.\"", false, ch, 0, victim, kToChar);
+int HorseSell(CharData *ch, void *me, char * /*rest*/) {
+	CharData *victim = (CharData *) me, *horse = nullptr;
+		if (!mount::HasHorse(ch, true)) {
+			act(specials::HorseMsg(specials::EHorseMsg::kSellNoHorse), false, ch, 0, victim, kToChar);
 			return (true);
 		}
-		if (ch->IsOnHorse()) {
-			act("\"Я не собираюсь платить еще и за всадника.\"-усмехнул$U $N",
-				false, ch, 0, victim, kToChar);
+		if (mount::IsOnHorse(ch)) {
+			act(specials::HorseMsg(specials::EHorseMsg::kSellOnHorse), false, ch, 0, victim, kToChar);
 			return (true);
 		}
 
-		if (!(horse = ch->get_horse()) || GET_MOB_VNUM(horse) != kHorseVnum) {
-			act("\"Извини, твой скакун мне не подходит.\"- заявил$G $N", false, ch, 0, victim, kToChar);
+		if (!(horse = mount::GetHorse(ch)) || GET_MOB_VNUM(horse) != mount::kHorseVnum) {
+			act(specials::HorseMsg(specials::EHorseMsg::kSellWrongHorse), false, ch, 0, victim, kToChar);
 			return (true);
 		}
 
 		if (horse->in_room != victim->in_room) {
-			act("\"Извини, твой скакун где-то бродит.\"- заявил$G $N", false, ch, 0, victim, kToChar);
+			act(specials::HorseMsg(specials::EHorseMsg::kSellHorseAway), false, ch, 0, victim, kToChar);
 			return (true);
 		}
 
-		sprintf(buf, "$N расседлал$G %s и отвел$G %s в стойло.", GET_PAD(horse, 3), HSHR(horse));
-		act(buf, false, ch, 0, victim, kToChar);
-		sprintf(buf, "$N расседлал$G %s и отвел$G %s в стойло.", GET_PAD(horse, 3), HSHR(horse));
-		act(buf, false, ch, 0, victim, kToRoom);
+		act(fmt::format(fmt::runtime(specials::HorseMsg(specials::EHorseMsg::kSellTaken)),
+				fmt::arg("horse", GET_PAD(horse, 3)), fmt::arg("pronoun", grammar::PossessivePronoun((horse)->get_sex()))),
+			false, ch, 0, victim, kToChar);
+		act(fmt::format(fmt::runtime(specials::HorseMsg(specials::EHorseMsg::kSellTaken)),
+				fmt::arg("horse", GET_PAD(horse, 3)), fmt::arg("pronoun", grammar::PossessivePronoun((horse)->get_sex()))),
+			false, ch, 0, victim, kToRoom);
 		ExtractCharFromWorld(horse, false);
-		ch->add_gold((kHorseCost >> 1));
+		currencies::AddHand(*ch, currencies::kGold, (mount::kHorseCost >> 1));
 		ch->SetFlag(EPlrFlag::kCrashSave);
 		return (true);
-	}
+	return (1);
+}
 
-	return (0);
+const SubCmdResolver kHorseCmds([] { return specials::HorseMsg(specials::EHorseMsg::kGreeting); }, {
+	{{"купить", "buy"}, static_cast<int>(EHorseCmd::kBuy), HorseBuy},
+	{{"продать", "sell"}, static_cast<int>(EHorseCmd::kSell), HorseSell},
+});
+} // namespace
+
+int horse_keeper(CharData *ch, void *me, int /*cmd*/, char *argument) {
+	if (ch->IsNpc()) {
+		return (0);
+	}
+	CharData *victim = (CharData *) me;
+	skip_spaces(&argument);
+	if (!*argument) {
+			if (mount::HasHorse(ch, false)) {
+				act(specials::HorseMsg(specials::EHorseMsg::kAlreadyHave), false, ch, nullptr, victim, kToChar);
+				return (true);
+			}
+			act(fmt::format(fmt::runtime(specials::HorseMsg(specials::EHorseMsg::kForSale)),
+					fmt::arg("amount", mount::kHorseCost),
+					fmt::arg("currency", MUD::Currency(currencies::kGoldVnum).GetNameWithAmount(mount::kHorseCost, grammar::ECase::kNom).c_str())),
+				false, ch, nullptr, victim, kToChar);
+			return (true);
+		return (1);
+	}
+	return kHorseCmds.Dispatch(ch, me, argument);
 }
 
 bool item_nouse(ObjData *obj) {
@@ -142,18 +164,19 @@ bool item_nouse(ObjData *obj) {
 			}
 			break;
 
+		// issue.magic-items: заклинания и заряды переехали в extra_values, val[] у этих типов нулевые
 		case EObjType::kScroll:
 		case EObjType::kPotion:
-			if (!GET_OBJ_VAL(obj, 1)
-				&& !GET_OBJ_VAL(obj, 2)
-				&& !GET_OBJ_VAL(obj, 3)) {
+			if (obj->GetPotionValueKey(ObjVal::EValueKey::kSpell1Num) <= 0
+				&& obj->GetPotionValueKey(ObjVal::EValueKey::kSpell2Num) <= 0
+				&& obj->GetPotionValueKey(ObjVal::EValueKey::kSpell3Num) <= 0) {
 				return true;
 			}
 			break;
 
 		case EObjType::kStaff:
 		case EObjType::kWand:
-			if (!GET_OBJ_VAL(obj, 2)) {
+			if (obj->GetPotionValueKey(ObjVal::EValueKey::kCurCharges) <= 0) {
 				return true;
 			}
 			break;
@@ -173,7 +196,7 @@ bool item_nouse(ObjData *obj) {
 		case EObjType::kPen:
 		case EObjType::kBoat:
 		case EObjType::kFountain:
-		case EObjType::kMagicIngredient: return true;
+		case EObjType::kMagicComponent: return true;
 
 		default: break;
 	}
@@ -195,24 +218,24 @@ void npc_dropunuse(CharData *ch) {
 
 int npc_scavenge(CharData *ch) {
 	int max = 1;
-	ObjData *obj, *best_obj, *cont, *best_cont, *cobj;
+	ObjData *best_obj, *cont, *best_cont, *cobj;
 
 	if (!ch->IsFlagged(EMobFlag::kScavenger)) {
 		return (false);
 	}
 
-	if (IS_SHOPKEEPER(ch)) {
+	if (specials::IsShopkeeper(ch)) {
 		return (false);
 	}
 
 	npc_dropunuse(ch);
-	if (world[ch->in_room]->contents && number(0, 25) <= GetRealInt(ch)) {
+	if (!world[ch->in_room]->contents.empty() && number(0, 25) <= GetRealInt(ch)) {
 		max = 1;
 		best_obj = nullptr;
 		cont = nullptr;
 		best_cont = nullptr;
-		for (obj = world[ch->in_room]->contents; obj; obj = obj->get_next_content()) {
-			if (obj->get_type() == EObjType::kMagicIngredient
+		for (auto obj : world[ch->in_room]->contents) {
+			if (obj->get_type() == EObjType::kMagicComponent
 				|| Clan::is_clan_chest(obj)
 				|| ClanSystem::is_ingr_chest(obj)) {
 				continue;
@@ -225,27 +248,27 @@ int npc_scavenge(CharData *ch) {
 				}
 
 				// Заперто, открываем, если есть ключ
-				if (OBJVAL_FLAGGED(obj, EContainerFlag::kLockedUp)
+				if (IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kLockedUp))
 					&& HasKey(ch, GET_OBJ_VAL(obj, 2))) {
 					do_doorcmd(ch, obj, 0, kScmdUnlock);
 				}
 
 				// Заперто, взламываем, если умеем
-				if (OBJVAL_FLAGGED(obj, EContainerFlag::kLockedUp)
-					&& ch->GetSkill(ESkill::kPickLock)
+				if (IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kLockedUp))
+					&& GetSkill(ch, ESkill::kPickLock)
 					&& IsPickLockSucessdul(ch, 0, obj, EDirection::kUndefinedDir, kScmdPick)) {
 					do_doorcmd(ch, obj, EDirection::kUndefinedDir, kScmdPick);
 				}
 				// Все равно заперто, ну тогда фиг с ним
-				if (OBJVAL_FLAGGED(obj, EContainerFlag::kLockedUp)) {
+				if (IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kLockedUp))) {
 					continue;
 				}
 
-				if (OBJVAL_FLAGGED(obj, EContainerFlag::kShutted)) {
+				if (IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kShutted))) {
 					do_doorcmd(ch, obj, 0, kScmdOpen);
 				}
 
-				if (OBJVAL_FLAGGED(obj, EContainerFlag::kShutted)) {
+				if (IS_SET(GET_OBJ_VAL((obj), 1), (EContainerFlag::kShutted))) {
 					continue;
 				}
 
@@ -266,17 +289,17 @@ int npc_scavenge(CharData *ch) {
 			if (best_obj != best_cont) {
 				act("$n поднял$g $o3.", false, ch, best_obj, 0, kToRoom);
 				if (best_obj->get_type() == EObjType::kMoney) {
-					ch->add_gold(GET_OBJ_VAL(best_obj, 0));
+					currencies::AddHand(*ch, currencies::kGold, GET_OBJ_VAL(best_obj, 0));
 					ExtractObjFromWorld(best_obj);
 				} else {
 					RemoveObjFromRoom(best_obj);
 					PlaceObjToInventory(best_obj, ch);
 				}
 			} else {
-				sprintf(buf, "$n достал$g $o3 из %s.", cont->get_PName(ECase::kGen).c_str());
-				act(buf, false, ch, best_obj, 0, kToRoom);
+				act(fmt::format("$n достал$g $o3 из {}.", cont->get_PName(grammar::ECase::kGen)),
+					false, ch, best_obj, 0, kToRoom);
 				if (best_obj->get_type() == EObjType::kMoney) {
-					ch->add_gold(GET_OBJ_VAL(best_obj, 0));
+					currencies::AddHand(*ch, currencies::kGold, GET_OBJ_VAL(best_obj, 0));
 					ExtractObjFromWorld(best_obj);
 				} else {
 					RemoveObjFromObj(best_obj);
@@ -290,16 +313,16 @@ int npc_scavenge(CharData *ch) {
 
 int npc_loot(CharData *ch) {
 	int max = false;
-	ObjData *obj, *loot_obj, *next_loot, *cobj, *cnext_obj;
+	ObjData *loot_obj, *next_loot, *cobj, *cnext_obj;
 
 	if (!ch->IsFlagged(EMobFlag::kLooter))
 		return (false);
-	if (IS_SHOPKEEPER(ch))
+	if (specials::IsShopkeeper(ch))
 		return (false);
 	npc_dropunuse(ch);
-	if (world[ch->in_room]->contents && number(0, GetRealInt(ch)) > 10) {
-		for (obj = world[ch->in_room]->contents; obj; obj = obj->get_next_content()) {
-			if (CAN_SEE_OBJ(ch, obj) && IS_CORPSE(obj)) {
+	if (!world[ch->in_room]->contents.empty() && number(0, GetRealInt(ch)) > 10) {
+		for (auto obj : world[ch->in_room]->contents) {
+			if (sight::CanSeeObj(ch, obj) && IS_CORPSE(obj)) {
 				// Сначала лутим то, что не в контейнерах
 				for (loot_obj = obj->get_contains(); loot_obj; loot_obj = next_loot) {
 					next_loot = loot_obj->get_next_content();
@@ -307,10 +330,10 @@ int npc_loot(CharData *ch) {
 						|| system_obj::is_purse(loot_obj))
 						&& CAN_GET_OBJ(ch, loot_obj)
 						&& !item_nouse(loot_obj)) {
-						sprintf(buf, "$n вытащил$g $o3 из %s.", obj->get_PName(ECase::kGen).c_str());
-						act(buf, false, ch, loot_obj, 0, kToRoom);
+						act(fmt::format("$n вытащил$g $o3 из {}.", obj->get_PName(grammar::ECase::kGen)),
+							false, ch, loot_obj, 0, kToRoom);
 						if (loot_obj->get_type() == EObjType::kMoney) {
-							ch->add_gold(GET_OBJ_VAL(loot_obj, 0));
+							currencies::AddHand(*ch, currencies::kGold, GET_OBJ_VAL(loot_obj, 0));
 							ExtractObjFromWorld(loot_obj);
 						} else {
 							RemoveObjFromObj(loot_obj);
@@ -324,7 +347,7 @@ int npc_loot(CharData *ch) {
 					next_loot = loot_obj->get_next_content();
 					if (loot_obj->get_type() == EObjType::kContainer) {
 						if (IS_CORPSE(loot_obj)
-							|| OBJVAL_FLAGGED(loot_obj, EContainerFlag::kLockedUp)
+							|| IS_SET(GET_OBJ_VAL((loot_obj), 1), (EContainerFlag::kLockedUp))
 							|| system_obj::is_purse(loot_obj)) {
 							continue;
 						}
@@ -334,10 +357,10 @@ int npc_loot(CharData *ch) {
 						for (cobj = loot_obj->get_contains(); cobj; cobj = cnext_obj) {
 							cnext_obj = cobj->get_next_content();
 							if (CAN_GET_OBJ(ch, cobj) && !item_nouse(cobj)) {
-								sprintf(buf, "$n вытащил$g $o3 из %s.", obj->get_PName(ECase::kGen).c_str());
-								act(buf, false, ch, cobj, 0, kToRoom);
+								act(fmt::format("$n вытащил$g $o3 из {}.", obj->get_PName(grammar::ECase::kGen)),
+									false, ch, cobj, 0, kToRoom);
 								if (cobj->get_type() == EObjType::kMoney) {
-									ch->add_gold(GET_OBJ_VAL(cobj, 0));
+									currencies::AddHand(*ch, currencies::kGold, GET_OBJ_VAL(cobj, 0));
 									ExtractObjFromWorld(cobj);
 								} else {
 									RemoveObjFromObj(cobj);
@@ -353,26 +376,26 @@ int npc_loot(CharData *ch) {
 					next_loot = loot_obj->get_next_content();
 					if (loot_obj->get_type() == EObjType::kContainer) {
 						if (IS_CORPSE(loot_obj)
-							|| !OBJVAL_FLAGGED(loot_obj, EContainerFlag::kLockedUp)
+							|| !IS_SET(GET_OBJ_VAL((loot_obj), 1), (EContainerFlag::kLockedUp))
 							|| system_obj::is_purse(loot_obj)) {
 							continue;
 						}
 
 						// Есть ключ?
-						if (OBJVAL_FLAGGED(loot_obj, EContainerFlag::kLockedUp)
+						if (IS_SET(GET_OBJ_VAL((loot_obj), 1), (EContainerFlag::kLockedUp))
 							&& HasKey(ch, GET_OBJ_VAL(loot_obj, 2))) {
 							loot_obj->toggle_val_bit(1, EContainerFlag::kLockedUp);
 						}
 
 						// ...или взломаем?
-						if (OBJVAL_FLAGGED(loot_obj, EContainerFlag::kLockedUp)
-							&& ch->GetSkill(ESkill::kPickLock)
+						if (IS_SET(GET_OBJ_VAL((loot_obj), 1), (EContainerFlag::kLockedUp))
+							&& GetSkill(ch, ESkill::kPickLock)
 							&& IsPickLockSucessdul(ch, 0, loot_obj, EDirection::kUndefinedDir, kScmdPick)) {
 							loot_obj->toggle_val_bit(1, EContainerFlag::kLockedUp);
 						}
 
 						// Эх, не открыть. Ну ладно.
-						if (OBJVAL_FLAGGED(loot_obj, EContainerFlag::kLockedUp)) {
+						if (IS_SET(GET_OBJ_VAL((loot_obj), 1), (EContainerFlag::kLockedUp))) {
 							continue;
 						}
 
@@ -380,10 +403,10 @@ int npc_loot(CharData *ch) {
 						for (cobj = loot_obj->get_contains(); cobj; cobj = cnext_obj) {
 							cnext_obj = cobj->get_next_content();
 							if (CAN_GET_OBJ(ch, cobj) && !item_nouse(cobj)) {
-								sprintf(buf, "$n вытащил$g $o3 из %s.", obj->get_PName(ECase::kGen).c_str());
-								act(buf, false, ch, cobj, 0, kToRoom);
+								act(fmt::format("$n вытащил$g $o3 из {}.", obj->get_PName(grammar::ECase::kGen)),
+									false, ch, cobj, 0, kToRoom);
 								if (cobj->get_type() == EObjType::kMoney) {
-									ch->add_gold(GET_OBJ_VAL(cobj, 0));
+									currencies::AddHand(*ch, currencies::kGold, GET_OBJ_VAL(cobj, 0));
 									ExtractObjFromWorld(cobj);
 								} else {
 									RemoveObjFromObj(cobj);
@@ -465,9 +488,9 @@ int npc_move(CharData *ch, int dir, int/* need_specials_check*/) {
 }
 
 int has_curse(ObjData *obj) {
-	for (const auto &i : weapon_affect) {
+	for (const auto &i : equipment_affect) {
 		// Замена выражения на макрос
-		if (i.aff_spell <= ESpell::kUndefined || !obj->GetEWeaponAffect(i.aff_pos)) {
+		if (i.aff_spell <= ESpell::kUndefined || !obj->GetEEquipmentAffect(i.aff_pos)) {
 			continue;
 		}
 		if (MUD::Spell(i.aff_spell).AllowTarget(kNpcAffectPc | kNpcDamagePc)){
@@ -520,12 +543,12 @@ void npc_wield(CharData *ch) {
 	if (!NPC_FLAGGED(ch, ENpcFlag::kWielding))
 		return;
 
-	if (ch->GetSkill(ESkill::kHammer) > 0
-		&& ch->GetSkill(ESkill::kOverwhelm) < ch->GetSkill(ESkill::kHammer)) {
+	if (GetSkill(ch, ESkill::kHammer) > 0
+		&& GetSkill(ch, ESkill::kOverwhelm) < GetSkill(ch, ESkill::kHammer)) {
 		return;
 	}
 
-	if (GetRealInt(ch) < 10 || IS_SHOPKEEPER(ch))
+	if (GetRealInt(ch) < 10 || specials::IsShopkeeper(ch))
 		return;
 
 	if (GET_EQ(ch, EEquipPos::kHold)
@@ -621,7 +644,7 @@ void npc_armor(CharData *ch) {
 	if (!NPC_FLAGGED(ch, ENpcFlag::kArmoring))
 		return;
 
-	if (GetRealInt(ch) < 10 || IS_SHOPKEEPER(ch))
+	if (GetRealInt(ch) < 10 || specials::IsShopkeeper(ch))
 		return;
 
 	for (obj = ch->carrying; obj; obj = next) {
@@ -720,7 +743,7 @@ void npc_armor(CharData *ch) {
 void npc_light(CharData *ch) {
 	ObjData *obj, *next;
 
-	if (GetRealInt(ch) < 10 || IS_SHOPKEEPER(ch))
+	if (GetRealInt(ch) < 10 || specials::IsShopkeeper(ch))
 		return;
 
 	if (AFF_FLAGGED(ch, EAffect::kInfravision))
@@ -752,17 +775,16 @@ void npc_light(CharData *ch) {
 
 int npc_battle_scavenge(CharData *ch) {
 	int max = false;
-	ObjData *obj, *next_obj = nullptr;
 
 	if (!ch->IsFlagged(EMobFlag::kScavenger))
 		return (false);
 
-	if (IS_SHOPKEEPER(ch))
+	if (specials::IsShopkeeper(ch))
 		return (false);
 
-	if (world[ch->in_room]->contents && number(0, GetRealInt(ch)) > 10)
-		for (obj = world[ch->in_room]->contents; obj; obj = next_obj) {
-			next_obj = obj->get_next_content();
+	if (!world[ch->in_room]->contents.empty() && number(0, GetRealInt(ch)) > 10)
+		for (auto it = world[ch->in_room]->contents.begin(); it != world[ch->in_room]->contents.end(); ) {
+			auto obj = *it; ++it;
 			if (CAN_GET_OBJ(ch, obj)
 				&& !has_curse(obj)
 				&& (ObjSystem::is_armor_type(obj)
@@ -800,7 +822,9 @@ int npc_walk(CharData *ch) {
 			return (npc_walk(ch));
 	}
 
-	door = find_first_step(ch->in_room, GetRoomRnum(GET_DEST(ch)), ch);
+	// Единственное место, где ненайденный путь -- настоящая проблема: у моба задан маршрут,
+	// а дойти до очередной точки нельзя. Жалуемся билдеру.
+	door = find_first_step(ch->in_room, rnum, ch, true);
 
 	return (door);
 }
@@ -816,30 +840,30 @@ int do_npc_steal(CharData *ch, CharData *victim) {
 	if (ROOM_FLAGGED(ch->in_room, ERoomFlag::kPeaceful))
 		return (false);
 
-	if (victim->IsNpc() || IS_SHOPKEEPER(ch) || victim->GetEnemy())
+	if (victim->IsNpc() || specials::IsShopkeeper(ch) || victim->GetEnemy())
 		return (false);
 
 	if (GetRealLevel(victim) >= kLvlImmortal)
 		return (false);
 
-	if (!CAN_SEE(ch, victim))
+	if (!sight::CanSee(ch, victim))
 		return (false);
 
-	if (AWAKE(victim) && (number(0, std::max(0, GetRealLevel(ch) - int_app[GetRealInt(victim)].observation)) == 0)) {
+	if (AWAKE(victim) && (number(0, std::max(0, GetRealLevel(ch) - IntApp(GetRealInt(victim)).observation)) == 0)) {
 		act("Вы обнаружили руку $n1 в своем кармане.", false, ch, 0, victim, kToVict);
 		act("$n пытал$u обокрасть $N3.", true, ch, 0, victim, kToNotVict);
 	} else        // Steal some gold coins
 	{
-		gold = (int) ((victim->get_gold() * number(1, 10)) / 100);
+		gold = (int) ((currencies::GetHand(*victim, currencies::kGold) * number(1, 10)) / 100);
 		if (gold > 0) {
-			ch->add_gold(gold);
-			victim->remove_gold(gold);
+			currencies::AddHand(*ch, currencies::kGold, gold);
+			currencies::RemoveHand(*victim, currencies::kGold, gold);
 		}
 		// Steal something from equipment
 		if (ch->GetCarryingQuantity() < CAN_CARRY_N(ch) && CalcCurrentSkill(ch, ESkill::kSteal, victim)
 			>= number(1, 100) - (AWAKE(victim) ? 100 : 0)) {
 			for (obj = victim->carrying; obj; obj = obj->get_next_content())
-				if (CAN_SEE_OBJ(ch, obj) && ch->GetCarryingWeight() + obj->get_weight()
+				if (sight::CanSeeObj(ch, obj) && ch->GetCarryingWeight() + obj->get_weight()
 					<= CAN_CARRY_W(ch) && (!best || obj->get_cost() > best->get_cost()))
 					best = obj;
 			if (best) {
@@ -856,12 +880,12 @@ int npc_steal(CharData *ch) {
 	if (!NPC_FLAGGED(ch, ENpcFlag::kStealing))
 		return (false);
 
-	if (ch->GetPosition() != EPosition::kStand || IS_SHOPKEEPER(ch) || ch->GetEnemy())
+	if (ch->GetPosition() != EPosition::kStand || specials::IsShopkeeper(ch) || ch->GetEnemy())
 		return (false);
 
 	for (const auto cons : world[ch->in_room]->people) {
 		if (!cons->IsNpc()
-			&& !IS_IMMORTAL(cons)
+			&& !privilege::IsImmortal(cons)
 			&& (number(0, GetRealInt(ch)) > 10)) {
 			return (do_npc_steal(ch, cons));
 		}
@@ -926,14 +950,14 @@ void npc_group(CharData *ch) {
 
 	if (members <= 1) {
 		if (ch->has_master()) {
-			stop_follower(ch, kSfEmpty);
+			follow::StopFollower(ch, follow::kSfEmpty);
 		}
 
 		return;
 	}
 
 	if (leader->has_master()) {
-		stop_follower(leader, kSfEmpty);
+		follow::StopFollower(leader, follow::kSfEmpty);
 	}
 
 	// Assign leader
@@ -953,32 +977,28 @@ void npc_group(CharData *ch) {
 		}
 
 		if (!vict->has_master()) {
-			leader->add_follower(vict);
+			follow::AddFollower(leader, vict);
 		} else if (vict->get_master() != leader) {
-			stop_follower(vict, kSfEmpty);
-			leader->add_follower(vict);
+			follow::StopFollower(vict, follow::kSfEmpty);
+			follow::AddFollower(leader, vict);
 		}
 		AFF_FLAGS(vict).set(EAffect::kGroup);
 	}
 }
 
 void npc_groupbattle(CharData *ch) {
-	struct FollowerType *k;
-	CharData *tch, *helper;
-
 	if (!ch->IsNpc()
 		|| !ch->GetEnemy()
 		|| AFF_FLAGGED(ch, EAffect::kCharmed)
 		|| !ch->has_master()
 		|| ch->in_room == kNowhere
-		|| !ch->followers) {
+		|| ch->followers.empty()) {
 		return;
 	}
 
-	k = ch->has_master() ? ch->get_master()->followers : ch->followers;
-	tch = ch->has_master() ? ch->get_master() : ch;
-	for (; k; (k = tch ? k : k->next), tch = nullptr) {
-		helper = tch ? tch : k->follower;
+	auto *leader = ch->has_master() ? ch->get_master() : ch;
+	// Check the leader first, then iterate through their followers
+	auto check_helper = [&](CharData *helper) {
 		if (ch->in_room == helper->in_room
 			&& !helper->GetEnemy()
 			&& !helper->IsNpc()
@@ -987,38 +1007,11 @@ void npc_groupbattle(CharData *ch) {
 			SetFighting(helper, ch->GetEnemy());
 			act("$n вступил$u за $N3.", false, helper, 0, ch, kToRoom);
 		}
+	};
+	check_helper(leader);
+	for (auto *f : leader->followers) {
+		check_helper(f);
 	}
-}
-
-int dump(CharData *ch, void * /*me*/, int cmd, char *argument) {
-	ObjData *k;
-	int value = 0;
-
-	for (k = world[ch->in_room]->contents; k; k = world[ch->in_room]->contents) {
-		act("$p рассыпал$U в прах!", false, 0, k, 0, kToRoom);
-		ExtractObjFromWorld(k);
-	}
-
-	if (!CMD_IS("drop") || !CMD_IS("бросить"))
-		return (0);
-
-	DoDrop(ch, argument, cmd, 0);
-
-	for (k = world[ch->in_room]->contents; k; k = world[ch->in_room]->contents) {
-		act("$p рассыпал$U в прах!", false, 0, k, 0, kToRoom);
-		value += MAX(1, MIN(1, k->get_cost() / 10));
-		ExtractObjFromWorld(k);
-	}
-
-	if (value) {
-		SendMsgToChar("Боги оценили вашу жертву.\r\n", ch);
-		act("$n оценен$y Богами.", true, ch, 0, 0, kToRoom);
-		if (GetRealLevel(ch) < 3)
-			EndowExpToChar(ch, value);
-		else
-			ch->add_gold(value);
-	}
-	return (1);
 }
 
 #if 0
@@ -1178,9 +1171,9 @@ int magic_user(CharData *ch, void * /*me*/, int cmd, char * /*argument*/) {
 	}
 
 	if ((GetRealLevel(ch) > 12) && (number(0, 12) == 0)) {
-		if (IS_EVIL(ch)) {
+		if (alignment::IsEvil(ch)) {
 			CastSpell(ch, target, nullptr, nullptr, ESpell::kEnergyDrain, ESpell::kEnergyDrain);
-		} else if (IS_GOOD(ch)) {
+		} else if (alignment::IsGood(ch)) {
 			CastSpell(ch, target, nullptr, nullptr, ESpell::kDispelEvil, ESpell::kDispelEvil);
 		}
 	}
@@ -1223,12 +1216,12 @@ int puff(CharData * /*ch*/, void * /*me*/, int/* cmd*/, char * /*argument*/) {
 }
 
 int fido(CharData *ch, void * /*me*/, int cmd, char * /*argument*/) {
-	ObjData *i, *temp, *next_obj;
+	ObjData *temp, *next_obj;
 
 	if (cmd || !AWAKE(ch))
 		return (false);
 
-	for (i = world[ch->in_room]->contents; i; i = i->get_next_content()) {
+	for (auto i : world[ch->in_room]->contents) {
 		if (IS_CORPSE(i)) {
 			act("$n savagely devours a corpse.", false, ch, 0, 0, kToRoom);
 			for (temp = i->get_contains(); temp; temp = next_obj) {
@@ -1244,12 +1237,10 @@ int fido(CharData *ch, void * /*me*/, int cmd, char * /*argument*/) {
 }
 
 int janitor(CharData *ch, void * /*me*/, int cmd, char * /*argument*/) {
-	ObjData *i;
-
 	if (cmd || !AWAKE(ch))
 		return (false);
 
-	for (i = world[ch->in_room]->contents; i; i = i->get_next_content()) {
+	for (auto i : world[ch->in_room]->contents) {
 		if (!CAN_WEAR(i, EWearFlag::kTake)) {
 			continue;
 		}
@@ -1283,7 +1274,7 @@ int cityguard(CharData *ch, void * /*me*/, int cmd, char * /*argument*/) {
 	evil = 0;
 
 	for (const auto tch : world[ch->in_room]->people) {
-		if (!tch->IsNpc() && CAN_SEE(ch, tch) && tch->IsFlagged(EPlrFlag::kKiller)) {
+		if (!tch->IsNpc() && sight::CanSee(ch, tch) && tch->IsFlagged(EPlrFlag::kKiller)) {
 			act("$n screams 'HEY!!!  You're one of those PLAYER KILLERS!!!!!!'", false, ch, 0, 0, kToRoom);
 			hit(ch, tch, ESkill::kUndefined, fight::kMainHand);
 
@@ -1292,7 +1283,7 @@ int cityguard(CharData *ch, void * /*me*/, int cmd, char * /*argument*/) {
 	}
 
 	for (const auto tch : world[ch->in_room]->people) {
-		if (!tch->IsNpc() && CAN_SEE(ch, tch) && tch->IsFlagged(EPlrFlag::kBurglar)) {
+		if (!tch->IsNpc() && sight::CanSee(ch, tch) && tch->IsFlagged(EPlrFlag::kBurglar)) {
 			act("$n screams 'HEY!!!  You're one of those PLAYER THIEVES!!!!!!'", false, ch, 0, 0, kToRoom);
 			hit(ch, tch, ESkill::kUndefined, fight::kMainHand);
 
@@ -1301,16 +1292,16 @@ int cityguard(CharData *ch, void * /*me*/, int cmd, char * /*argument*/) {
 	}
 
 	for (const auto tch : world[ch->in_room]->people) {
-		if (CAN_SEE(ch, tch) && tch->GetEnemy()) {
-			if ((GET_ALIGNMENT(tch) < max_evil) && (tch->IsNpc() || tch->GetEnemy()->IsNpc())) {
-				max_evil = GET_ALIGNMENT(tch);
+		if (sight::CanSee(ch, tch) && tch->GetEnemy()) {
+			if ((alignment::GetAlignment(tch) < max_evil) && (tch->IsNpc() || tch->GetEnemy()->IsNpc())) {
+				max_evil = alignment::GetAlignment(tch);
 				evil = tch;
 			}
 		}
 	}
 
 	if (evil
-		&& (GET_ALIGNMENT(evil->GetEnemy()) >= 0)) {
+		&& (alignment::GetAlignment(evil->GetEnemy()) >= 0)) {
 		act("$n screams 'PROTECT THE INNOCENT!  BANZAI!  CHARGE!  ARARARAGGGHH!'", false, ch, 0, 0, kToRoom);
 		hit(ch, evil, ESkill::kUndefined, fight::kMainHand);
 
@@ -1323,7 +1314,6 @@ int cityguard(CharData *ch, void * /*me*/, int cmd, char * /*argument*/) {
 #define PET_PRICE(pet) (GetRealLevel(pet) * 300)
 
 int pet_shops(CharData *ch, void * /*me*/, int cmd, char *argument) {
-	char buf[kMaxStringLength], pet_name[256];
 	RoomRnum pet_room;
 	CharData *pet;
 
@@ -1332,41 +1322,47 @@ int pet_shops(CharData *ch, void * /*me*/, int cmd, char *argument) {
 	if (CMD_IS("list")) {
 		SendMsgToChar("Available pets are:\r\n", ch);
 		for (const auto pet : world[pet_room]->people) {
-			sprintf(buf, "%8d - %s\r\n", PET_PRICE(pet), GET_NAME(pet));
-			SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("{:>8} - {}\r\n", PET_PRICE(pet), GET_NAME(pet)), ch);
 		}
 
 		return (true);
 	} else if (CMD_IS("buy")) {
-		two_arguments(argument, buf, pet_name);
+		std::string remains;
+		const std::string name_arg = utils::ExtractFirstArgument(argument, remains);
+		const std::string pet_name = utils::ExtractFirstArgument(remains, remains);
 
-		if (!(pet = SearchCharInRoomByName(buf, pet_room))) {
+		target_resolver::Query q;
+		q.scopes = {target_resolver::Scope::kRoom};
+		q.name = name_arg;
+		q.room_override = pet_room;
+		q.visible_only = false;
+		if (!(pet = target_resolver::ResolveChar(ch, q))) {
 			SendMsgToChar("There is no such pet!\r\n", ch);
 			return (true);
 		}
-		if (ch->get_gold() < PET_PRICE(pet)) {
+		if (currencies::GetHand(*ch, currencies::kGold) < PET_PRICE(pet)) {
 			SendMsgToChar("You don't have enough gold!\r\n", ch);
 			return (true);
 		}
-		ch->remove_gold(PET_PRICE(pet));
+		currencies::RemoveHand(*ch, currencies::kGold, PET_PRICE(pet));
 
-		pet = ReadMobile(GET_MOB_RNUM(pet), kReal);
+		pet = ReadMobile(pet->get_rnum(), kReal);
 		pet->set_exp(0);
 		AFF_FLAGS(pet).set(EAffect::kCharmed);
+		pet->SetFlag(EMobFlag::kCompanion);	// any NPC ally
 
-		if (*pet_name) {
-			sprintf(buf, "%s %s", pet->GetCharAliases().c_str(), pet_name);
+		if (!pet_name.empty()) {
 			// free(pet->GetCharAliases()); don't free the prototype!
-			pet->SetCharAliases(buf);
+			pet->SetCharAliases(fmt::format("{} {}", pet->GetCharAliases(), pet_name));
 
-			sprintf(buf,
-					"%sA small sign on a chain around the neck says 'My name is %s'\r\n",
-					pet->player_data.description.c_str(), pet_name);
-			// free(pet->player_data.description); don't free the prototype!
-			pet->player_data.description = str_dup(buf);
+			// player_data.description -- std::string со своим владением: прямое
+			// присваивание заменяет собственную копию, прототип не затрагивается.
+			pet->player_data.description = fmt::format(
+				"{}A small sign on a chain around the neck says 'My name is {}'\r\n",
+				pet->player_data.description, pet_name);
 		}
 		PlaceCharToRoom(pet, ch->in_room);
-		ch->add_follower(pet);
+		follow::AddFollower(ch, pet);
 		load_mtrigger(pet);
 
 		// Be certain that pets can't get/carry/use/wield/wear items
@@ -1386,136 +1382,192 @@ int pet_shops(CharData *ch, void * /*me*/, int cmd, char *argument) {
 // ********************************************************************
 // *  Special procedures for objects                                  *
 // ********************************************************************
-int bank(CharData *ch, void * /*me*/, int cmd, char *argument) {
+namespace {
+// issue.specials: bank subcommands. One function per subcommand; the resolver maps the synonym
+// words to these handlers and auto-generates the "чего изволите" tooltip from the same list.
+enum class EBankCmd { kBalance, kDeposit, kWithdraw, kTransfer, kTreasury };
+
+// Parse "<amount> [<currency>]" for deposit/withdraw. An omitted currency means gold; a named one
+// must resolve and permit banking (IsStorable). Returns false (after messaging) on a bad value.
+bool ParseBankArg(CharData *ch, char *argument, specials::EBankMsg how_much, int &amount, int &currency) {
+	char amount_arg[kMaxInputLength], curr_arg[kMaxInputLength];
+	argument = one_argument(argument, amount_arg);
+	one_argument(argument, curr_arg);
+	amount = atoi(amount_arg);
+	if (amount <= 0) {
+		SendMsgToChar(specials::BankMsg(how_much) + "\r\n", ch);
+		return false;
+	}
+	currency = currencies::kGoldVnum;
+	if (*curr_arg) {
+		const auto *cur = currencies::FindBySearch(curr_arg);
+		if (!cur || !cur->IsStorable()) {
+			SendMsgToChar(specials::BankMsg(specials::EBankMsg::kCantBank) + "\r\n", ch);
+			return false;
+		}
+		currency = cur->GetId();
+	}
+	return true;
+}
+
+int BankBalance(CharData *ch, void * /*me*/, char * /*argument*/) {
+	bool any = false;
+	for (const auto &[id, amounts] : currencies::HeldByChar(*ch)) {
+		if (amounts.bank <= 0) {
+			continue;
+		}
+		const auto &info = MUD::Currencies().FindAvailableItem(id);
+		if (info.GetId() < 0) {
+			continue;
+		}
+		SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kBalance)),
+				fmt::arg("amount", amounts.bank),
+				fmt::arg("currency", info.GetNameWithAmount(amounts.bank, grammar::ECase::kNom).c_str())) + "\r\n", ch);
+		any = true;
+	}
+	if (!any) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kNoMoney) + "\r\n", ch);
+	}
+	return (1);
+}
+
+int BankDeposit(CharData *ch, void * /*me*/, char *argument) {
+	int amount, currency;
+	if (!ParseBankArg(ch, argument, specials::EBankMsg::kDepositHowMuch, amount, currency)) {
+		return (1);
+	}
+	if (currencies::GetHand(*ch, currency) < amount) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kCantAfford) + "\r\n", ch);
+		return (1);
+	}
+	currencies::RemoveHand(*ch, currency, amount, false);
+	currencies::AddBank(*ch, currency, amount, false, false);
+	SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kDeposited)),
+			fmt::arg("amount", amount),
+			fmt::arg("currency", MUD::Currency(currency).GetNameWithAmount(amount, grammar::ECase::kNom).c_str())) + "\r\n", ch);
+	act(specials::BankMsg(specials::EBankMsg::kFinancialOp), true, ch, nullptr, nullptr, kToRoom);
+	return (1);
+}
+
+int BankWithdraw(CharData *ch, void * /*me*/, char *argument) {
+	int amount, currency;
+	if (!ParseBankArg(ch, argument, specials::EBankMsg::kWithdrawHowMuch, amount, currency)) {
+		return (1);
+	}
+	if (currencies::GetBank(*ch, currency) < amount) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kNeverHadThatMuch) + "\r\n", ch);
+		return (1);
+	}
+	currencies::AddHand(*ch, currency, amount, false, false);
+	currencies::RemoveBank(*ch, currency, amount, false);
+	SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kWithdrawn)),
+			fmt::arg("amount", amount),
+			fmt::arg("currency", MUD::Currency(currency).GetNameWithAmount(amount, grammar::ECase::kNom).c_str())) + "\r\n", ch);
+	act(specials::BankMsg(specials::EBankMsg::kFinancialOp), true, ch, nullptr, nullptr, kToRoom);
+	return (1);
+}
+
+int BankTransfer(CharData *ch, void * /*me*/, char *argument) {
 	int amount;
 	CharData *vict;
-
-	if (CMD_IS("balance") || CMD_IS("баланс") || CMD_IS("сальдо")) {
-		if (ch->get_bank() > 0)
-			sprintf(buf, "У вас на счету %ld %s.\r\n",
-					ch->get_bank(), GetDeclensionInNumber(ch->get_bank(), EWhat::kMoneyA));
-		else
-			sprintf(buf, "У вас нет денег.\r\n");
-		SendMsgToChar(buf, ch);
+	std::string remains;
+	const std::string recipient_arg = utils::ExtractFirstArgument(argument, remains);
+	amount = atoi(remains.c_str());
+	if (privilege::IsGod(ch) && !privilege::IsImpl(ch)) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kImmCant) + "\r\n", ch);
 		return (1);
-	} else if (CMD_IS("deposit") || CMD_IS("вложить") || CMD_IS("вклад")) {
-		if ((amount = atoi(argument)) <= 0) {
-			SendMsgToChar("Сколько вы хотите вложить?\r\n", ch);
-			return (1);
-		}
-		if (ch->get_gold() < amount) {
-			SendMsgToChar("О такой сумме вы можете только мечтать!\r\n", ch);
-			return (1);
-		}
-		ch->remove_gold(amount, false);
-		ch->add_bank(amount, false);
-		sprintf(buf, "Вы вложили %d %s.\r\n", amount, GetDeclensionInNumber(amount, EWhat::kMoneyU));
-		SendMsgToChar(buf, ch);
-		act("$n произвел$g финансовую операцию.", true, ch, nullptr, nullptr, kToRoom);
+
+	}
+	if (recipient_arg.empty()) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kTransferToWhom) + "\r\n", ch);
 		return (1);
-	} else if (CMD_IS("withdraw") || CMD_IS("получить")) {
-		if ((amount = atoi(argument)) <= 0) {
-			SendMsgToChar("Уточните количество денег, которые вы хотите получить?\r\n", ch);
-			return (1);
-		}
-		if (ch->get_bank() < amount) {
-			SendMsgToChar("Да вы отродясь столько денег не видели!\r\n", ch);
-			return (1);
-		}
-		ch->add_gold(amount, false);
-		ch->remove_bank(amount, false);
-		sprintf(buf, "Вы сняли %d %s.\r\n", amount, GetDeclensionInNumber(amount, EWhat::kMoneyU));
-		SendMsgToChar(buf, ch);
-		act("$n произвел$g финансовую операцию.", true, ch, nullptr, nullptr, kToRoom);
+	}
+	if (amount <= 0) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kWithdrawHowMuch) + "\r\n", ch);
 		return (1);
-	} else if (CMD_IS("transfer") || CMD_IS("перевести")) {
-		argument = one_argument(argument, arg);
-		amount = atoi(argument);
-		if (IS_GOD(ch) && !IS_IMPL(ch)) {
-			SendMsgToChar("Почитить захотелось?\r\n", ch);
-			return (1);
-
-		}
-		if (!*arg) {
-			SendMsgToChar("Уточните кому вы хотите перевести?\r\n", ch);
+	}
+	if (amount <= 100) {
+		if (currencies::GetBank(*ch, currencies::kGold) < (amount + 5)) {
+			SendMsgToChar(specials::BankMsg(specials::EBankMsg::kNoTaxMoney) + "\r\n", ch);
 			return (1);
 		}
-		if (amount <= 0) {
-			SendMsgToChar("Уточните количество денег, которые вы хотите получить?\r\n", ch);
-			return (1);
-		}
-		if (amount <= 100) {
-			if (ch->get_bank() < (amount + 5)) {
-				SendMsgToChar("У вас не хватит денег на налоги!\r\n", ch);
-				return (1);
-			}
-		}
+	}
 
-		if (ch->get_bank() < amount) {
-			SendMsgToChar("Да вы отродясь столько денег не видели!\r\n", ch);
-			return (1);
-		}
-		if (ch->get_bank() < amount + ((amount * 5) / 100)) {
-			SendMsgToChar("У вас не хватит денег на налоги!\r\n", ch);
-			return (1);
-		}
+	if (currencies::GetBank(*ch, currencies::kGold) < amount) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kNeverHadThatMuch) + "\r\n", ch);
+		return (1);
+	}
+	if (currencies::GetBank(*ch, currencies::kGold) < amount + ((amount * 5) / 100)) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kNoTaxMoney) + "\r\n", ch);
+		return (1);
+	}
 
-		if ((vict = get_player_of_name(arg))) {
-			ch->remove_bank(amount);
-			if (amount <= 100) ch->remove_bank(5);
-			else ch->remove_bank(((amount * 5) / 100));
-			sprintf(buf, "%sВы перевели %d кун %s%s.\r\n", kColorWht, amount,
-					GET_PAD(vict, 2), kColorNrm);
-			SendMsgToChar(buf, ch);
-			vict->add_bank(amount);
-			sprintf(buf, "%sВы получили %d кун банковским переводом от %s%s.\r\n", kColorWht, amount,
-					GET_PAD(ch, 1), kColorNrm);
-			SendMsgToChar(buf, vict);
-			sprintf(buf,
-					"<%s> {%d} перевел %d кун банковским переводом %s.",
-					ch->get_name().c_str(),
-					GET_ROOM_VNUM(ch->in_room),
-					amount,
-					GET_PAD(vict, 2));
-			mudlog(buf, NRM, kLvlGreatGod, MONEY_LOG, true);
-			return (1);
+	if ((vict = get_player_of_name(recipient_arg.c_str()))) {
+		currencies::RemoveBank(*ch, currencies::kGold, amount);
+		if (amount <= 100) currencies::RemoveBank(*ch, currencies::kGold, 5);
+		else currencies::RemoveBank(*ch, currencies::kGold, ((amount * 5) / 100));
+		SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kTransferSent)),
+				fmt::arg("color", kColorWht), fmt::arg("amount", amount),
+				fmt::arg("recipient", GET_PAD(vict, 2)), fmt::arg("nocolor", kColorNrm)) + "\r\n", ch);
+		currencies::AddBank(*vict, currencies::kGold, amount);
+		SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kTransferReceived)),
+				fmt::arg("color", kColorWht), fmt::arg("amount", amount),
+				fmt::arg("sender", GET_PAD(ch, 1)), fmt::arg("nocolor", kColorNrm)) + "\r\n", vict);
+		mudlog(fmt::format("<{}> {{{}}} перевел {} кун банковским переводом {}.",
+						   ch->get_name(), GET_ROOM_VNUM(ch->in_room), amount, GET_PAD(vict, 2)),
+			   NRM, kLvlGreatGod, MONEY_LOG, true);
+		return (1);
 
-		} else {
-			vict = new Player; // TODO: переделать на стек
-			if (LoadPlayerCharacter(arg, vict, ELoadCharFlags::kFindId) < 0) {
-				SendMsgToChar("Такого персонажа не существует.\r\n", ch);
-				delete vict;
-				return (1);
-			}
-
-			ch->remove_bank(amount);
-			if (amount <= 100) ch->remove_bank(5);
-			else ch->remove_bank(((amount * 5) / 100));
-			sprintf(buf, "%sВы перевели %d кун %s%s.\r\n", kColorWht, amount,
-					GET_PAD(vict, 2), kColorNrm);
-			SendMsgToChar(buf, ch);
-			sprintf(buf,
-					"<%s> {%d} перевел %d кун банковским переводом %s.",
-					ch->get_name().c_str(),
-					GET_ROOM_VNUM(ch->in_room),
-					amount,
-					GET_PAD(vict, 2));
-			mudlog(buf, NRM, kLvlGreatGod, MONEY_LOG, true);
-			vict->add_bank(amount);
-			Depot::add_offline_money(GET_UID(vict), amount);
-			vict->save_char();
-
+	} else {
+		vict = new Player; // TODO: переделать на стек
+		if (LoadPlayerCharacter(recipient_arg.c_str(), vict, ELoadCharFlags::kFindId) < 0) {
+			SendMsgToChar(specials::BankMsg(specials::EBankMsg::kNoSuchPlayer) + "\r\n", ch);
 			delete vict;
 			return (1);
 		}
-	} else if (CMD_IS("казна"))
-		return (Clan::BankManage(ch, argument));
-	return 0;
+
+		currencies::RemoveBank(*ch, currencies::kGold, amount);
+		if (amount <= 100) currencies::RemoveBank(*ch, currencies::kGold, 5);
+		else currencies::RemoveBank(*ch, currencies::kGold, ((amount * 5) / 100));
+		SendMsgToChar(fmt::format(fmt::runtime(specials::BankMsg(specials::EBankMsg::kTransferSent)),
+				fmt::arg("color", kColorWht), fmt::arg("amount", amount),
+				fmt::arg("recipient", GET_PAD(vict, 2)), fmt::arg("nocolor", kColorNrm)) + "\r\n", ch);
+		mudlog(fmt::format("<{}> {{{}}} перевел {} кун банковским переводом {}.",
+						   ch->get_name(), GET_ROOM_VNUM(ch->in_room), amount, GET_PAD(vict, 2)),
+			   NRM, kLvlGreatGod, MONEY_LOG, true);
+		currencies::AddBank(*vict, currencies::kGold, amount);
+		Depot::add_offline_money(vict->get_uid(), amount);
+		vict->save_char();
+
+		delete vict;
+		return (1);
+	}
+}
+
+int BankTreasury(CharData *ch, void * /*me*/, char *argument) {
+	// казна = clan treasury; BankManage returns false only when the char is not in a clan.
+	if (!Clan::BankManage(ch, argument)) {
+		SendMsgToChar(specials::BankMsg(specials::EBankMsg::kNotInClan) + "\r\n", ch);
+	}
+	return (1);
+}
+
+const SubCmdResolver kBankCmds([] { return specials::BankMsg(specials::EBankMsg::kGreeting); }, {
+	{{"баланс", "сальдо", "balance"}, static_cast<int>(EBankCmd::kBalance), BankBalance},
+	{{"вложить", "вклад", "deposit"}, static_cast<int>(EBankCmd::kDeposit), BankDeposit},
+	{{"получить", "withdraw"}, static_cast<int>(EBankCmd::kWithdraw), BankWithdraw},
+	{{"перевести", "transfer"}, static_cast<int>(EBankCmd::kTransfer), BankTransfer},
+	{{"казна"}, static_cast<int>(EBankCmd::kTreasury), BankTreasury},
+});
+} // namespace
+
+int bank(CharData *ch, void *me, int /*cmd*/, char *argument) {
+	return kBankCmds.Dispatch(ch, me, argument);
 }
 
 bool is_post(RoomRnum room) {
 	for (const auto ch : world[room]->people) {
-		if (ch->IsNpc() && IS_POSTKEEPER(ch)) {
+		if (ch->IsNpc() && specials::IsPostkeeper(ch)) {
 			return true;
 		}
 	}
@@ -1531,7 +1583,7 @@ bool is_rent(RoomRnum room) {
 	}
 	// комната без рентера в ней
 	for (const auto ch : world[room]->people) {
-		if (ch->IsNpc() && IS_RENTKEEPER(ch)) {
+		if (ch->IsNpc() && specials::IsRentkeeper(ch)) {
 			return true;
 		}
 	}

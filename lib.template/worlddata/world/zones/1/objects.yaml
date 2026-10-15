@@ -1,0 +1,3734 @@
+# Objects for zone 1
+
+# Object #100
+0:
+  names:
+    aliases: служебный объект
+    nominative: служебный объект
+    genitive: служебного объекта
+    dative: служебному объекту
+    accusative: служебный объект
+    instrumental: служебным объектом
+    prepositional: служебном объекте
+  short_desc: Служебный объект для вещей без прототипов лежит тут.
+  type: kFood
+  material: 16  # ОРГАНИКА
+  values:
+    - 8  # насыщает, часов
+    - 0
+    - 0
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 1
+  cost: 12
+  rent_off: 1
+  rent_on: 1
+  max_durability: 10
+  cur_durability: 10
+  timer: 99999
+  sex: kMale
+  extra_flags:
+    - kNorent
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: нет
+      description: |+2
+        
+# Object #101
+1:
+  names:
+    aliases: ломоть хлеб
+    nominative: ломоть хлеба
+    genitive: ломтя хлеба
+    dative: ломтю хлеба
+    accusative: ломоть хлеба
+    instrumental: ломтем хлеба
+    prepositional: ломте хлеба
+  short_desc: Небольшая краюшка хлеба лежит тут.
+  type: kFood
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 15  # насыщает, часов
+    - 0
+    - 0
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 100
+  cur_durability: 100
+  timer: 900
+  sex: kMale
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: ломоть хлеб
+      description: |2
+        Вы видите небольшой кусок черного хлебушка.
+        Вряд ли им можно наесться, но вприкуску с 
+        мясом будет очень даже ничего.
+
+# Object #102
+2:
+  names:
+    aliases: вяленое мясо
+    nominative: вяленое мясо
+    genitive: вяленого мяса
+    dative: вяленому мясу
+    accusative: вяленое мясо
+    instrumental: вяленым мясом
+    prepositional: вяленом мясе
+  short_desc: Большой кусок вяленого мяса лежит тут.
+  type: kFood
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 16  # насыщает, часов
+    - 0
+    - 0
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 2
+  cost: 10
+  rent_off: 2
+  rent_on: 2
+  max_durability: 100
+  cur_durability: 100
+  timer: 2000
+  sex: kNeutral
+  max_in_world: 100000
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: вяленое мясо
+      description: |2
+        Вы видите кусок вяленого мяса, которое может
+        долго храниться и не потеряет своих
+        вкусовых качеств.
+
+# Object #103
+3:
+  names:
+    aliases: чекушка old
+    nominative: чекушка
+    genitive: чекушки
+    dative: чекушке
+    accusative: чекушку
+    instrumental: чекушкой
+    prepositional: чекушке
+  short_desc: Чекушка водки валяется на земле.
+  type: kLiquidContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 6  # объём, глотков
+    - 6  # налито, глотков
+    - 7  # тип жидкости: водки
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 7
+  cost: 5
+  rent_off: 1
+  rent_on: 1
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: чекушка
+      description: |2
+        Это всего лишь чекушка...
+        А так хотелось бы побольше...
+
+# Object #104
+4:
+  names:
+    aliases: фляга медовуха
+    nominative: фляга от медовухи
+    genitive: фляги от медовухи
+    dative: фляге от медовухи
+    accusative: флягу от медовухи
+    instrumental: флягой от медовухи
+    prepositional: фляге от медовухи
+  short_desc: Фляга от медовухи лежит тут.
+  type: kLiquidContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 12  # объём, глотков
+    - 12  # налито, глотков
+    - 2  # тип жидкости: вина
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 17
+  cost: 5
+  rent_off: 1
+  rent_on: 1
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  max_in_world: 100000
+  wear_flags:
+    - kTake
+
+# Object #105
+5:
+  names:
+    aliases: четверть самогон old
+    nominative: четверть
+    genitive: четверти
+    dative: четверти
+    accusative: четверть
+    instrumental: четвертью
+    prepositional: четверти
+  short_desc: 'Четверть самогона (скорее всего пустая :) лежит тут.'
+  type: kLiquidContainer
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 25  # объём, глотков
+    - 25  # налито, глотков
+    - 7  # тип жидкости: водки
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 30
+  cost: 20
+  rent_off: 3
+  rent_on: 3
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: четверть самогон
+      description: |2
+        Вы видите большой кувшин для хранения жидкостей.
+
+# Object #106
+6:
+  names:
+    aliases: деревянный палица
+    nominative: деревянная палица
+    genitive: деревянной палицы
+    dative: деревянной палице
+    accusative: деревянную палицу
+    instrumental: деревянной палицей
+    prepositional: деревянной палице
+  short_desc: Сделанная из дерева палица лежит тут.
+  type: kWeapon
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 10  # число бросков кубика
+    - 5  # граней кубика
+    - 5  # тип атаки: огрел
+  weight: 10
+  cost: 20
+  rent_off: 20
+  rent_on: 10
+  spec_param: 141
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+  affect_flags:
+    - kDisguising
+  extra_descriptions:
+    - keywords: деревянный палица
+      description: |2
+        Вы видите обыкновенную деревянную палицу,
+        коими обычно вооружаются сильные телом 
+        мужи, идя в смертный бой.
+  triggers:
+    - 1023  # метаем предмет
+
+# Object #107
+7:
+  names:
+    aliases: бронзовый меч
+    nominative: бронзовый меч
+    genitive: бронзового меча
+    dative: бронзовому мечу
+    accusative: бронзовый меч
+    instrumental: бронзовым мечом
+    prepositional: бронзовом мече
+  short_desc: Бронзовый меч лежит тут.
+  type: kWeapon
+  material: 2  # БРОНЗА
+  values:
+    - 0  # не используется
+    - 2  # число бросков кубика
+    - 5  # граней кубика
+    - 3  # тип атаки: рубанул
+  weight: 14
+  cost: 70
+  rent_off: 70
+  rent_on: 40
+  spec_param: 143
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  max_in_world: 10000
+  wear_flags:
+    - kTake
+    - kWield
+  extra_descriptions:
+    - keywords: бронзовый меч
+      description: |2
+        Вы видите средней длинны меч, выкованный из бронзы.
+        Не очень хорошее оружие.
+
+# Object #108
+8:
+  names:
+    aliases: маленький топорик
+    nominative: маленький топорик
+    genitive: маленького топорика
+    dative: маленькому топорику
+    accusative: маленький топорик
+    instrumental: маленьким топориком
+    prepositional: маленьком топорике
+  short_desc: Маленький бронзовый топорик лежит тут.
+  type: kWeapon
+  material: 2  # БРОНЗА
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 5  # граней кубика
+    - 3  # тип атаки: рубанул
+  weight: 5
+  cost: 10
+  rent_off: 10
+  rent_on: 5
+  spec_param: 142
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  max_in_world: 10000
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+  extra_descriptions:
+    - keywords: маленький топорик
+      description: |2
+        Вы видите маленький топорик, пригодный только
+        что для обрабоки не очень толстого дерева.
+
+# Object #109
+9:
+  names:
+    aliases: простой лук
+    nominative: простой лук
+    genitive: простого лука
+    dative: простому луку
+    accusative: простой лук
+    instrumental: простым луком
+    prepositional: простом луке
+  short_desc: Простой лук лежит тут.
+  type: kWeapon
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 1  # граней кубика
+    - 9  # тип атаки: подстрелил
+  weight: 5
+  cost: 5
+  rent_off: 0
+  rent_on: 0
+  spec_param: 154
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kBoth
+  extra_descriptions:
+    - keywords: простой лук
+      description: |2
+        Вы видите самый обыкновенный лук, сделанный из
+        не очень подходящего дерева с тоненькой тетивой.
+
+# Object #110
+10:
+  names:
+    aliases: длинный нож
+    nominative: длинный нож
+    genitive: длинного ножа
+    dative: длинному ножу
+    accusative: длинный нож
+    instrumental: длинным ножом
+    prepositional: длинном ноже
+  short_desc: Обычный длинный нож лежит тут.
+  type: kWeapon
+  material: 12  # КАМЕНЬ
+  values:
+    - 5  # не используется
+    - 37  # число бросков кубика
+    - 2  # граней кубика
+    - 1  # тип атаки: ободрал
+  weight: 40
+  cost: 20
+  rent_off: 20
+  rent_on: 10
+  spec_param: 142
+  max_durability: 500
+  cur_durability: 100
+  timer: 80000
+  sex: kMale
+  minimum_remorts: 5
+  extra_flags:
+    - kThrowing
+    - kHasTwoSlots
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+    - kBoth
+  affect_flags:
+    - kBlindness
+    - kBlink
+    - kSingleLight
+  applies:
+    - location: 4  # мудрость
+      modifier: 50
+    - location: 5  # телосложение
+      modifier: 100
+    - location: 6  # обаяние
+      modifier: 50
+    - location: 3  # интеллект
+      modifier: 100
+  skills:
+    - skill_id: 2  # перехватить атаку
+      value: -200
+    - skill_id: 166  # сглазить
+      value: 99
+  extra_descriptions:
+    - keywords: длинный нож
+      description: |2
+        Вы видите длинный нож, заточенный до яркого
+        блеска с одной стороны.
+        тест
+
+# Object #111
+11:
+  names:
+    aliases: большая алебарда
+    nominative: большая алебарда
+    genitive: большой алебарды
+    dative: большой алебарде
+    accusative: большую алебарду
+    instrumental: большой алебардой
+    prepositional: большой алебарде
+  short_desc: Топор на длинной рукоятке лежит тут.
+  type: kWeapon
+  material: 2  # БРОНЗА
+  values:
+    - 0  # не используется
+    - 3  # число бросков кубика
+    - 5  # граней кубика
+    - 3  # тип атаки: рубанул
+  weight: 18
+  cost: 50
+  rent_off: 50
+  rent_on: 30
+  spec_param: 146
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  max_in_world: 10000
+  wear_flags:
+    - kTake
+    - kBoth
+  extra_descriptions:
+    - keywords: большая алебарда
+      description: |2
+        Вы видите длинную деревянную алебарду,
+        с крепким стальным наконечником и крюком 
+        на конце.
+
+# Object #112
+12:
+  names:
+    aliases: простой меч
+    nominative: простой меч
+    genitive: простого меча
+    dative: простому мечу
+    accusative: простой меч
+    instrumental: простым мечом
+    prepositional: простом мече
+  short_desc: Простой меч лежит тут.
+  type: kWeapon
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 5  # граней кубика
+    - 7  # тип атаки: резанул
+  weight: 5
+  cost: 10
+  rent_off: 0
+  rent_on: 0
+  spec_param: 143
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+    - kBoth
+  extra_descriptions:
+    - keywords: простой меч
+      description: |2
+        Вы видите простой меч, неровно заточенный с обеих сторон.
+
+# Object #113
+13:
+  names:
+    aliases: простые доспехи
+    nominative: простые доспехи
+    genitive: простых доспехов
+    dative: простым доспехам
+    accusative: простые доспехи
+    instrumental: простыми доспехами
+    prepositional: простых доспехах
+  short_desc: Простой доспех лежит тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 2  # изменяет AC
+    - 0  # изменяет броню
+    - 0
+    - 0
+  weight: 1
+  cost: 10
+  rent_off: 0
+  rent_on: 0
+  max_durability: 50
+  cur_durability: 50
+  timer: 43200
+  sex: kPoly
+  max_in_world: 10000
+  minimum_remorts: -1
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kBody
+  applies:
+    - location: 1  # сила
+      modifier: 100
+    - location: 2  # ловкость
+      modifier: 100
+    - location: 3  # интеллект
+      modifier: 100
+    - location: 4  # мудрость
+      modifier: 100
+    - location: 5  # телосложение
+      modifier: 100
+    - location: 6  # обаяние
+      modifier: 100
+    - location: 25  # восст.жизни
+      modifier: -110
+    - location: 40  # успех.колдовства
+      modifier: 1000
+  extra_descriptions:
+    - keywords: простые доспехи
+      description: |2
+        Вы видите простые кожанные доспехи, не очень
+        крепкие и не очень удобные.
+
+# Object #114
+14:
+  names:
+    aliases: фляга old
+    nominative: фляга
+    genitive: фляги
+    dative: фляге
+    accusative: флягу
+    instrumental: флягой
+    prepositional: фляге
+  short_desc: Походная фляжка лежит тут.
+  type: kLiquidContainer
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 14  # объём, глотков
+    - 14  # налито, глотков
+    - 0  # тип жидкости: воды
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 19
+  cost: 2
+  rent_off: 0
+  rent_on: 0
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: фляга
+      description: |2
+        Вы видите слегка помятую флягу из тонкого
+        железа.
+
+# Object #115
+15:
+  names:
+    aliases: свиток возврата
+    nominative: свиток возврата
+    genitive: свитка возврата
+    dative: свитку возврата
+    accusative: свиток возврата
+    instrumental: свитком возврата
+    prepositional: свитке возврата
+  short_desc: Свиток возврата лежит тут.
+  type: kScroll
+  material: 17  # БЕРЕСТА
+  values:
+    - 0  # уровень заклинания
+    - 42  # слово возврата
+    - -1
+    - -1
+  weight: 1
+  cost: 25
+  rent_off: 0
+  rent_on: 0
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: свиток возврата
+      description: |2
+        Вы видите сероватый берестяной свиток,
+        полностью исписанный знакомыми буквами.
+  extra_values:
+    SPELL1_NUM: 42  # слово возврата
+
+# Object #116
+16:
+  names:
+    aliases: кожаные сапоги
+    nominative: кожаные сапоги
+    genitive: кожаных сапог
+    dative: кожаным сапогам
+    accusative: кожаные сапоги
+    instrumental: кожаными сапогами
+    prepositional: кожаных сапогах
+  short_desc: Кожаные сапоги лежат тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 0  # изменяет AC
+    - 1  # изменяет броню
+    - 0
+    - 0
+  weight: 2
+  cost: 15
+  rent_off: 15
+  rent_on: 1
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kPoly
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kFeet
+  extra_descriptions:
+    - keywords: кожаные сапоги
+      description: |2
+        Вы видите кожаные сапоги из кожи низкого качества.
+
+# Object #117
+17:
+  names:
+    aliases: кожаная шапка
+    nominative: кожаная шапка
+    genitive: кожаной шапки
+    dative: кожаной шапке
+    accusative: кожаную шапку
+    instrumental: кожаной шапкой
+    prepositional: кожаной шапке
+  short_desc: Кожаная шапка лежит тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 0  # изменяет AC
+    - 1  # изменяет броню
+    - 0
+    - 0
+  weight: 2
+  cost: 10
+  rent_off: 10
+  rent_on: 1
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kFemale
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kHead
+  extra_descriptions:
+    - keywords: кожаная шапка
+      description: |2
+        Вы видите кожаную шапку из старой дряблой кожи.
+
+# Object #118
+18:
+  names:
+    aliases: кожаный нагрудник
+    nominative: кожаный нагрудник
+    genitive: кожаного нагрудника
+    dative: кожаному нагруднику
+    accusative: кожаный нагрудник
+    instrumental: кожаным нагрудником
+    prepositional: кожаном нагруднике
+  short_desc: Кожаный нагрудник валяется тут на земле.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 1  # изменяет AC
+    - 2  # изменяет броню
+    - 0
+    - 0
+  weight: 4
+  cost: 30
+  rent_off: 30
+  rent_on: 3
+  max_durability: 75
+  cur_durability: 75
+  timer: 2880
+  sex: kMale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kBody
+  extra_descriptions:
+    - keywords: кожаный нагрудник
+      description: |2
+        Вы видите кожаный нагрудник, сшитый из нескольких
+        слоев не очень прочной кожи.
+
+# Object #119
+19:
+  names:
+    aliases: кожаные наручи
+    nominative: кожаные наручи
+    genitive: кожаных наручей
+    dative: кожаным наручам
+    accusative: кожаные наручи
+    instrumental: кожаными наручами
+    prepositional: кожаных наручах
+  short_desc: Кожаные наручи валяются тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 0  # изменяет AC
+    - 1  # изменяет броню
+    - 5
+    - 11
+  weight: 1
+  cost: 16
+  rent_off: 16
+  rent_on: 2
+  spec_param: 147
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kPoly
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kArms
+  extra_descriptions:
+    - keywords: кожаные наручи
+      description: |2
+        Вы видите кожаные наручи, сделанные из
+        тонкой старой кожи.
+
+# Object #120
+20:
+  names:
+    aliases: кожаные поножи
+    nominative: кожаные поножи
+    genitive: кожаных поножей
+    dative: кожаным поножам
+    accusative: кожаные поножи
+    instrumental: кожаными поножами
+    prepositional: кожаных поножах
+  short_desc: Простые кожаные поножи валяются тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 0  # изменяет AC
+    - 1  # изменяет броню
+    - 0
+    - 0
+  weight: 1
+  cost: 16
+  rent_off: 16
+  rent_on: 2
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kPoly
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kLegs
+  extra_descriptions:
+    - keywords: кожаные поножи
+      description: |2
+        Вы видите обыкновенные кожаные поножи,
+        состоящие из сшитых между собой кусков
+        старой кожи.
+
+# Object #121
+21:
+  names:
+    aliases: простая палица
+    nominative: простая палица
+    genitive: простой палицы
+    dative: простой палице
+    accusative: простую палицу
+    instrumental: простой палицей
+    prepositional: простой палице
+  short_desc: Палица лежит тут.
+  type: kWeapon
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 5  # граней кубика
+    - 5  # тип атаки: огрел
+  weight: 5
+  cost: 5
+  rent_off: 0
+  rent_on: 0
+  spec_param: 141
+  max_durability: 100
+  cur_durability: 90
+  timer: 43200
+  sex: kFemale
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kWield
+  extra_descriptions:
+    - keywords: простая палица
+      description: |2
+        Вы видите самую обыкновенную грубую палицу,
+        не очень хорошего качества.
+
+# Object #122
+22:
+  names:
+    aliases: простой нож
+    nominative: простой нож
+    genitive: простого ножа
+    dative: простому ножу
+    accusative: простой нож
+    instrumental: простым ножом
+    prepositional: простом ноже
+  short_desc: Обычный длинный нож лежит тут.
+  type: kWeapon
+  material: 2  # БРОНЗА
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 4  # граней кубика
+    - 11  # тип атаки: уколол
+  weight: 6
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  spec_param: 144
+  max_durability: 100
+  cur_durability: 90
+  timer: 43200
+  sex: kMale
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+  extra_descriptions:
+    - keywords: простой нож
+      description: |2
+        Вы видите простой нож с обычной деревянной рукоятью.
+
+# Object #123
+23:
+  names:
+    aliases: кольчуга
+    nominative: кольчуга
+    genitive: кольчуги
+    dative: кольчуге
+    accusative: кольчугу
+    instrumental: кольчугой
+    prepositional: кольчуге
+  short_desc: Добротная кольчуга лежит тут.
+  type: kArmor
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 1  # изменяет AC
+    - 2  # изменяет броню
+    - 0
+    - 0
+  weight: 4
+  cost: 90
+  rent_off: 90
+  rent_on: 6
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kBody
+  extra_descriptions:
+    - keywords: кольчуга
+      description: |2
+        Вы видите кольчугу, сшитую из легких и не очень
+        прочных колец.
+
+# Object #124
+24:
+  names:
+    aliases: кольчужный шлем
+    nominative: кольчужный шлем
+    genitive: кольчужного шлема
+    dative: кольчужному шлему
+    accusative: кольчужный шлем
+    instrumental: кольчужным шлемом
+    prepositional: кольчужном шлеме
+  short_desc: Кольчужный шлем лежит тут.
+  type: kArmor
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 1  # изменяет AC
+    - 1  # изменяет броню
+    - 0
+    - 0
+  weight: 3
+  cost: 45
+  rent_off: 45
+  rent_on: 3
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kHead
+  applies:
+    - location: 20  # воля
+      modifier: 2
+  extra_descriptions:
+    - keywords: кольчужный шлем
+      description: |2
+        Вы видите кольчужный шлем, сшитый из легких 
+        но не прочных колец.
+
+# Object #125
+25:
+  names:
+    aliases: ломоть хлеб
+    nominative: ломоть хлеба
+    genitive: ломтя хлеба
+    dative: ломтю хлеба
+    accusative: ломоть хлеба
+    instrumental: ломтем хлеба
+    prepositional: ломте хлеба
+  short_desc: Небольшая краюшка хлеба лежит тут.
+  type: kFood
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 15  # насыщает, часов
+    - 0
+    - 0
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 100
+  cur_durability: 100
+  timer: 900
+  sex: kMale
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: ломоть хлеб
+      description: |2
+        Вы видите небольшой кусок черного хлебушка.
+        Вряд ли им можно наесться, но вприкуску с 
+        мясом будет очень даже ничего.
+
+# Object #126
+26:
+  names:
+    aliases: светящийся шарик
+    nominative: светящийся шарик
+    genitive: светящегося шарика
+    dative: светящемуся шарику
+    accusative: светящийся шарик
+    instrumental: светящимся шариком
+    prepositional: светящемся шарике
+  short_desc: Если Вы это видите - у кодера какие-то проблемы.
+  action_desc: |2
+    Вы зажгли шарик и взяли его в левую руку.
+  type: kLightSource
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 0
+    - 0
+    - 24  # длительность горения (0=погасла, -1=вечный)
+    - 0
+  weight: 1
+  cost: 2
+  rent_off: 2
+  rent_on: 1
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kMale
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: светящийся шарик
+      description: |2
+        Вы видите ярко светящийся шарик, созданный
+        дивной магией.
+
+# Object #127
+27:
+  names:
+    aliases: медная лампа
+    nominative: медная лампа
+    genitive: медной лампы
+    dative: медной лампе
+    accusative: медную лампу
+    instrumental: медной лампой
+    prepositional: медной лампе
+  short_desc: Если Вы это видите - у кодера какие-то проблемы.
+  action_desc: |2
+    Вы зажгли медную лампу и взяли ее в левую руку.
+  type: kLightSource
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 12
+    - 0
+    - 48  # длительность горения (0=погасла, -1=вечный)
+    - 0
+  weight: 1
+  cost: 1
+  rent_off: 0
+  rent_on: 0
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kFemale
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kHold
+
+# Object #128
+28:
+  names:
+    aliases: медная лампа
+    nominative: медная лампа
+    genitive: медной лампы
+    dative: медной лампе
+    accusative: медную лампу
+    instrumental: медной лампой
+    prepositional: медной лампе
+  short_desc: Медная лампа стоит на земле.
+  action_desc: |2
+    Вы зажгли медную лампу и взяли ее в левую руку.
+  type: kLightSource
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 0
+    - 0
+    - 48  # длительность горения (0=погасла, -1=вечный)
+    - 0
+  weight: 1
+  cost: 5
+  rent_off: 2
+  rent_on: 1
+  max_durability: 25
+  cur_durability: 25
+  timer: 43200
+  sex: kFemale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+    - kDecay
+  wear_flags:
+    - kTake
+    - kHold
+
+# Object #129
+29:
+  names:
+    aliases: походный мешок
+    nominative: походный мешок
+    genitive: походного мешка
+    dative: походному мешку
+    accusative: походный мешок
+    instrumental: походным мешком
+    prepositional: походном мешке
+  short_desc: Походный мешок валяется у Вас под ногами.
+  action_desc: |2
+    Вы забросили походный мешок на спину.
+  type: kContainer
+  material: 14  # ТКАНЬ
+  values:
+    - 75  # макс. вместимый вес
+    - 0  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 1
+  cost: 10
+  rent_off: 10
+  rent_on: 5
+  max_durability: 50
+  cur_durability: 50
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kShoulders
+  extra_descriptions:
+    - keywords: походный мешок
+      description: |2
+        Вы видите кожаный походный мешок с завязками.
+
+# Object #130
+30:
+  names:
+    aliases: кожаные перчатки
+    nominative: кожаные перчатки
+    genitive: кожаных перчаток
+    dative: кожаным перчаткам
+    accusative: кожаные перчатки
+    instrumental: кожаными перчатками
+    prepositional: кожаных перчатках
+  short_desc: Простые кожаные перчатки валяются тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 0  # изменяет AC
+    - 1  # изменяет броню
+    - 0
+    - 0
+  weight: 3
+  cost: 10
+  rent_off: 10
+  rent_on: 1
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kPoly
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kHands
+  extra_descriptions:
+    - keywords: кожаные перчатки
+      description: |2
+        Вы видите простые кожаные перчатки, изготовленные из
+        простой не очень прочной кожи.
+
+# Object #131
+31:
+  names:
+    aliases: изношенный плащ
+    nominative: изношенный плащ
+    genitive: изношенного плаща
+    dative: изношенному плащу
+    accusative: изношенный плащ
+    instrumental: изношенным плащом
+    prepositional: изношенном плаще
+  short_desc: Изношенный плащ валяется тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 0  # изменяет AC
+    - 1  # изменяет броню
+    - 0
+    - 0
+  weight: 1
+  cost: 6
+  rent_off: 6
+  rent_on: 1
+  max_durability: 50
+  cur_durability: 50
+  timer: 43200
+  sex: kMale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kShoulders
+  extra_descriptions:
+    - keywords: изношенный плащ
+      description: |2
+        Вы видите старый изношенный плащ, какие обычно
+        таскают бездомные бродяги.
+
+# Object #132
+32:
+  names:
+    aliases: легкий пояс
+    nominative: легкий пояс
+    genitive: легкого пояса
+    dative: легкому поясу
+    accusative: легкий пояс
+    instrumental: легким поясом
+    prepositional: легком поясе
+  short_desc: Узкая полоска кожи валяется тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 0  # изменяет AC
+    - 1  # изменяет броню
+    - 0
+    - 0
+  weight: 1
+  cost: 12
+  rent_off: 12
+  rent_on: 1
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kMale
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kWaist
+  extra_descriptions:
+    - keywords: легкий пояс
+      description: |2
+        Вы видите легкий пояс, изготовленный из
+        куска тонкой старой кожи.
+
+# Object #133
+33:
+  names:
+    aliases: повязка на шею
+    nominative: повязка на шею
+    genitive: повязки на шею
+    dative: повязке на шею
+    accusative: повязку на шею
+    instrumental: повязкой на шею
+    prepositional: повязке на шею
+  short_desc: Платок из кожи валяется тут.
+  type: kArmor
+  material: 15  # КОЖА
+  values:
+    - 0  # изменяет AC
+    - 0  # изменяет броню
+    - 0
+    - 0
+  weight: 1
+  cost: 20
+  rent_off: 20
+  rent_on: 2
+  max_durability: 50
+  cur_durability: 50
+  timer: 43200
+  sex: kFemale
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kNeck
+  applies:
+    - location: 25  # восст.жизни
+      modifier: 5
+  extra_descriptions:
+    - keywords: повязка на шею
+      description: |2
+        Вы видите кожаную повязку, какие обычно одевают на шею
+        в холода, дабы не заболеть.
+
+# Object #134
+34:
+  names:
+    aliases: железный сундук
+    nominative: железный сундук
+    genitive: железного сундука
+    dative: железному сундуку
+    accusative: железный сундук
+    instrumental: железным сундуком
+    prepositional: железном сундуке
+  short_desc: Большой железный сундук стоит у Вас под ногами.
+  type: kContainer
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 250  # макс. вместимый вес
+    - 0  # флаги контейнера
+    - -1  # vnum ключа (-1 нет)
+    - 0  # сложность замка (0-1000)
+  weight: 5
+  cost: 20
+  rent_off: 20
+  rent_on: 5
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: железный сундук
+      description: |2
+        Вы видите крепкий сундук, окованный железом,
+        в который можно поместить изрядное количество
+        добра.
+
+# Object #135
+35:
+  names:
+    aliases: странное колечко
+    nominative: странное колечко
+    genitive: странного колечка
+    dative: странному колечку
+    accusative: странное колечко
+    instrumental: странным колечком
+    prepositional: странном колечке
+  short_desc: Странное колечко тускло мерцает в пыли.
+  type: kArmor
+  material: 11  # СТЕКЛО
+  values:
+    - 0  # изменяет AC
+    - 0  # изменяет броню
+    - 0
+    - 0
+  weight: 1
+  cost: 300
+  rent_off: 300
+  rent_on: 80
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kFinger
+  affect_flags:
+    - kInfravision
+
+# Object #136
+36:
+  names:
+    aliases: мех
+    nominative: мех
+    genitive: меха
+    dative: меху
+    accusative: мех
+    instrumental: мехом
+    prepositional: мехе
+  short_desc: Кожаный мех для различных жидкостей лежит тут.
+  type: kLiquidContainer
+  material: 15  # КОЖА
+  values:
+    - 25  # объём, глотков
+    - 25  # налито, глотков
+    - 0  # тип жидкости: воды
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 30
+  cost: 10
+  rent_off: 10
+  rent_on: 2
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kShoulders
+  extra_descriptions:
+    - keywords: мех
+      description: |2
+        Вы видите добротный мех, созданный для хранения
+        воды в походе.
+
+# Object #137
+37:
+  names:
+    aliases: простой щит
+    nominative: простой щит
+    genitive: простого щита
+    dative: простому щиту
+    accusative: простой щит
+    instrumental: простым щитом
+    prepositional: простом щите
+  short_desc: Немного неуклюжий простой щит лежит тут.
+  type: kArmor
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 1  # изменяет AC
+    - 2  # изменяет броню
+    - 0
+    - 0
+  weight: 9
+  cost: 10
+  rent_off: 10
+  rent_on: 1
+  max_durability: 50
+  cur_durability: 50
+  timer: 43200
+  sex: kMale
+  max_in_world: 10000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kShield
+  applies:
+    - location: 18  # попадание
+      modifier: -1
+  extra_descriptions:
+    - keywords: простой щит
+      description: |2
+        Вы видите обыкновенный деревянный круглый щит.
+
+# Object #138
+38:
+  names:
+    aliases: свиток познания
+    nominative: свиток познания
+    genitive: свитка познания
+    dative: свитку познания
+    accusative: свиток познания
+    instrumental: свитком познания
+    prepositional: свитке познания
+  short_desc: Свиток познания лежит тут.
+  type: kScroll
+  material: 17  # БЕРЕСТА
+  values:
+    - 0  # уровень заклинания
+    - 351  # идентификация
+    - -1
+    - -1
+  weight: 1
+  cost: 110
+  rent_off: 110
+  rent_on: 110
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: свиток познания
+      description: |2
+        Вы видите свиток из бресты,
+        покрытый знакомыми символами.
+  extra_values:
+    SPELL1_NUM: 351  # идентификация
+
+# Object #139
+39:
+  names:
+    aliases: свиток возврата
+    nominative: свиток возврата
+    genitive: свитка возврата
+    dative: свитку возврата
+    accusative: свиток возврата
+    instrumental: свитком возврата
+    prepositional: свитке возврата
+  short_desc: Свиток возврата лежит тут.
+  type: kScroll
+  material: 17  # БЕРЕСТА
+  values:
+    - 0  # уровень заклинания
+    - 42  # слово возврата
+    - 0
+    - 0
+  weight: 1
+  cost: 25
+  rent_off: 10
+  rent_on: 10
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: свиток возврата
+      description: |2
+        Вы видите сероватый берестяной свиток,
+        покрытый знакомыми буквами.
+  extra_values:
+    SPELL1_NUM: 42  # слово возврата
+
+# Object #140
+40:
+  names:
+    aliases: маленькая зеленая бутылочка
+    nominative: маленькая зеленая бутылочка
+    genitive: маленькой зеленой бутылочки
+    dative: маленькой зеленой бутылочке
+    accusative: маленькую зеленую бутылочку
+    instrumental: маленькой зеленой бутылочкой
+    prepositional: маленькой зеленой бутылочке
+  short_desc: Бутылочка зеленоватого цвета лежит тут.
+  type: kPotion
+  material: 11  # СТЕКЛО
+  values:
+    - 0  # уровень заклинания
+    - 19  # видеть невидимое
+    - 0
+    - 0  # сила зелья (potency)
+  weight: 1
+  cost: 30
+  rent_off: 15
+  rent_on: 15
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: маленькая зеленая бутылочка
+      description: |2
+        Вы видите маленькую зеленую бутылочку,
+        с неизвестным содержимым.
+  extra_values:
+    MAKER_SKILL: 80
+    MAKER_STAT: 25
+    SPELL1_NUM: 19  # видеть невидимое
+
+# Object #141
+41:
+  names:
+    aliases: красный пузырек
+    nominative: красный пузырек
+    genitive: красного пузырька
+    dative: красному пузырьку
+    accusative: красный пузырек
+    instrumental: красным пузырьком
+    prepositional: красном пузырьке
+  short_desc: Пузырек красного цвета лежит тут.
+  type: kPotion
+  material: 11  # СТЕКЛО
+  values:
+    - 0  # уровень заклинания
+    - 97  # восстановление
+    - 0
+    - 0  # сила зелья (potency)
+  weight: 1
+  cost: 300
+  rent_off: 300
+  rent_on: 100
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: красный пузырек
+      description: |2
+        Вы видите красный пузырек с неизвестным напитком.
+  extra_values:
+    MAKER_SKILL: 80
+    MAKER_STAT: 25
+    SPELL1_NUM: 97  # восстановление
+
+# Object #142
+42:
+  names:
+    aliases: колба серой жидкостью
+    nominative: колба с серой жидкостью
+    genitive: колбы с серой жидкостью
+    dative: колбе с серой жидкостью
+    accusative: колбу с серой жидкостью
+    instrumental: колбой с серой жидкостью
+    prepositional: колбе с серой жидкостью
+  short_desc: Колба серого цвета лежит тут.
+  type: kPotion
+  material: 11  # СТЕКЛО
+  values:
+    - 0  # уровень заклинания
+    - 43  # удалить яд
+    - 0
+    - 0  # сила зелья (potency)
+  weight: 1
+  cost: 20
+  rent_off: 15
+  rent_on: 10
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: колба с серой жидкостью
+      description: |2
+        Вы видите колбу с неизвестной серой жидкостью.
+  extra_values:
+    MAKER_SKILL: 125
+    MAKER_STAT: 40
+    SPELL1_NUM: 43  # удалить яд
+
+# Object #143
+43:
+  names:
+    aliases: черное зелье
+    nominative: черное зелье
+    genitive: черного зелья
+    dative: черному зелью
+    accusative: черное зелье
+    instrumental: черным зельем
+    prepositional: черном зелье
+  short_desc: Зелье черного цвета лежит тут.
+  type: kPotion
+  material: 11  # СТЕКЛО
+  values:
+    - 0  # уровень заклинания
+    - 16  # легкое исцеление
+    - 0
+    - 0  # сила зелья (potency)
+  weight: 1
+  cost: 150
+  rent_off: 15
+  rent_on: 10
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: черное зелье
+      description: |2
+        Вы видите невиданное черное зелье.
+  extra_values:
+    MAKER_SKILL: 125
+    MAKER_STAT: 40
+    SPELL1_NUM: 16  # легкое исцеление
+
+# Object #144
+44:
+  names:
+    aliases: напиток всевидения
+    nominative: напиток всевидения
+    genitive: напитка всевидения
+    dative: напитку всевидения
+    accusative: напиток всевидения
+    instrumental: напитком всевидения
+    prepositional: напитке всевидения
+  short_desc: Напиток всевидения лежит тут.
+  type: kPotion
+  material: 11  # СТЕКЛО
+  values:
+    - 0  # уровень заклинания
+    - 19  # видеть невидимое
+    - 20  # определение магии
+    - 50  # сила зелья (potency)
+  weight: 1
+  cost: 100
+  rent_off: 100
+  rent_on: 50
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: напиток всевидения
+      description: |2
+        Вы видите напиток всевидения, который слабо светится.
+  extra_values:
+    MAKER_SKILL: 80
+    MAKER_STAT: 25
+    SPELL1_NUM: 19  # видеть невидимое
+    SPELL2_NUM: 20  # определение магии
+    SPELL3_NUM: 50  # видение ночью
+
+# Object #145
+45:
+  names:
+    aliases: медовый напиток
+    nominative: медовый напиток
+    genitive: медового напитка
+    dative: медовому напитку
+    accusative: медовый напиток
+    instrumental: медовым напитком
+    prepositional: медовом напитке
+  short_desc: Глиняная корчага с источающим запах меда напитком стоит тут.
+  type: kPotion
+  material: 10  # КЕРАМИКА
+  values:
+    - 25  # уровень заклинания
+    - 103  # насыщение
+    - 0
+    - 0  # сила зелья (potency)
+  weight: 1
+  cost: 30
+  rent_off: 5
+  rent_on: 5
+  max_durability: 10
+  cur_durability: 10
+  timer: 20160
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: ключ
+      description: |2
+        Вы видите обычный ключ.
+  extra_values:
+    MAKER_SKILL: 80
+    MAKER_STAT: 25
+    SPELL1_NUM: 103  # насыщение
+
+# Object #146
+46:
+  names:
+    aliases: маленький_бочонок бочонок_маленький
+    nominative: маленький_бочонок
+    genitive: маленького_бочонка
+    dative: маленькому_бочонку
+    accusative: маленький_бочонок
+    instrumental: маленьким_бочонком
+    prepositional: маленьком_бочонке
+  short_desc: Маленький бочонок стоит тут.
+  type: kLiquidContainer
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 50  # объём, глотков
+    - 0  # налито, глотков
+    - 0  # тип жидкости: воды
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 4
+  cost: 30
+  rent_off: 30
+  rent_on: 30
+  max_durability: 80
+  cur_durability: 80
+  timer: 20160
+  sex: kMale
+  max_in_world: 100000
+  wear_flags:
+    - kTake
+
+# Object #147
+47:
+  names:
+    aliases: настой болиголова
+    nominative: настой болиголова
+    genitive: настоя болиголова
+    dative: настою болиголова
+    accusative: настой болиголова
+    instrumental: настоем болиголова
+    prepositional: настое болиголова
+  short_desc: Бутылочка с черным настоем стоит тут.
+  type: kPotion
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 25  # уровень заклинания
+    - 50  # видение ночью
+    - 0
+    - 0  # сила зелья (potency)
+  weight: 1
+  cost: 50
+  rent_off: 10
+  rent_on: 10
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+  extra_values:
+    SPELL1_NUM: 50  # видение ночью
+
+# Object #148
+48:
+  names:
+    aliases: лучина
+    nominative: лучина
+    genitive: лучины
+    dative: лучине
+    accusative: лучину
+    instrumental: лучиной
+    prepositional: лучине
+  short_desc: Лучина догорает здесь.
+  type: kLightSource
+  material: 8  # ДЕРЕВО
+  values:
+    - 0
+    - 0
+    - 7  # длительность горения (0=погасла, -1=вечный)
+    - 0
+  weight: 5
+  cost: 15
+  rent_off: 10
+  rent_on: 7
+  max_durability: 10
+  cur_durability: 10
+  timer: 43200
+  sex: kFemale
+  max_in_world: 100000
+  wear_flags:
+    - kTake
+    - kHold
+
+# Object #149
+49:
+  names:
+    aliases: бочонок
+    nominative: бочонок
+    genitive: бочонка
+    dative: бочонку
+    accusative: бочонок
+    instrumental: бочонком
+    prepositional: бочонке
+  short_desc: Небольшой крепкий бочонок стоит тут.
+  type: kLiquidContainer
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 200  # объём, глотков
+    - 200  # налито, глотков
+    - 21  # тип жидкости: черного колдовского зелья
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 205
+  cost: 22000
+  rent_off: 20
+  rent_on: 20
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: бочонок
+      description: |2
+        Крепкий дубовый бочонок с притертой затычкой.
+  extra_values:
+    MAKER_SKILL: 100
+    MAKER_STAT: 30
+    POTION_PROTO_VNUM: 0
+    POTION_SPELL1_LVL: 0
+    SPELL1_NUM: 16  # легкое исцеление
+
+# Object #150
+50:
+  names:
+    aliases: сушеная_тыква тыква_сушеная
+    nominative: сушеная_тыква
+    genitive: сушеной_тыквы
+    dative: сушеной_тыкве
+    accusative: сушеную_тыкву
+    instrumental: сушеной_тыквой
+    prepositional: сушеной_тыкве
+  short_desc: Заткнутая деревянной пробкой сушеная тыква валяется тут.
+  type: kLiquidContainer
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 50  # объём, глотков
+    - 50  # налито, глотков
+    - 19  # тип жидкости: белого колдовского зелья
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 55
+  cost: 5100
+  rent_off: 50
+  rent_on: 50
+  max_durability: 50
+  cur_durability: 50
+  timer: 43200
+  sex: kFemale
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kNeck
+  extra_descriptions:
+    - keywords: сушеная тыква
+      description: |2
+        Сушеная тыква-горлянка, оплетеная ремешком с длинной петлей,
+        чтоб носить на плече. Горлышко ее заткнуто плотно притертой
+        деревянной пробкой.
+  extra_values:
+    POTION_PROTO_VNUM: 0
+    POTION_SPELL1_LVL: 0
+    POTION_SPELL2_LVL: 0
+    POTION_SPELL3_LVL: 0
+    SPELL1_NUM: 19  # видеть невидимое
+    SPELL2_NUM: 20  # определение магии
+    SPELL3_NUM: 50  # видение ночью
+
+# Object #151
+51:
+  names:
+    aliases: малый_мех мех_малый
+    nominative: малый_мех
+    genitive: малого_меха
+    dative: малому_меху
+    accusative: малый_мех
+    instrumental: малым_мехом
+    prepositional: малом_мехе
+  short_desc: Небольшой дорожный мех брошен тут.
+  type: kLiquidContainer
+  material: 15  # КОЖА
+  values:
+    - 20  # объём, глотков
+    - 20  # налито, глотков
+    - 17  # тип жидкости: красного колдовского зелья
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 25
+  cost: 6100
+  rent_off: 30
+  rent_on: 30
+  max_durability: 50
+  cur_durability: 50
+  timer: 43200
+  sex: kMale
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kNeck
+    - kHold
+  extra_descriptions:
+    - keywords: малый мех
+      description: |2
+        Небольшой мех для воды вытянут вверх как груша, как раз носить на поясе.
+  extra_values:
+    MAKER_SKILL: 80
+    MAKER_STAT: 25
+    POTION_PROTO_VNUM: 0
+    POTION_SPELL1_LVL: 0
+    SPELL1_NUM: 97  # восстановление
+
+# Object #152
+52:
+  names:
+    aliases: свиток починки
+    nominative: свиток починки
+    genitive: свитка починки
+    dative: свитку починки
+    accusative: свиток починки
+    instrumental: свитком починки
+    prepositional: свитке починки
+  short_desc: Перевязанный тесьмой свиток лежит тут.
+  action_desc: |2
+    Легкое сияние окружило $n3 и медленно угасло.
+  type: kScroll
+  material: 17  # БЕРЕСТА
+  values:
+    - 30  # уровень заклинания
+    - 73  # починка
+    - 0
+    - 0
+  weight: 1
+  cost: 5000
+  rent_off: 50
+  rent_on: 5
+  max_durability: 10
+  cur_durability: 10
+  timer: 45000
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: свиток обновления
+      description: |2
+        Тугой пергаментный свиток перетянутый синей тесемкой.
+  extra_values:
+    SPELL1_NUM: 73  # починка
+
+# Object #153
+53:
+  names:
+    aliases: пузатый_бочонок бочонок_пузатый
+    nominative: пузатый_бочонок
+    genitive: пузатого_бочонка
+    dative: пузатому_бочонку
+    accusative: пузатый_бочонок
+    instrumental: пузатым_бочонком
+    prepositional: пузатом_бочонке
+  short_desc: Небольшой пузатый бочонок стоит тут.
+  type: kLiquidContainer
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 75  # объём, глотков
+    - 75  # налито, глотков
+    - 18  # тип жидкости: синего колдовского зелья
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 80
+  cost: 3100
+  rent_off: 50
+  rent_on: 50
+  max_durability: 400
+  cur_durability: 400
+  timer: 30150
+  sex: kMale
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: бочонок
+      description: |2
+        Обычный деревянный бочонок с круглыми боками.
+  extra_values:
+    MAKER_SKILL: 80
+    MAKER_STAT: 25
+    POTION_PROTO_VNUM: 0
+    POTION_SPELL1_LVL: 25
+    SPELL1_NUM: 103  # насыщение
+
+# Object #154
+54:
+  names:
+    aliases: штоф
+    nominative: штоф
+    genitive: штофа
+    dative: штофу
+    accusative: штоф
+    instrumental: штофом
+    prepositional: штофе
+  short_desc: Штоф поблескивает тут стеклом.
+  type: kLiquidContainer
+  material: 11  # СТЕКЛО
+  values:
+    - 50  # объём, глотков
+    - 50  # налито, глотков
+    - 19  # тип жидкости: белого колдовского зелья
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 55
+  cost: 1600
+  rent_off: 15
+  rent_on: 15
+  max_durability: 50
+  cur_durability: 50
+  timer: 40000
+  sex: kMale
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+  extra_descriptions:
+    - keywords: штоф
+      description: |2
+        Объемистая четырехугольная бутыль мутного стекла.
+  extra_values:
+    MAKER_SKILL: 80
+    MAKER_STAT: 25
+    POTION_PROTO_VNUM: 0
+    POTION_SPELL1_LVL: 0
+    SPELL1_NUM: 19  # видеть невидимое
+
+# Object #155
+55:
+  names:
+    aliases: кости бабки костяные
+    nominative: костяные бабки
+    genitive: костяных бабок
+    dative: костяным бабкам
+    accusative: костяные бабки
+    instrumental: костяными бабками
+    prepositional: костяных бабках
+  short_desc: Костяные бабки заманчиво притягивают Вас.
+  type: kTrap
+  material: 13  # КОСТЬ
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 1
+  cost: 10
+  rent_off: 100
+  rent_on: 20
+  max_durability: 30
+  cur_durability: 30
+  timer: 99999
+  sex: kPoly
+  max_in_world: 100000
+  wear_flags:
+    - kTake
+    - kHold
+  triggers:
+    - 26055  # кости
+
+# Object #156
+56:
+  names:
+    aliases: простой нож
+    nominative: простой нож
+    genitive: простого ножа
+    dative: простому ножу
+    accusative: простой нож
+    instrumental: простым ножом
+    prepositional: простом ноже
+  short_desc: Маленький ножик валяется здесь.
+  type: kWeapon
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 5  # граней кубика
+    - 7  # тип атаки: резанул
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 5
+  spec_param: 144
+  max_durability: 300
+  cur_durability: 300
+  timer: 67345
+  sex: kNeutral
+  extra_flags:
+    - kNodisarm
+  wear_flags:
+    - kTake
+    - kWield
+
+# Object #157
+57:
+  names:
+    aliases: дубовый_бочонок бочонок_дубовый
+    nominative: дубовый_бочонок
+    genitive: дубового_бочонка
+    dative: дубовому_бочонку
+    accusative: дубовый_бочонок
+    instrumental: дубовым_бочонком
+    prepositional: дубовом_бочонке
+  short_desc: Крепкий дубовый бочонок стоит тут.
+  type: kLiquidContainer
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 50  # объём, глотков
+    - 0  # налито, глотков
+    - 0  # тип жидкости: воды
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 4
+  cost: 30
+  rent_off: 30
+  rent_on: 30
+  max_durability: 80
+  cur_durability: 80
+  timer: 20160
+  sex: kMale
+  max_in_world: 100000
+  wear_flags:
+    - kTake
+
+# Object #158
+58:
+  names:
+    aliases: крепкий_бочонок бочонок_крепкий
+    nominative: крепкий_бочонок
+    genitive: крепкого_бочонка
+    dative: крепкому_бочонку
+    accusative: крепкий_бочонок
+    instrumental: крепким_бочонком
+    prepositional: крепком_бочонке
+  short_desc: Маленький крепкий бочонок перекатывается под ногами.
+  type: kLiquidContainer
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 50  # объём, глотков
+    - 0  # налито, глотков
+    - 0  # тип жидкости: воды
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 4
+  cost: 30
+  rent_off: 30
+  rent_on: 30
+  max_durability: 80
+  cur_durability: 80
+  timer: 20160
+  sex: kMale
+  max_in_world: 100000
+  wear_flags:
+    - kTake
+
+# Object #159
+59:
+  names:
+    aliases: бутылка кагор
+    nominative: 'бутылка "Кагора"'
+    genitive: 'бутылки "Кагора"'
+    dative: 'бутылке "Кагора"'
+    accusative: 'бутылку "Кагора"'
+    instrumental: 'бутылкой "Кагора"'
+    prepositional: 'бутылке "Кагора"'
+  short_desc: 'Бутылка "Кагора" лежит здесь.'
+  type: kFountain
+  material: 11  # СТЕКЛО
+  values:
+    - 20  # объём, глотков
+    - 10  # налито, глотков
+    - 2  # тип жидкости: вина
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 200
+  cur_durability: 200
+  timer: 10000
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kHold
+
+# Object #160
+60:
+  names:
+    aliases: обручальное кольцо
+    nominative: обручальное кольцо
+    genitive: обручального кольца
+    dative: обручальному кольцу
+    accusative: обручальное кольцо
+    instrumental: обручальным кольцом
+    prepositional: обручальном кольце
+  short_desc: Маленькое золотое колечко лежит тут.
+  type: kWorm
+  material: 6  # ДРАГ.МЕТАЛЛ
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 500
+  cur_durability: 500
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kNodecay
+  wear_flags:
+    - kTake
+    - kFinger
+
+# Object #161
+61:
+  names:
+    aliases: бутылка мартини
+    nominative: 'бутылка "Мартини"'
+    genitive: 'бутылки "Мартини"'
+    dative: 'бутылке "Мартини"'
+    accusative: 'бутылку "Мартини"'
+    instrumental: 'бутылкой "Мартини"'
+    prepositional: 'бутылке "Мартини"'
+  short_desc: 'Забытая кем-то бутылка "Мартини" стоит здесь.'
+  type: kFountain
+  material: 11  # СТЕКЛО
+  values:
+    - 30  # объём, глотков
+    - 30  # налито, глотков
+    - 2  # тип жидкости: вина
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 35
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  extra_flags:
+    - kBless
+  wear_flags:
+    - kTake
+    - kHold
+
+# Object #162
+62:
+  names:
+    aliases: носовой платочек
+    nominative: носовой платочек с рюшами
+    genitive: носового платочка с рюшами
+    dative: носовому платочку с рюшами
+    accusative: носовой платочек с рюшами
+    instrumental: носовым платочком с рюшами
+    prepositional: носовом платочке с рюшами
+  short_desc: Носовой платочек с рюшами позабыт кем-то.
+  type: kScroll
+  material: 14  # ТКАНЬ
+  values:
+    - 30  # уровень заклинания
+    - 1  # защита
+    - 1  # защита
+    - 1  # защита
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 10
+  cur_durability: 10
+  timer: 300
+  sex: kNeutral
+  wear_flags:
+    - kTake
+  extra_values:
+    SPELL1_NUM: 1  # защита
+    SPELL2_NUM: 1  # защита
+    SPELL3_NUM: 1  # защита
+
+# Object #163
+63:
+  names:
+    aliases: маленький кинжал
+    nominative: маленький кинжал
+    genitive: маленького кинжала
+    dative: маленькому кинжалу
+    accusative: маленький кинжал
+    instrumental: маленьким кинжалом
+    prepositional: маленьком кинжале
+  short_desc: Небольшой короткий кинжал лежит тут.
+  type: kWeapon
+  material: 4  # СТАЛЬ
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 5  # граней кубика
+    - 11  # тип атаки: уколол
+  weight: 3
+  cost: 10
+  rent_off: 10
+  rent_on: 0
+  spec_param: 144
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+  extra_descriptions:
+    - keywords: маленький кинжал
+      description: |2
+        Вы видите короткий маленький кинжал, остро
+        заточенный с обеих сторон.
+
+# Object #164
+64:
+  names:
+    aliases: простая палица
+    nominative: простая палица
+    genitive: простой палицы
+    dative: простой палице
+    accusative: простую палицу
+    instrumental: простой палицей
+    prepositional: простой палице
+  short_desc: Небольших размеров деревянная дубина лежит тут.
+  type: kWeapon
+  material: 8  # ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 6  # граней кубика
+    - 5  # тип атаки: огрел
+  weight: 5
+  cost: 9
+  rent_off: 9
+  rent_on: 0
+  spec_param: 141
+  max_durability: 50
+  cur_durability: 50
+  timer: 43200
+  sex: kFemale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kWield
+  extra_descriptions:
+    - keywords: простая палица
+      description: |2
+        Вы видите самую обыкновенную грубую палицу,
+        не очень хорошего качества.
+
+# Object #165
+65:
+  names:
+    aliases: большая алебарда
+    nominative: большая алебарда
+    genitive: большой алебарды
+    dative: большой алебарде
+    accusative: большую алебарду
+    instrumental: большой алебардой
+    prepositional: большой алебарде
+  short_desc: Большая алебарда лежит тут.
+  type: kWeapon
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 2  # число бросков кубика
+    - 6  # граней кубика
+    - 3  # тип атаки: рубанул
+  weight: 20
+  cost: 20
+  rent_off: 20
+  rent_on: 0
+  spec_param: 146
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kBoth
+  extra_descriptions:
+    - keywords: большая алебарда
+      description: |2
+        Вы видите длинную деревянную алебарду,
+        с крепким стальным наконечником и крюком 
+        на конце.
+
+# Object #166
+66:
+  names:
+    aliases: длинный нож
+    nominative: длинный нож
+    genitive: длинного ножа
+    dative: длинному ножу
+    accusative: длинный нож
+    instrumental: длинным ножом
+    prepositional: длинном ноже
+  short_desc: Длинный нож лежит тут.
+  type: kWeapon
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 5  # граней кубика
+    - 11  # тип атаки: уколол
+  weight: 5
+  cost: 7
+  rent_off: 7
+  rent_on: 0
+  spec_param: 147
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kMale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+  extra_descriptions:
+    - keywords: длинный нож
+      description: |2
+        Вы видите длинный нож, заточенный до яркого
+        блеска с одной стороны.
+
+# Object #167
+67:
+  names:
+    aliases: простой лук
+    nominative: простой лук
+    genitive: простого лука
+    dative: простому луку
+    accusative: простой лук
+    instrumental: простым луком
+    prepositional: простом луке
+  short_desc: Небольшой простенький лук лежит тут.
+  type: kWeapon
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 2  # число бросков кубика
+    - 6  # граней кубика
+    - 9  # тип атаки: подстрелил
+  weight: 10
+  cost: 20
+  rent_off: 20
+  rent_on: 0
+  spec_param: 154
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kMale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kBoth
+  extra_descriptions:
+    - keywords: простой лук
+      description: |2
+        Вы видите самый обыкновенный лук, сделанный из
+        не очень подходящего дерева с тоненькой тетивой.
+
+# Object #168
+68:
+  names:
+    aliases: маленький топорик
+    nominative: маленький топорик
+    genitive: маленького топорика
+    dative: маленькому топорику
+    accusative: маленький топорик
+    instrumental: маленьким топориком
+    prepositional: маленьком топорике
+  short_desc: Маленький топорик лежит тут.
+  type: kWeapon
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 6  # граней кубика
+    - 3  # тип атаки: рубанул
+  weight: 13
+  cost: 10
+  rent_off: 10
+  rent_on: 0
+  spec_param: 142
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kMale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kWield
+  extra_descriptions:
+    - keywords: маленький топорик
+      description: |2
+        Вы видите маленький топорик, пригодный только
+        что для обрабоки не очень толстого дерева.
+
+# Object #169
+69:
+  names:
+    aliases: бронзовый меч
+    nominative: бронзовый меч
+    genitive: бронзового меча
+    dative: бронзовому мечу
+    accusative: бронзовый меч
+    instrumental: бронзовым мечом
+    prepositional: бронзовом мече
+  short_desc: Сделанный из бронзы меч с короткой деревянной рукояткой лежит тут.
+  type: kWeapon
+  material: 2  # БРОНЗА
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 6  # граней кубика
+    - 7  # тип атаки: резанул
+  weight: 17
+  cost: 10
+  rent_off: 10
+  rent_on: 0
+  spec_param: 143
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kWield
+  extra_descriptions:
+    - keywords: бронзовый меч
+      description: |2
+        Вы видите средней длинны меч, выкованный из бронзы.
+        Не очень хорошее оружие.
+
+# Object #170
+70:
+  names:
+    aliases: деревянная палица
+    nominative: деревянная палица
+    genitive: деревянной палицы
+    dative: деревянной палице
+    accusative: деревянную палицу
+    instrumental: деревянной палицей
+    prepositional: деревянной палице
+  short_desc: Большая дубина, сделанная из ветки дуба, лежит тут.
+  type: kWeapon
+  material: 9  # ПРОЧНОЕ.ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 3  # число бросков кубика
+    - 2  # граней кубика
+    - 6  # тип атаки: сокрушил
+  weight: 22
+  cost: 60
+  rent_off: 60
+  rent_on: 4
+  spec_param: 141
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kWield
+  extra_descriptions:
+    - keywords: деревянная палица
+      description: |2
+        Вы видите обыкновенную деревянную палицу,
+        коими обычно вооружаются сильные телом 
+        мужи, идя в смертный бой.
+
+# Object #171
+71:
+  names:
+    aliases: длинный батог
+    nominative: длинный батог
+    genitive: длинного батога
+    dative: длинному батогу
+    accusative: длинный батог
+    instrumental: длинным батогом
+    prepositional: длинном батоге
+  short_desc: Длинный батог лежит тут.
+  type: kWeapon
+  material: 8  # ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 8  # граней кубика
+    - 6  # тип атаки: сокрушил
+  weight: 4
+  cost: 60
+  rent_off: 60
+  rent_on: 4
+  spec_param: 145
+  max_durability: 30
+  cur_durability: 30
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kWield
+
+# Object #172
+72:
+  names:
+    aliases: стальной меч
+    nominative: стальной меч
+    genitive: стального меча
+    dative: стальному мечу
+    accusative: стальной меч
+    instrumental: стальным мечом
+    prepositional: стальном мече
+  short_desc: Стальной меч лежит здесь.
+  type: kWeapon
+  material: 4  # СТАЛЬ
+  values:
+    - 0  # не используется
+    - 2  # число бросков кубика
+    - 3  # граней кубика
+    - 3  # тип атаки: рубанул
+  weight: 12
+  cost: 56
+  rent_off: 56
+  rent_on: 4
+  spec_param: 143
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+    - kBoth
+  extra_descriptions:
+    - keywords: стальной меч
+      description: |2
+        Вы видите длинный стальной меч, с крепкой
+        деревянной рукоятью.
+
+# Object #173
+73:
+  names:
+    aliases: булава
+    nominative: булава
+    genitive: булавы
+    dative: булаве
+    accusative: булаву
+    instrumental: булавой
+    prepositional: булаве
+  short_desc: Булава лежит тут.
+  type: kWeapon
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 0  # не используется
+    - 2  # число бросков кубика
+    - 3  # граней кубика
+    - 5  # тип атаки: огрел
+  weight: 10
+  cost: 56
+  rent_off: 56
+  rent_on: 4
+  spec_param: 145
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+    - kBoth
+  extra_descriptions:
+    - keywords: булава
+      description: |2
+        Вы видите здоровенную булаву - самое подходящее
+        оружие для любителей убить семерых одним махом.
+
+# Object #174
+74:
+  names:
+    aliases: кистень
+    nominative: кистень
+    genitive: кистеня
+    dative: кистеню
+    accusative: кистень
+    instrumental: кистенем
+    prepositional: кистене
+  short_desc: Плеть с металлическими гирьками лежит тут.
+  type: kWeapon
+  material: 8  # ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 1  # число бросков кубика
+    - 6  # граней кубика
+    - 2  # тип атаки: хлестнул
+  weight: 13
+  cost: 10
+  rent_off: 10
+  rent_on: 0
+  spec_param: 145
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kMale
+  max_in_world: 100000
+  extra_flags:
+    - kNosell
+  wear_flags:
+    - kTake
+    - kWield
+  extra_descriptions:
+    - keywords: кистень
+      description: |2
+        Вы видите длинную плеть с железными шариками, 
+        висящими на конце.
+
+# Object #175
+75:
+  names:
+    aliases: простой самострел
+    nominative: простой самострел
+    genitive: простого самострела
+    dative: простому самострелу
+    accusative: простой самострел
+    instrumental: простым самострелом
+    prepositional: простом самостреле
+  short_desc: Странное оружие с тетивой и курком на рукояти лежит тут.
+  type: kWeapon
+  material: 8  # ДЕРЕВО
+  values:
+    - 0  # не используется
+    - 2  # число бросков кубика
+    - 4  # граней кубика
+    - 9  # тип атаки: подстрелил
+  weight: 16
+  cost: 100
+  rent_off: 100
+  rent_on: 10
+  spec_param: 154
+  max_durability: 75
+  cur_durability: 75
+  timer: 43200
+  sex: kMale
+  wear_flags:
+    - kTake
+    - kWield
+    - kBoth
+  extra_descriptions:
+    - keywords: простой самострел
+      description: |2
+        Вы видите мудреный механизм, похожий на лук,
+        но он явно удобнее лука так как позволяет
+        целиться из него, используя только одну руку.
+
+# Object #176
+76:
+  names:
+    aliases: железная дубина
+    nominative: железная дубина
+    genitive: железной дубины
+    dative: железной дубине
+    accusative: железную дубину
+    instrumental: железной дубиной
+    prepositional: железной дубине
+  short_desc: Толстый железный прут лежит тут.
+  type: kWeapon
+  material: 3  # ЖЕЛЕЗО
+  values:
+    - 0  # не используется
+    - 2  # число бросков кубика
+    - 5  # граней кубика
+    - 5  # тип атаки: огрел
+  weight: 22
+  cost: 150
+  rent_off: 150
+  rent_on: 10
+  spec_param: 141
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kWield
+  extra_descriptions:
+    - keywords: железная дубина
+      description: |2
+        Вы видите тяжелую и длинную железную дубину.
+
+# Object #177
+77:
+  names:
+    aliases: склянка туманная жидкость
+    nominative: склянка с туманной жидкостью
+    genitive: склянки с туманной жидкостью
+    dative: склянке с туманной жидкостью
+    accusative: склянку с туманной жидкостью
+    instrumental: склянкой с туманной жидкостью
+    prepositional: склянке с туманной жидкостью
+  short_desc: Небольшая склянка с дымчатой туманной жидкостью стоит тут.
+  type: kPotion
+  material: 11  # СТЕКЛО
+  values:
+    - 20  # уровень заклинания
+    - 57  # полет
+    - 0
+    - 0  # сила зелья (potency)
+  weight: 1
+  cost: 5000
+  rent_off: 50
+  rent_on: 50
+  max_durability: 10
+  cur_durability: 10
+  timer: 28800
+  sex: kFemale
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: склянка туманная жидкость
+      description: |2
+        Небольшая пузатая склянка наполненная дымчатой,
+        почти невесомой жидкостью.
+  extra_values:
+    SPELL1_NUM: 57  # полет
+
+# Object #178
+78:
+  names:
+    aliases: блеклый полупрозрачный свиток
+    nominative: полупрозрачный свиток
+    genitive: полупрозрачного свитка
+    dative: полупрозрачному свитку
+    accusative: полупрозрачный свиток
+    instrumental: полупрозрачным свитком
+    prepositional: полупрозрачном свитке
+  short_desc: Блеклый свиток валяется тут в пыли.
+  type: kScroll
+  material: 16  # ОРГАНИКА
+  values:
+    - 20  # уровень заклинания
+    - 35  # снять проклятие
+    - 0
+    - 0
+  weight: 1
+  cost: 2000
+  rent_off: 20
+  rent_on: 20
+  max_durability: 10
+  cur_durability: 10
+  timer: 10080
+  sex: kMale
+  max_in_world: 50
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: полупрозрачный свиток
+      description: |2
+        Короткий свиток полупрозрачной пленки -- то ли рыбьей
+        кожи, то ли бычьего пузыря, покрытый диковинными рунами.
+  extra_values:
+    SPELL1_NUM: 35  # снять проклятие
+
+# Object #179
+79:
+  names:
+    aliases: теплый свиток
+    nominative: теплый свиток
+    genitive: теплого свитка
+    dative: теплому свитку
+    accusative: теплый свиток
+    instrumental: теплым свитком
+    prepositional: теплом свитке
+  short_desc: Небольшой пергаментный свиток лежит тут.
+  type: kBook
+  material: 15  # КОЖА
+  values:
+    - 0  # Книга заклинаний
+    - 1
+    - 0
+    - 0
+  weight: 1
+  cost: 2000
+  rent_off: 10
+  rent_on: 10
+  max_durability: 10
+  cur_durability: 10
+  timer: 10080
+  sex: kMale
+  max_in_world: 50
+  wear_flags:
+    - kTake
+    - kHold
+  extra_descriptions:
+    - keywords: теплый свиток
+      description: |2
+        Небольшой свиток обрывка перогамента, стянутый
+        кожаным шнурком. На ощупь он странно теплый, словно
+        лежал на солнцепеке.
+
+# Object #180
+80:
+  names:
+    aliases: цветок смерти
+    nominative: цветок смерти
+    genitive: цветка смерти
+    dative: цветку смерти
+    accusative: цветок смерти
+    instrumental: цветком смерти
+    prepositional: цветке смерти
+  short_desc: Черная колючая роза, именнуемая цветком смерти, лежит здесь.
+  action_desc: |2
+    Колючка! Что еще можно сказать?
+  type: kWorm
+  material: 16  # ОРГАНИКА
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 100
+  cur_durability: 100
+  timer: 1000
+  sex: kNeutral
+  extra_flags:
+    - kHum
+  wear_flags:
+    - kTake
+    - kNeck
+    - kHold
+
+# Object #181
+81:
+  names:
+    aliases: длинный нож
+    nominative: длинный нож
+    genitive: длинного ножа
+    dative: длинному ножу
+    accusative: длинный нож
+    instrumental: длинным ножом
+    prepositional: длинном ноже
+  short_desc: Нож с длинным лезвием лежит перед Вами.
+  type: kStaff
+  material: 0  # НЕИЗВЕСТЕН
+  values:
+    - 0  # уровень заклинания
+    - 0  # всего зарядов
+    - 0  # осталось зарядов
+    - -1
+  weight: 0
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: -1
+  cur_durability: -1
+  timer: 500
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kHold
+  applies:
+    - location: 3  # интеллект
+      modifier: -4
+
+# Object #182
+82:
+  names:
+    aliases: шляпа
+    nominative: шляпа Росвалда
+    genitive: шляпы Росвалда
+    dative: шляпе Росвалда
+    accusative: шляпу Росвалда
+    instrumental: шляпой Росвалда
+    prepositional: шляпе Росвалда
+  short_desc: Странная шляпа болотного цвета парит в воздухе.
+  type: kWorm
+  material: 14  # ТКАНЬ
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 100
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 100
+  cur_durability: 0
+  timer: 99999
+  sex: kNeutral
+  extra_flags:
+    - kMagic
+    - kBless
+    - kFlying
+    - kThrowing
+  wear_flags:
+    - kTake
+    - kHead
+  affect_flags:
+    - kWaterWalk
+    - kInfravision
+    - kNoTrack
+    - kFly
+
+# Object #183
+83:
+  names:
+    aliases: лунный обруч с сапфиром
+    nominative: лунный обруч с сапфиром
+    genitive: лунного обруча с сапфиром
+    dative: лунному обручу с сапфиром
+    accusative: лунный обруч с сапфиром
+    instrumental: лунным обручем с сапфиром
+    prepositional: лунном обруче с сапфиром
+  short_desc: Изящный обруч с красивым камнем лежит здесь, блеская в свете луны
+  type: kWorm
+  material: 13  # КОСТЬ
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 5
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 40000
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kHead
+
+# Object #184
+84:
+  names:
+    aliases: рубиновый пояс булатной пряжка
+    nominative: рубиновый пояс с булатной пряжкой
+    genitive: рубинового пояса с булатной пряжкой
+    dative: рубиновому поясу с булатной пряжкой
+    accusative: рубиновый пояс с булатной пряжкой
+    instrumental: рубиновым поясом с булатной пряжкой
+    prepositional: рубиновом поясе с булатной пряжкой
+  short_desc: Рубиновый пояс с булатной пряжкой лежит здесь.
+  type: kWorm
+  material: 11  # СТЕКЛО
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kWaist
+
+# Object #185
+85:
+  names:
+    aliases: лук повелитель ужас
+    nominative: лук Повелителя Ужасов
+    genitive: лука Повелителя Ужасов
+    dative: луку Повелителя Ужасов
+    accusative: лук Повелителя Ужасов
+    instrumental: луком Повелителя Ужасов
+    prepositional: луке Повелителя Ужасов
+  short_desc: Огромный тяжелый лук, слово черное пятно, лежит здесь, испуская магические силы.
+  action_desc: |2
+    Огромный, просто гиганский лук! Нужна большая сила, что бы хоть немного поднять его.
+  type: kWeapon
+  material: 7  # КРИСТАЛЛ
+  values:
+    - 10  # не используется
+    - 50  # число бросков кубика
+    - 4  # граней кубика
+    - 13  # тип атаки: лягнул
+  weight: 1
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  spec_param: 154
+  max_durability: 1
+  cur_durability: 1
+  timer: 43200
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kWield
+    - kHold
+    - kBoth
+
+# Object #186
+86:
+  names:
+    aliases: доспех покрыт драконья кровь
+    nominative: доспех, покрытый драконьей кровью
+    genitive: доспеха, покрытого драконьей кровью
+    dative: доспеху, покрытому драконьей кровью
+    accusative: доспех, покрытый драконьей кровью
+    instrumental: доспехом, покрытым драконьей кровью
+    prepositional: доспехе, покрытом драконьей кровью
+  short_desc: Тяжелый массивный доспех лежит здесь, и алая кровь дракона видна на нем.
+  type: kArmor
+  material: 5  # КОВАНАЯ.СТАЛЬ
+  values:
+    - 40  # изменяет AC
+    - 40  # изменяет броню
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  extra_flags:
+    - kGlow
+  wear_flags:
+    - kTake
+    - kBody
+
+# Object #187
+87:
+  names:
+    aliases: овальное кольцо бессмертие
+    nominative: овальное кольцо бессмертия
+    genitive: овального кольца бессмертия
+    dative: овальному кольцу бессмертия
+    accusative: овальное кольцо бессмертия
+    instrumental: овальным кольцом бессмертия
+    prepositional: овальном кольце бессмертия
+  short_desc: Узкое кольцо овальной формы лежит здесь, весело играя с лучем света.
+  type: kArmor
+  material: 11  # СТЕКЛО
+  values:
+    - 20  # изменяет AC
+    - 20  # изменяет броню
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  extra_flags:
+    - kHum
+  wear_flags:
+    - kTake
+    - kFinger
+
+# Object #188
+88:
+  names:
+    aliases: перстень любви
+    nominative: перстень Любви
+    genitive: перстеня Любви
+    dative: перстеню Любви
+    accusative: перстень Любви
+    instrumental: перстенем Любви
+    prepositional: перстене Любви
+  short_desc: Перстень с огромным камнем в центре неприметно лежит здесь.
+  type: kArmor
+  material: 6  # ДРАГ.МЕТАЛЛ
+  values:
+    - 20  # изменяет AC
+    - 20  # изменяет броню
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kFinger
+
+# Object #189
+89:
+  names:
+    aliases: амулет зубов вампир
+    nominative: амулет из зубов вампира
+    genitive: амулета из зубов вампира
+    dative: амулету из зубов вампира
+    accusative: амулет из зубов вампира
+    instrumental: амулетом из зубов вампира
+    prepositional: амулете из зубов вампира
+  short_desc: Амулет из страшных зубов лежит здесь.
+  type: kWorm
+  material: 10  # КЕРАМИКА
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kNeck
+
+# Object #190
+90:
+  names:
+    aliases: огромный камень имена
+    nominative: огромный камень
+    genitive: огромного камня
+    dative: огромному камню
+    accusative: огромный камень
+    instrumental: огромным камнем
+    prepositional: огромном камне
+  short_desc: Огромный камень, исписанный зловещими рунами, притягивает ваш взор.
+  type: kFountain
+  material: 12  # КАМЕНЬ
+  values:
+    - 999  # объём, глотков
+    - 999  # налито, глотков
+    - 1  # тип жидкости: пива
+    - 0  # отравлено (0 нет, 1 да, >1 таймер)
+  weight: 1004
+  cost: 0
+  rent_off: 0
+  rent_on: 0
+  max_durability: 100
+  cur_durability: 100
+  timer: 43200
+  sex: kMale
+  max_in_world: 1
+  extra_flags:
+    - kGlow
+    - kHum
+    - kNodecay
+  extra_descriptions:
+    - keywords: огромный камень имена
+      description: |2
+        Эпиграф: 'Прежде чем выбрать имя своего персонажа - подумайте: а не
+        окажется ли он в Комнате Имени...'
+        1) Не забывайте, что сей мир создан и продолжает существовать благодаря
+        мудрым бессмертным. Поэтому если они посчитали, что Ваше имя не подходит
+        этому миру - значит так оно и есть. И сильно спорить с этим не нужно.
+        2) Какие имена брать не следует?
+        - Имена богов религий и мифологий. (Сварог, Иегова, Гермес, Вотан, Дагда)
+        - Схожие до степени смешения с именами активно играющих персонажей.
+        (Славомир - Словомир).
+        - Имена, написанные с ошибками. (Егнат вместо Игнат)
+        - Слова, не являющиеся именами. (Валенок, Топор, Коленвал)
+        - Явно не вписывающиеся в антураж мира Древней Руси. (Мбванга, Иоситоси,
+          Джон, Джамалугма)
+        - Являющиеся ласкательными и уменьшительными формами имен. (Олежек, Мишенька,
+          Мариночка, Леха)
+        - Имена слишком известных персонажей (реальных и вымышленных), не связанных
+          с миром Древней Руси. (Гэндальф, Гермиона, Ушаков)
+        - Имена, являющиеся бессмысленным набором букв. (Ырыны, Грпрнк)
+        - Грубые, нецензурные и двусмысленные имена. (Примеры придумайте сами)
+        3) Каким же имя должно быть чтобы его одобрили?
+        Идеальный выбор - не противоречащее правилам славянское имя. При некоторой
+        осмотрительности можно выбрать скандинавское, западнославянское или греческое
+        имя.
+        4) Если Вы сомневаетесь в имени своем - спросите дружеского совета у Богов
+        (воззвать текст) или у опытных игроков хотя бы. Чтобы потом 'не было мучительно
+        больно за прожитые годы'.
+        5) Если у вас проблемы с выбором имени, вы можете воспользоваться этими ссылками:
+        http://all-names.narod.ru/
+        http://www.xpomo.com/ruskolan/liter/slavnames.htm
+        http://www.devichnik.ru/9810/imia.html
+        http://paganism.msk.ru/name/name.htm
+        http://www.nasled.org/vera/Muzh_imena.htm (нижнее подчеркивание вместо пробела)
+        http://www.nasled.org/vera/Zhen_imena.htm (нижнее подчеркивание вместо пробела)
+        http://boyan.narod.ru/slav_name.html
+        http://ru.narod.ru/imn/mujskie.htm
+        http://ru.narod.ru/imn/jenskie.htm
+        http://soviduplo.narod.ru/saga/names.htm
+        ________
+        Внимание: то, что имя взято с указанных сайтов НЕ ГАРАНТИРУЕТ его одобрения!
+  triggers:
+    - 141  # тест клан
+
+# Object #191
+91:
+  names:
+    aliases: хрустальный трон
+    nominative: хрустальный трон
+    genitive: хрустального трона
+    dative: хрустальному трону
+    accusative: хрустальный трон
+    instrumental: хрустальным троном
+    prepositional: хрустальном троне
+  short_desc: Хрустальный трон величественно стоит тут.
+  action_desc: |2
+    Трон, выточенный из целой друзы горного хрусталя, переливается всеми оттенками
+    синего и фиолетового. На спинке трона восседает Ворон. У подножия растянулся
+    огромный Волк. Небрежно брошенные лазурные подушки наводят на мысль, что трон
+    явно женский.
+  type: kLightSource
+  material: 7  # КРИСТАЛЛ
+  values:
+    - 0
+    - 0
+    - 0  # длительность горения (0=погасла, -1=вечный)
+    - 0
+  weight: 10000
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 49999
+  sex: kNeutral
+  max_in_world: 1
+  extra_flags:
+    - kHum
+    - kNodecay
+    - kFlying
+    - kFire
+
+# Object #192
+92:
+  names:
+    aliases: креналиновый сарафан
+    nominative: креналиновый сарафан
+    genitive: креналиного сарафана
+    dative: креналиновому сарафану
+    accusative: креналиновый сарафан
+    instrumental: креналиновым сарафаном
+    prepositional: креналиновом сарафане
+  short_desc: Полупрозрачная накидка лежит здесь, испуская зло.
+  type: kArmor
+  material: 14  # ТКАНЬ
+  values:
+    - 1  # изменяет AC
+    - 1  # изменяет броню
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  extra_flags:
+    - kHum
+  wear_flags:
+    - kTake
+    - kBody
+    - kShoulders
+  applies:
+    - location: 1  # сила
+      modifier: 90
+    - location: 2  # ловкость
+      modifier: 90
+
+# Object #193
+93:
+  names:
+    aliases: туфельки-лепестки в капельках росы
+    nominative: туфельки-лепестки в капельках росы
+    genitive: туфелек-лепестков в капельках росы
+    dative: туфелькам-лепесткам в капельках росы
+    accusative: туфельки-лепестки в капельках росы
+    instrumental: туфельками-лепестками в капельках росы
+    prepositional: туфельках-лепестках в капельках росы
+  short_desc: Красивые туфельки из лепестков мягко парят над землей.
+  type: kWorm
+  material: 15  # КОЖА
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 40000
+  sex: kNeutral
+  extra_flags:
+    - kFlying
+  wear_flags:
+    - kTake
+    - kFeet
+
+# Object #194
+94:
+  names:
+    aliases: поножи чешуек дракона
+    nominative: поножи из чешуек дракона
+    genitive: поножей из чешуек дракона
+    dative: поножам из чешуек дракона
+    accusative: поножи из чешуек дракона
+    instrumental: поножами из чешуек дракона
+    prepositional: поножах из чешуек дракона
+  short_desc: Чешуйчатые поножи лежат здесь.
+  type: kWorm
+  material: 16  # ОРГАНИКА
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kLegs
+
+# Object #195
+95:
+  names:
+    aliases: щит короля скелетов.
+    nominative: щит короля скелетов
+    genitive: щита короля скелетов
+    dative: щиту короля скелетов
+    accusative: щит короля скелетов
+    instrumental: щитом короля скелетов
+    prepositional: щите короля скелетов
+  short_desc: Круглый костянной щит лежит здесь.
+  type: kWorm
+  material: 13  # КОСТЬ
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 1
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kShield
+
+# Object #196
+96:
+  names:
+    aliases: наручи покрытые льдом
+    nominative: наручи, покрытые льдом
+    genitive: наручей, покрытых льдом
+    dative: наручам, покрытым льдом
+    accusative: наручи, покрытые льдом
+    instrumental: наручами, покрытыми льдом
+    prepositional: наручах, покрытых льдом
+  short_desc: Наручи, скованные во льду, лежат здесь.
+  type: kWorm
+  material: 7  # КРИСТАЛЛ
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kHands
+
+# Object #197
+97:
+  names:
+    aliases: огненный шар
+    nominative: огненный шар
+    genitive: огненного шара
+    dative: огненному шару
+    accusative: огненный шар
+    instrumental: огненным шаром
+    prepositional: огненном шаре
+  short_desc: Яркий огнненый шар завис под потолком.
+  type: kWorm
+  material: 16  # ОРГАНИКА
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 1
+  cost: 1
+  rent_off: 1
+  rent_on: 1
+  max_durability: 500
+  cur_durability: 500
+  timer: 2000
+  sex: kNeutral
+  wear_flags:
+    - kFinger
+    - kNeck
+    - kBody
+    - kHead
+    - kLegs
+    - kFeet
+    - kHands
+    - kArms
+    - kShield
+    - kShoulders
+    - kWaist
+    - kWrist
+    - kWield
+    - kHold
+    - kBoth
+
+# Object #198
+98:
+  names:
+    aliases: магический браслет
+    nominative: магический браслет
+    genitive: магического браслета
+    dative: магическому браслету
+    accusative: магический браслет
+    instrumental: магическим браслетом
+    prepositional: магическом браслете
+  short_desc: Магический браслет лежит здесь.
+  type: kWorm
+  material: 16  # ОРГАНИКА
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 1
+  cost: 1
+  rent_off: 0
+  rent_on: 1
+  max_durability: 500
+  cur_durability: 500
+  timer: 30
+  sex: kNeutral
+  wear_flags:
+    - kTake
+    - kFinger
+    - kWrist
+  affect_flags:
+    - kMagicGlass
+  applies:
+    - location: 36  # размер
+      modifier: -5
+    - location: 39  # реакция
+      modifier: -10
+  triggers:
+    - 166  # Тестим echo
+
+# Object #199
+99:
+  names:
+    aliases: перчатки позорного мастерства
+    nominative: '&Mперчатки позорного мастерства&n'
+    genitive: '&Mперчаток позорного мастерства&n'
+    dative: '&Mперчаткам позорного мастерства&n'
+    accusative: '&Mперчатки позорного мастерства&n'
+    instrumental: '&Mперчатками позорного мастерства&n'
+    prepositional: '&Mперчатках позорного мастерства&n'
+  short_desc: '&MПерчатки жадно лежат на земле.&n'
+  type: kWorm
+  material: 15  # КОЖА
+  values:
+    - 0
+    - 0
+    - 0
+    - 0
+  weight: 10
+  cost: 10
+  rent_off: 10
+  rent_on: 10
+  max_durability: 500
+  cur_durability: 500
+  timer: 21000
+  sex: kPoly
+  minimum_remorts: -1
+  wear_flags:
+    - kTake
+    - kHands
+  applies:
+    - location: 2  # ловкость
+      modifier: 15
+    - location: 13  # макс.жизнь
+      modifier: 80
+    - location: 41  # удача
+      modifier: 15
+    - location: 39  # реакция
+      modifier: -15
+  skills:
+    - skill_id: 6  # отравить
+      value: 45
+    - skill_id: 32  # разжечь костер
+      value: 180
+    - skill_id: 139  # украсть
+      value: 180
+    - skill_id: 157  # уклониться
+      value: 115

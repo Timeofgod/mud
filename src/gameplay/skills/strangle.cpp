@@ -1,6 +1,9 @@
 //Modified by Svetodar 14.09.2023
 
 #include "strangle.h"
+#include "gameplay/mechanics/mount.h"
+#include "skill_messages.h"
+#include "engine/db/global_objects.h"
 #include "chopoff.h"
 
 #include "gameplay/fight/pk.h"
@@ -12,21 +15,22 @@
 #include <cmath>
 
 void do_strangle(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
-	if (!ch->GetSkill(ESkill::kStrangle)) {
-		SendMsgToChar("Вы не умеете этого.\r\n", ch);
+	if (!GetSkill(ch, ESkill::kStrangle)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStrangle, ESkillMsg::kDontKnowSkill) + "\r\n", ch);
 		return;
 	}
 
-	CharData *vict = FindVictim(ch, argument);
+	std::string target_name;
+	CharData *vict = FindVictim(ch, argument, target_name);
 	if (!vict) {
-		SendMsgToChar("Кого вы жаждете удавить?\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStrangle, ESkillMsg::kNoTarget) + "\r\n", ch);
 		return;
 	}
 
 	if (!may_kill_here(ch, vict, argument)) {
 		return;
 	}
-	if (!check_pkill(ch, vict, arg)) {
+	if (!check_pkill(ch, vict, target_name)) {
 		return;
 	}
 
@@ -34,13 +38,13 @@ void do_strangle(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 }
 
 void do_strangle(CharData *ch, CharData *vict) {
-	if (!ch->GetSkill(ESkill::kStrangle)) {
+	if (!GetSkill(ch, ESkill::kStrangle)) {
 		log("ERROR: вызов удавки для персонажа %s (%d) без проверки умения", ch->get_name().c_str(), GET_MOB_VNUM(ch));
 		return;
 	}
 
-	if (ch->HasCooldown(ESkill::kGlobalCooldown)) {
-		SendMsgToChar("Вам нужно набраться сил.\r\n", ch);
+	if (ch->Skills().HasActiveCooldown(ESkill::kGlobalCooldown)) {
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStrangle, ESkillMsg::kOnCooldown) + "\r\n", ch);
 		return;
 	}
 
@@ -49,18 +53,18 @@ void do_strangle(CharData *ch, CharData *vict) {
 		return;
 	}
 
-	if (IS_UNDEAD(vict) || GET_RACE(vict) == ENpcRace::kFish ||
-		GET_RACE(vict) == ENpcRace::kPlant || GET_RACE(vict) == ENpcRace::kConstruct) {
+	// issue.npc-races: only a breathing (race <respiration/>), non-undead victim can be strangled.
+	if (!CanBreathe(vict) || vict->IsFlagged(EMobFlag::kUndead)) {
 		SendMsgToChar("Вы бы еще верстовой столб удавить попробовали...\r\n", ch);
 		return;
 	}
 
 	if (vict == ch) {
-		SendMsgToChar("Воспользуйтесь услугами княжеского палача. Постоянным клиентам - скидки!\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStrangle, ESkillMsg::kCantTargetSelf) + "\r\n", ch);
 		return;
 	}
 
-	if (IsAffectedBySpellWithCasterId(ch, vict, ESpell::kStrangle)) {
+	if (IsAffectedWithCasterId(ch, vict, EAffect::kStrangled)) {
 		act("Не получится - $N уже понял$G, что от Вас можно ожидать всякого!",
 			false, ch, nullptr, vict, kToChar);
 		return;
@@ -75,10 +79,12 @@ void go_strangle(CharData *ch, CharData *vict) {
 	}
 
 	if (ch->GetPosition() < EPosition::kFight) {
-		SendMsgToChar("Вам стоит встать на ноги.\r\n", ch);
+		SendMsgToChar(MUD::SkillMessages().GetMessage(ESkill::kStrangle, ESkillMsg::kGetOnFeet) + "\r\n", ch);
 		return;
 	}
-
+//	if (vict->purged()) {
+//		return;
+//	}
 	vict = TryToFindProtector(vict, ch);
 	if (!pk_agro_action(ch, vict)) {
 		return;
@@ -90,7 +96,7 @@ void go_strangle(CharData *ch, CharData *vict) {
 	bool success = result.success;
 //Формула дамага - (удавить/10)% от хп моба (максимум 10%) + удавить*2. Рандом - +/- 25%. Сделал отдельными переменными для удобочитаемости, иначе фиг разберёшь формулу.
 	int hp_percent_dam = ceil(vict->get_max_hit() * 0.03);
-	auto skill_strangle = ch->GetSkill(ESkill::kStrangle);
+	auto skill_strangle = GetSkill(ch, ESkill::kStrangle);
 	int hp_percent_dam2 = (vict->get_max_hit() / 100) * (skill_strangle / 10);
 	int flat_damage = skill_strangle * 1.5;
 	int dam = number(ceil(std::min(hp_percent_dam, hp_percent_dam2) + flat_damage) * 1.25,
@@ -102,11 +108,10 @@ void go_strangle(CharData *ch, CharData *vict) {
 	}
 
 	Affect<EApply> af;
-	af.type = ESpell::kStrangle;
 	af.duration = strangle_duration;
-	af.battleflag = kNone;
-	af.bitvector = to_underlying(EAffect::kStrangled);
-	af.caster_id = GET_UID(ch);
+	af.battleflag.clear();
+	af.affect_type = EAffect::kStrangled;
+	af.caster_id = ch->get_uid();
 
 	TrainSkill(ch, ESkill::kStrangle, success, vict);
 	if (!success) {
@@ -124,12 +129,11 @@ void go_strangle(CharData *ch, CharData *vict) {
 		}
 
 		Affect<EApply> af2;
-		af2.type = ESpell::kSilence;
 		af2.duration = silence_duration;
 		af2.modifier = -skill_strangle/3;
 		af2.location = EApply::kMagicDamagePercent;
-		af2.battleflag = kAfBattledec;
-		af2.bitvector = to_underlying(EAffect::kSilence);
+		af2.battleflag = {kAfBattledec};
+		af2.affect_type = EAffect::kSilence;
 		affect_to_char(vict, af2);
 
 		Damage dmg(SkillDmg(ESkill::kStrangle), dam, fight::kPhysDmg, nullptr);
@@ -138,14 +142,14 @@ void go_strangle(CharData *ch, CharData *vict) {
 		dmg.Process(ch, vict);
 		if (vict->GetPosition() > EPosition::kDead) {
 			SetWait(vict, 2, true);
-			if (vict->IsOnHorse()) {
+			if (mount::IsOnHorse(vict)) {
 				act("Рванув на себя, $N стащил$G Вас на землю.",
 					false, vict, nullptr, ch, kToChar);
 				act("Рванув на себя, Вы стащили $n3 на землю.",
 					false, vict, nullptr, ch, kToVict);
 				act("Рванув на себя, $N стащил$G $n3 на землю.",
 					false, vict, nullptr, ch, kToNotVict | kToArenaListen);
-				vict->DropFromHorse();
+				mount::DropFromHorse(vict);
 			}
 		}
 		SetSkillCooldownInFight(ch, ESkill::kGlobalCooldown, 2);

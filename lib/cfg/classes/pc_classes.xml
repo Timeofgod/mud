@@ -1,5 +1,5 @@
-<?xml version="1.0" encoding="koi8-r"?>
-<classes>
+<?xml version="1.0" encoding="utf-8"?>
+<pc_classes>
     <!-- Лекарь -->
     <class file="cfg/classes/pc_sorcerer.xml" id="kSorcerer">
     </class>
@@ -50,10 +50,6 @@
         плееров с мобами в один неймспейс.
      -->
     <class id="kUndefined" mode="kService">
-        <name abbr="--">
-            <singular nom="undefined" gen="undefined" dat="undefined" acc="undefined" ins="undefined" pre="undefined"/>
-            <plural nom="undefined" gen="undefined" dat="undefined" acc="undefined" ins="undefined" pre="undefined"/>
-        </name>
         <skills level_decrement="5">
         </skills>>
         <spells level_decrement="3">
@@ -62,10 +58,6 @@
         </feats>
     </class>
     <class id="kMob" mode="kService">
-        <name abbr="--">
-            <singular nom="моб" gen="моба" dat="мобу" acc="моба" ins="мобом" pre="мобе"/>
-            <plural nom="мобы" gen="мобов" dat="мобам" acc="мобов" ins="мобами" pre="мобах"/>
-        </name>
         <skills level_decrement="5">
         </skills>>
         <spells level_decrement="3">
@@ -74,10 +66,6 @@
         </feats>
     </class>
     <class id="kNpcBase" mode="kService">
-        <name abbr="--">
-            <singular nom="base_npc" gen="base_npc" dat="base_npc" acc="base_npc" ins="base_npc" pre="base_npc"/>
-            <plural nom="base_npc" gen="base_npc" dat="base_npc" acc="base_npc" ins="base_npc" pre="base_npc"/>
-        </name>
         <skills level_decrement="5">
         </skills>>
         <spells level_decrement="3">
@@ -85,4 +73,4 @@
         <feats remorts_for_slot="4">
         </feats>
     </class>
-</classes>
+</pc_classes>

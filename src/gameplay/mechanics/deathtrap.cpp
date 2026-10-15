@@ -2,17 +2,25 @@
 // Copyright (c) 2006 Krodo
 // Part of Bylins http://www.mud.ru
 
+#include <fmt/format.h>
+
 #include "deathtrap.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/minions.h"
 
 #include "gameplay/core/constants.h"
 #include "engine/entities/entities_constants.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/core/char_movement.h"
+#include "engine/core/obj_handler.h"
+#include "engine/entities/char_data.h"
 #include "gameplay/clans/house.h"
 #include "corpse.h"
 #include "gameplay/fight/fight.h"
 #include "gameplay/fight/fight_stuff.h"
 #include "gameplay/mechanics/damage.h"
 #include "boat.h"
+#include "engine/db/global_objects.h"
 
 extern void death_cry(CharData *ch, CharData *killer);
 
@@ -62,12 +70,12 @@ void deathtrap::activity() {
 	for (auto it = room_list.cbegin(); it != room_list.cend(); ++it) {
 		const auto people = (*it)->people; // make copy of people in the room
 		for (const auto i : people) {
-			if (i->purged() || i->IsNpc()) {
+			if (i->purged() || (i->IsNpc() && !IsCharmice(i))) {
 				continue;
 			}
 			std::string name = i->get_name_str();
 
-			Damage dmg(SimpleDmg(kTypeRoomdeath), std::max(1, i->get_real_max_hit() >> 2), fight::kUndefDmg);
+			Damage dmg(SimpleDmg(fight::EDamageSource::kSlowDeathTrap), std::max(1, i->get_real_max_hit() >> 2), fight::kUndefDmg);
 			dmg.flags.set(fight::kNoFleeDmg);
 
 			if (dmg.Process(i, i) < 0) {
@@ -81,12 +89,12 @@ void deathtrap::activity() {
 
 // * Логирование в отдельный файл уходов в дт для интересу и мб статистики.
 void deathtrap::log_death_trap(CharData *ch) {
-	const char *filename = "../log/death_trap.log";
+	const auto filename = runtime_config.log_dir() + "/death_trap.log";
 	static FILE *file = 0;
 	if (!file) {
-		file = fopen(filename, "a");
+		file = fopen(filename.c_str(), "a");
 		if (!file) {
-			log("SYSERR: can't open %s!", filename);
+			log("SYSERR: can't open %s!", filename.c_str());
 			return;
 		}
 		opened_files.push_back(file);
@@ -99,24 +107,28 @@ void deathtrap::log_death_trap(CharData *ch) {
 // * Попадание в обычное дт.
 int deathtrap::check_death_trap(CharData *ch) {
 	if (ch->in_room != kNowhere && !ch->IsFlagged(EPrf::kCoderinfo)) {
-		if ((ROOM_FLAGGED(ch->in_room, ERoomFlag::kDeathTrap) && !IS_IMMORTAL(ch))
+		if ((ROOM_FLAGGED(ch->in_room, ERoomFlag::kDeathTrap) && !privilege::IsImmortal(ch))
 			|| (real_sector(ch->in_room) == ESector::kOnlyFlying && !ch->IsNpc() &&
-			!IS_GOD(ch) && !AFF_FLAGGED(ch, EAffect::kFly))
+			!privilege::IsGod(ch) && !AFF_FLAGGED(ch, EAffect::kFly))
 			|| IsCharCanDrownThere(ch, ch->in_room)) {
 			ObjData *corpse;
 			deathtrap::log_death_trap(ch);
 
 			if (check_tester_death(ch, nullptr)) {
-				sprintf(buf1,
-						"Player %s died in DT (room %d) but zone is under construction.",
-						GET_NAME(ch),
-						GET_ROOM_VNUM(ch->in_room));
-				mudlog(buf1, LGH, kLvlImmortal, SYSLOG, true);
+				mudlog(fmt::format("Player {} died in DT (room {}) but zone is under construction.",
+								   GET_NAME(ch), GET_ROOM_VNUM(ch->in_room)),
+					   LGH, kLvlImmortal, SYSLOG, true);
 				return false;
 			}
 
-			sprintf(buf1, "Player %s died in DT (room %d)", GET_NAME(ch), GET_ROOM_VNUM(ch->in_room));
-			mudlog(buf1, LGH, kLvlImmortal, SYSLOG, true);
+			mudlog(fmt::format("Player {} died in DT (room {})", GET_NAME(ch), GET_ROOM_VNUM(ch->in_room)),
+				   LGH, kLvlImmortal, SYSLOG, true);
+			if (!ch->IsNpc() && stone_rebirth(ch, nullptr)) {
+				mudlog(fmt::format("Player {} saved by rebirth stone in DT (room {})",
+								   GET_NAME(ch), GET_ROOM_VNUM(ch->in_room)),
+					   LGH, kLvlImmortal, SYSLOG, true);
+				return true;
+			}
 			death_cry(ch, nullptr);
 			corpse = make_corpse(ch);
 			if (corpse != nullptr) {
@@ -148,7 +160,7 @@ bool deathtrap::IsSlowDeathtrap(int rnum) {
 /// иначе - чара в tunnel_damage() не дамагнет
 int calc_tunnel_dmg(CharData *ch, int room_rnum) {
 	if (!ch->IsNpc()
-		&& !IS_IMMORTAL(ch)
+		&& !privilege::IsImmortal(ch)
 		&& NORENTABLE(ch)
 		&& ROOM_FLAGGED(room_rnum, ERoomFlag::kTunnel)) {
 		return std::max(20, ch->get_real_max_hit() >> 3);
@@ -173,7 +185,7 @@ bool deathtrap::tunnel_damage(CharData *ch) {
 	if (dam > 0) {
 		const int room_rnum = ch->in_room;
 		const std::string name = ch->get_name_str();
-		Damage dmg(SimpleDmg(kTypeTunnerldeath), dam, fight::kUndefDmg);
+		Damage dmg(SimpleDmg(fight::EDamageSource::kTunnelDeath), dam, fight::kUndefDmg);
 		dmg.flags.set(fight::kNoFleeDmg);
 
 		if (dmg.Process(ch, ch) < 0) {

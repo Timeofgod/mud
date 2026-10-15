@@ -1,9 +1,17 @@
+#include <fmt/format.h>
+
+#include "engine/ui/cmd/do_remove.h"
+#include "gameplay/mechanics/sight.h"
+
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_equip_flags.h"
+#include "engine/core/target_resolver.h"
+#include "gameplay/mechanics/equipment.h"
+#include "gameplay/mechanics/inventory.h"
 #include "gameplay/clans/house.h"
 #include "engine/core/utils_char_obj.inl"
 
-void RemoveEquipment(CharData *ch, int pos) {
+void RemoveEquipment(CharData *ch, int pos, bool skip_total) {
 	ObjData *obj;
 
 	if (!(obj = GET_EQ(ch, pos))) {
@@ -26,7 +34,11 @@ void RemoveEquipment(CharData *ch, int pos) {
 			act("Вы прекратили использовать $o3.", false, ch, obj, nullptr, kToChar);
 			act("$n прекратил$g использовать $o3.",
 				true, ch, obj, nullptr, kToRoom | kToArenaListen);
-			PlaceObjToInventory(UnequipChar(ch, pos, CharEquipFlag::show_msg), ch);
+			CharEquipFlags flags{CharEquipFlag::show_msg};
+			if (skip_total) {
+				flags.set(CharEquipFlag::skip_total);
+			}
+			PlaceObjToInventory(UnequipChar(ch, pos, flags), ch);
 		}
 	}
 }
@@ -35,19 +47,20 @@ void do_remove(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	int i, dotmode, found;
 	ObjData *obj;
 
-	one_argument(argument, arg);
+	char name[kMaxInputLength];
+	one_argument(argument, name);
 
-	if (!*arg) {
+	if (!*name) {
 		SendMsgToChar("Снять что?\r\n", ch);
 		return;
 	}
-	dotmode = find_all_dots(arg);
+	dotmode = ParseAllPrefix(name);
 
 	if (dotmode == kFindAll) {
 		found = 0;
 		for (i = 0; i < EEquipPos::kNumEquipPos; i++) {
 			if (GET_EQ(ch, i)) {
-				RemoveEquipment(ch, i);
+				RemoveEquipment(ch, i, true);
 				found = 1;
 			}
 		}
@@ -55,45 +68,47 @@ void do_remove(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			SendMsgToChar("На вас не надето предметов этого типа.\r\n", ch);
 			return;
 		}
+		ch->obj_bonus().update(ch);
+		affect_total(ch);
 	} else if (dotmode == kFindAlldot) {
-		if (!*arg) {
+		if (!*name) {
 			SendMsgToChar("Снять все вещи какого типа?\r\n", ch);
 			return;
 		} else {
 			found = 0;
 			for (i = 0; i < EEquipPos::kNumEquipPos; i++) {
 				if (GET_EQ(ch, i)
-					&& CAN_SEE_OBJ(ch, GET_EQ(ch, i))
-					&& (isname(arg, GET_EQ(ch, i)->get_aliases())
-						|| CHECK_CUSTOM_LABEL(arg, GET_EQ(ch, i), ch))) {
-					RemoveEquipment(ch, i);
+					&& sight::CanSeeObj(ch, GET_EQ(ch, i))
+					&& (isname(name, GET_EQ(ch, i)->get_aliases())
+						|| CHECK_CUSTOM_LABEL(name, GET_EQ(ch, i), ch))) {
+					RemoveEquipment(ch, i, true);
 					found = 1;
 				}
 			}
 			if (!found) {
-				snprintf(buf, kMaxStringLength, "Вы не используете ни одного '%s'.\r\n", arg);
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Вы не используете ни одного '{}'.\r\n", name), ch);
 				return;
 			}
+			ch->obj_bonus().update(ch);
+			affect_total(ch);
 		}
 	} else        // Returns object pointer but we don't need it, just true/false.
 	{
-		if (!get_object_in_equip_vis(ch, arg, ch->equipment, &i)) {
+		if (!get_object_in_equip_vis(ch, name, ch->equipment, &i)) {
 			// если предмет не найден, то возможно игрок ввел "левая" или "правая"
-			if (!str_cmp("правая", arg)) {
+			if (!str_cmp("правая", name)) {
 				if (!GET_EQ(ch, EEquipPos::kWield)) {
 					SendMsgToChar("В правой руке ничего нет.\r\n", ch);
 				} else {
 					RemoveEquipment(ch, EEquipPos::kWield);
 				}
-			} else if (!str_cmp("левая", arg)) {
+			} else if (!str_cmp("левая", name)) {
 				if (!GET_EQ(ch, EEquipPos::kHold))
 					SendMsgToChar("В левой руке ничего нет.\r\n", ch);
 				else
 					RemoveEquipment(ch, EEquipPos::kHold);
 			} else {
-				snprintf(buf, kMaxInputLength, "Вы не используете '%s'.\r\n", arg);
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Вы не используете '{}'.\r\n", name), ch);
 				return;
 			}
 		} else {

@@ -29,6 +29,8 @@ void dg_olc_script_copy(DescriptorData *d);
 void dg_script_menu(DescriptorData *d);
 int dg_script_edit_parse(DescriptorData *d, char *arg);
 void indent_trigger(std::string &cmd, int *level);
+void ProcessLuaFormatterResults();
+void TrigeditSavePendingLuaOnCleanup(DescriptorData *d);
 
 // define the largest set of commands for as trigger
 #define MAX_CMD_LENGTH 32768    // 16k should be plenty and then some
@@ -46,6 +48,7 @@ void indent_trigger(std::string &cmd, int *level);
 #define TRIGEDIT_NARG            7
 #define TRIGEDIT_ARGUMENT        8
 #define TRIGEDIT_ADDFLAG        9
+#define TRIGEDIT_LANGUAGE       10
 
 #define OLC_SCRIPT_EDIT            82766
 #define SCRIPT_MAIN_MENU        0

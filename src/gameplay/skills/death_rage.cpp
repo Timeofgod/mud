@@ -1,13 +1,14 @@
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "gameplay/abilities/timed_abilities.h"
+#include "gameplay/magic/magic.h"
 
 void CheckDeathRage(CharData *ch) {
 	struct TimedFeat timed;
 	int prob;
 
-	if (IsAffectedBySpell(ch, ESpell::kBerserk) &&
+	if (IsAffected(ch, EAffect::kBerserk) &&
 		(ch->get_hit() > ch->get_real_max_hit() / 2)) {
-		RemoveAffectFromChar(ch, ESpell::kBerserk);
+		RemoveAffectFromChar(ch, EAffect::kBerserk);
 		SendMsgToChar("Предсмертное исступление оставило вас.\r\n", ch);
 	}
 
@@ -20,25 +21,20 @@ void CheckDeathRage(CharData *ch) {
 		ImposeTimedFeat(ch, &timed);
 
 		Affect<EApply> af;
-		af.type = ESpell::kBerserk;
-		af.duration = CalcDuration(ch, 1, 60, 30, 0, 0);
+		af.duration = CalcDuration(ch, ch, ESkill::kUndefined, 3, 0, 0, 0);
 		af.modifier = 0;
 		af.location = EApply::kNone;
-		af.battleflag = 0;
+		af.battleflag.clear();
 
 		prob = ch->IsNpc() ? 601 : (751 - GetRealLevel(ch) * 5);
-		if (number(1, 1000) < prob) {
-			af.bitvector = to_underlying(EAffect::kBerserk);
-			act("Вас обуяла предсмертная ярость!", false, ch, nullptr, nullptr, kToChar);
-			act("$n0 исступленно взвыл$g и бросил$u на противника!", false, ch, nullptr, vict, kToNotVict);
-			act("$n0 исступленно взвыл$g и бросил$u на вас!", false, ch, nullptr, vict, kToVict);
-		} else {
-			af.bitvector = 0;
-			act("Вы истошно завопили, пытаясь напугать противника. Без толку.", false, ch, nullptr, nullptr, kToChar);
-			act("$n0 истошно завопил$g, пытаясь напугать противника. Забавно...", false, ch, nullptr, vict, kToNotVict);
-			act("$n0 истошно завопил$g, пытаясь напугать вас. Забавно...", false, ch, nullptr, vict, kToVict);
+		const bool berserk_failed = !(number(1, 1000) < prob);
+		af.affect_type = EAffect::kBerserk;
+		if (berserk_failed) {
+			af.battleflag.set(kAfFailed);
 		}
 		ImposeAffect(ch, af, true, false, true, false);
+		// issue.affect-migration: success/fail narration on kBerserk; vict = the combat foe (external $N).
+		EmitAffectImpose(ch, vict, EAffect::kBerserk, berserk_failed);
 	}
 }
 

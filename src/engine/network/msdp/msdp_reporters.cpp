@@ -1,4 +1,8 @@
 #include "msdp_reporters.h"
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/economics/currencies.h"
+#include "gameplay/mechanics/sight.h"
+#include "gameplay/mechanics/mount.h"
 
 #include "engine/entities/char_data.h"
 #include "gameplay/magic/magic.h"
@@ -101,7 +105,7 @@ bool RoomReporter::blockReport() const {
 	bool nomapper = true;
 	const auto blind = (descriptor()->character->IsFlagged(EPrf::kBlindMode)) //В режиме слепого игрока карта недоступна
 		|| (AFF_FLAGGED((descriptor()->character), EAffect::kBlind));  //Слепому карта не поможет!
-	const auto cannot_see_in_dark = (is_dark(descriptor()->character->in_room) && !CAN_SEE_IN_DARK(descriptor()->character));
+	const auto cannot_see_in_dark = (is_dark(descriptor()->character->in_room) && !sight::CanSeeInDark(descriptor()->character.get()));
 	if (descriptor()->character->in_room != kNowhere)
 		nomapper = ROOM_FLAGGED(descriptor()->character->in_room, ERoomFlag::kMoMapper);
 	const auto scriptwriter = descriptor()->character->IsFlagged(EPlrFlag::kScriptWriter); // скриптеру не шлем
@@ -112,11 +116,11 @@ bool RoomReporter::blockReport() const {
 void GoldReporter::get(Variable::shared_ptr &response) {
 	const auto gold = std::make_shared<TableValue>();
 
-	const auto pocket_money = std::to_string(descriptor()->character->get_gold());
+	const auto pocket_money = std::to_string(currencies::GetHand(*descriptor()->character, currencies::kGold));
 	gold->add(std::make_shared<Variable>("POCKET",
 			std::make_shared<StringValue>(pocket_money)));
 
-	const auto bank_money = std::to_string(descriptor()->character->get_bank());
+	const auto bank_money = std::to_string(currencies::GetBank(*descriptor()->character, currencies::kGold));
 	gold->add(std::make_shared<Variable>("BANK",
 										 std::make_shared<StringValue>(bank_money)));
 
@@ -136,7 +140,7 @@ void MaxMoveReporter::get(Variable::shared_ptr &response) {
 }
 
 void MaxManaReporter::get(Variable::shared_ptr &response) {
-	const auto max_mana = std::to_string(GET_MAX_MANA((descriptor()->character).get()));
+	const auto max_mana = std::to_string(Mana(GetRealWis((descriptor()->character).get())));
 	response = std::make_shared<Variable>("MAX_MANA",
 										  std::make_shared<StringValue>(max_mana));
 }
@@ -148,7 +152,7 @@ void LevelReporter::get(Variable::shared_ptr &response) {
 }
 
 void ExperienceReporter::get(Variable::shared_ptr &response) {
-	const auto experience = std::to_string(GET_EXP(descriptor()->character));
+	const auto experience = std::to_string(descriptor()->character->get_exp());
 	response = std::make_shared<Variable>(constants::EXPERIENCE,
 										  std::make_shared<StringValue>(experience));
 }
@@ -176,6 +180,12 @@ void GroupReporter::append_char(const std::shared_ptr<ArrayValue> &group,
 								const CharData *ch,
 								const CharData *character,
 								const bool leader) {
+	// issue #3666: член группы мог быть экстракчен (убит) в этом же пульсе, но ещё висит в
+	// followers. in_room == kNowhere -- канон признак "готовится к удалению" (purged устарел).
+	// Чтение статов такого = use-after-purge (SYSERR в get_wis). Пропускаем.
+	if (!character || character->in_room == kNowhere) {
+		return;
+	}
 	if (ch->IsFlagged(EPrf::kNoClones)
 		&& character->IsNpc()
 		&& (character->IsFlagged(EMobFlag::kClone)
@@ -225,12 +235,12 @@ void GroupReporter::append_char(const std::shared_ptr<ArrayValue> &group,
 		affects += "Л";
 	}
 
-	if (!character->IsNpc() && character->IsOnHorse()) {
+	if (!character->IsNpc() && mount::IsOnHorse(character)) {
 		affects += "В";
 	}
 
 	if (character->IsNpc()
-		&& character->low_charm()) {
+		&& IsCharmExpiring(character)) {
 		affects += "Т";
 	}
 
@@ -252,14 +262,14 @@ int GroupReporter::get_mem(const CharData *character) const {
 	int result = 0;
 	if (!character->IsNpc()
 		&& ((!IS_MANA_CASTER(character) && !character->mem_queue.Empty())
-			|| (IS_MANA_CASTER(character) && character->mem_queue.stored < GET_MAX_MANA(character)))) {
+			|| (IS_MANA_CASTER(character) && character->mem_queue.stored < Mana(GetRealWis(character))))) {
 		auto div = CalcManaGain(character);
 		if (div > 0) {
 			if (!IS_MANA_CASTER(character)) {
 				result = std::max(0, 1 + character->mem_queue.total - character->mem_queue.stored);
 				result = result * 60 / div;
 			} else {
-				result = std::max(0, 1 + GET_MAX_MANA(character) - character->mem_queue.stored);
+				result = std::max(0, 1 + Mana(GetRealWis(character)) - character->mem_queue.stored);
 				result = result / div;
 			}
 		} else {
@@ -286,31 +296,35 @@ void GroupReporter::get(Variable::shared_ptr &response) {
 	*/
 	const auto group_descriptor = std::make_shared<ArrayValue>();
 	const auto ch = descriptor()->character.get();
-	const auto master = ch->has_master() ? ch->get_master() : ch;
-	append_char(group_descriptor, ch, master, true);
-	for (auto f = master->followers; f; f = f->next) {
-		if (!AFF_FLAGGED(f->follower, EAffect::kGroup)
-			&& !(AFF_FLAGGED(f->follower, EAffect::kCharmed)
-				|| f->follower->IsFlagged(EMobFlag::kTutelar)
-				|| f->follower->IsFlagged(EMobFlag::kMentalShadow))) {
-			continue;
-		}
-
-		append_char(group_descriptor, ch, f->follower, false);
-
-		// followers of a ch
-		if (!AFF_FLAGGED(f->follower, EAffect::kGroup)) {
-			continue;
-		}
-
-		for (auto ff = f->follower->followers; ff; ff = ff->next) {
-			if (!(AFF_FLAGGED(ff->follower, EAffect::kCharmed)
-				|| ff->follower->IsFlagged(EMobFlag::kTutelar)
-				|| ff->follower->IsFlagged(EMobFlag::kMentalShadow))) {
+	// issue #3586: не раскрывать группу того, за кем персонаж просто следует.
+	// Членство в группе -- это флаг kGroup (ставится и лидеру, и согруппникам,
+	// см. group::perform_group), а не follow-отношение. Без этой проверки
+	// заследовавшийся не-член получал полное состояние чужой группы. Гейт тот же,
+	// что в group::print_list_group ("Но вы же не член группы!"). Не в группе --
+	// отдаём пустой GROUP.
+	if (ch && AFF_FLAGGED(ch, EAffect::kGroup)) {
+		const auto master = ch->has_master() ? ch->get_master() : ch;
+		append_char(group_descriptor, ch, master, true);
+		for (auto *f : master->followers) {
+			if (!AFF_FLAGGED(f, EAffect::kGroup)
+				&& !(f->IsFlagged(EMobFlag::kCompanion))) {
 				continue;
 			}
 
-			append_char(group_descriptor, ch, ff->follower, false);
+			append_char(group_descriptor, ch, f, false);
+
+			// followers of a ch
+			if (!AFF_FLAGGED(f, EAffect::kGroup)) {
+				continue;
+			}
+
+			for (auto *ff : f->followers) {
+				if (!(ff->IsFlagged(EMobFlag::kCompanion))) {
+					continue;
+				}
+
+				append_char(group_descriptor, ch, ff, false);
+			}
 		}
 	}
 

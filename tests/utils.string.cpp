@@ -1,15 +1,16 @@
-#include <utils/utils_string.h>
+#include "utils/utils_string.h"
 
 #include <gtest/gtest.h>
 
-#include <utils/utils.h>
+#include "utils/utils.h"
+#include "utils/mud_string.h"
 
 struct
 {
 	const char* data;
 	const char* result;
 	const char* description;
-} test_data[] = 
+} test_data[] =
 {
 	{"", "", "empty string"},
 	{"simple string", "simple string", "simple string"},
@@ -21,7 +22,7 @@ struct
 
 TEST(Utils_String, ProcedureNullTerminated_Null)
 {
-	EXPECT_NO_FATAL_FAILURE(utils::remove_colors(nullptr));
+	EXPECT_NO_FATAL_FAILURE(utils::RemoveColors(nullptr));
 }
 
 TEST(Utils_String, ProcedureNullTerminated)
@@ -29,7 +30,7 @@ TEST(Utils_String, ProcedureNullTerminated)
 	for (const auto& test : test_data)
 	{
 		utils::shared_string_ptr string(str_dup(test.data), free);
-		EXPECT_NO_FATAL_FAILURE(utils::remove_colors(string.get()));
+		EXPECT_NO_FATAL_FAILURE(utils::RemoveColors(string.get()));
 		EXPECT_EQ(0, strcmp(test.result, string.get()))
 			<< "Failed test case '" << test.description << "'";
 	}
@@ -40,22 +41,23 @@ TEST(Utils_String, ProcedureStdString)
 	for (const auto& test : test_data)
 	{
 		std::string string = test.data;
-		EXPECT_NO_FATAL_FAILURE(utils::remove_colors(string));
-		EXPECT_EQ(test.result, string)
+		std::string result;
+		EXPECT_NO_FATAL_FAILURE(result = utils::RemoveColors(string));
+		EXPECT_EQ(test.result, result)
 			<< "Failed test case '" << test.description << "'";
 	}
 }
 
 TEST(Utils_String, FunctionNullTerminated_Null)
 {
-	EXPECT_EQ(nullptr, utils::get_string_without_colors(nullptr));
+	EXPECT_EQ(nullptr, utils::GetStringWithoutColors(nullptr));
 }
 
 TEST(Utils_String, FunctionNullTerminated)
 {
 	for (const auto& test : test_data)
 	{
-		EXPECT_EQ(0, strcmp(test.result, utils::get_string_without_colors(test.data).get()))
+		EXPECT_EQ(0, strcmp(test.result, utils::GetStringWithoutColors(test.data).get()))
 			<< "Failed test case '" << test.description << "'";
 	}
 }
@@ -65,8 +67,900 @@ TEST(Utils_String, FunctionStdString)
 	for (const auto& test : test_data)
 	{
 		std::string string = test.data;
-		EXPECT_EQ(test.result, utils::get_string_without_colors(string))
+		EXPECT_EQ(test.result, utils::GetStringWithoutColors(string))
 			<< "Failed test case '" << test.description << "'";
 	}
 }
 
+// ===== Split =====
+
+TEST(Utils_String, Split_BasicDelimiter)
+{
+	auto result = utils::Split("a b c", ' ');
+	ASSERT_EQ(3u, result.size());
+	EXPECT_EQ("a", result[0]);
+	EXPECT_EQ("b", result[1]);
+	EXPECT_EQ("c", result[2]);
+}
+
+TEST(Utils_String, Split_EmptyString_ReturnsEmpty)
+{
+	auto result = utils::Split("", ' ');
+	EXPECT_TRUE(result.empty());
+}
+
+TEST(Utils_String, Split_NoDelimiter_ReturnsSingleElement)
+{
+	auto result = utils::Split("hello", ' ');
+	ASSERT_EQ(1u, result.size());
+	EXPECT_EQ("hello", result[0]);
+}
+
+TEST(Utils_String, Split_TrailingDelimiter_Ignored)
+{
+	auto result = utils::Split("a b ", ' ');
+	ASSERT_EQ(2u, result.size());
+	EXPECT_EQ("a", result[0]);
+	EXPECT_EQ("b", result[1]);
+}
+
+TEST(Utils_String, Split_CustomDelimiter)
+{
+	auto result = utils::Split("a,b,c", ',');
+	ASSERT_EQ(3u, result.size());
+	EXPECT_EQ("a", result[0]);
+	EXPECT_EQ("b", result[1]);
+	EXPECT_EQ("c", result[2]);
+}
+
+// ===== SplitAny =====
+
+TEST(Utils_String, SplitAny_MultipleDelimiters)
+{
+	auto result = utils::SplitAny("a,b;c", ",;");
+	ASSERT_EQ(3u, result.size());
+	EXPECT_EQ("a", result[0]);
+	EXPECT_EQ("b", result[1]);
+	EXPECT_EQ("c", result[2]);
+}
+
+TEST(Utils_String, SplitAny_SingleDelimiter_ActsLikeSplit)
+{
+	auto result = utils::SplitAny("a b c", " ");
+	ASSERT_EQ(3u, result.size());
+	EXPECT_EQ("a", result[0]);
+	EXPECT_EQ("b", result[1]);
+	EXPECT_EQ("c", result[2]);
+}
+
+// ===== TrimLeft / TrimRight / Trim (std::string) =====
+
+TEST(Utils_String, TrimLeft_StdString_RemovesLeadingSpaces)
+{
+	std::string s = "   hello";
+	utils::TrimLeft(s);
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, TrimLeft_StdString_NoLeadingSpaces_Unchanged)
+{
+	std::string s = "hello";
+	utils::TrimLeft(s);
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, TrimLeft_StdString_Empty_Unchanged)
+{
+	std::string s;
+	utils::TrimLeft(s);
+	EXPECT_EQ("", s);
+}
+
+TEST(Utils_String, TrimRight_StdString_RemovesTrailingSpaces)
+{
+	std::string s = "hello   ";
+	utils::TrimRight(s);
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, TrimRight_StdString_NoTrailingSpaces_Unchanged)
+{
+	std::string s = "hello";
+	utils::TrimRight(s);
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, Trim_StdString_RemovesBothSides)
+{
+	std::string s = "  hello  ";
+	utils::Trim(s);
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, Trim_StdString_OnlySpaces_BecomesEmpty)
+{
+	std::string s = "   ";
+	utils::Trim(s);
+	EXPECT_EQ("", s);
+}
+
+// ===== TrimLeftCopy / TrimRightCopy / TrimCopy =====
+
+TEST(Utils_String, TrimLeftCopy_ReturnsNewString)
+{
+	EXPECT_EQ("hello  ", utils::TrimLeftCopy("  hello  "));
+}
+
+TEST(Utils_String, TrimRightCopy_ReturnsNewString)
+{
+	EXPECT_EQ("  hello", utils::TrimRightCopy("  hello  "));
+}
+
+TEST(Utils_String, TrimCopy_ReturnsNewString)
+{
+	EXPECT_EQ("hello", utils::TrimCopy("  hello  "));
+}
+
+// ===== TrimLeft / TrimRight / Trim (char*) =====
+
+TEST(Utils_String, TrimLeft_CharPtr_RemovesLeadingSpaces)
+{
+	char buf[] = "   hello";
+	utils::TrimLeft(buf);
+	EXPECT_STREQ("hello", buf);
+}
+
+TEST(Utils_String, TrimLeft_CharPtr_NoLeadingSpaces_Unchanged)
+{
+	char buf[] = "hello";
+	utils::TrimLeft(buf);
+	EXPECT_STREQ("hello", buf);
+}
+
+TEST(Utils_String, TrimRight_CharPtr_RemovesTrailingSpaces)
+{
+	char buf[] = "hello   ";
+	utils::TrimRight(buf);
+	EXPECT_STREQ("hello", buf);
+}
+
+TEST(Utils_String, TrimRight_CharPtr_NoTrailingSpaces_Unchanged)
+{
+	char buf[] = "hello";
+	utils::TrimRight(buf);
+	EXPECT_STREQ("hello", buf);
+}
+
+TEST(Utils_String, Trim_CharPtr_RemovesBothSides)
+{
+	char buf[] = "  hello  ";
+	utils::Trim(buf);
+	EXPECT_STREQ("hello", buf);
+}
+
+// ===== TrimLeftIf / TrimRightIf / TrimIf =====
+
+TEST(Utils_String, TrimLeftIf_RemovesCustomChars)
+{
+	std::string s = "...hello";
+	utils::TrimLeftIf(s, ".");
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, TrimRightIf_RemovesCustomChars)
+{
+	std::string s = "hello...";
+	utils::TrimRightIf(s, ".");
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, TrimIf_RemovesBothSides)
+{
+	std::string s = "...hello...";
+	utils::TrimIf(s, ".");
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, TrimLeftIf_MultipleChars)
+{
+	std::string s = ".,hello";
+	utils::TrimLeftIf(s, ".,");
+	EXPECT_EQ("hello", s);
+}
+
+// ===== FixDot =====
+
+TEST(Utils_String, FixDot_ReplacesDotsWithSpaces)
+{
+	EXPECT_EQ("a b", utils::FixDot("a.b"));
+}
+
+TEST(Utils_String, FixDot_ReplacesUnderscoresWithSpaces)
+{
+	EXPECT_EQ("a b", utils::FixDot("a_b"));
+}
+
+TEST(Utils_String, FixDot_ReplacesBothDotsAndUnderscores)
+{
+	EXPECT_EQ("a b c", utils::FixDot("a.b_c"));
+}
+
+TEST(Utils_String, FixDot_NoDotsOrUnderscores_Unchanged)
+{
+	EXPECT_EQ("hello world", utils::FixDot("hello world"));
+}
+
+// ===== CompressSymbol =====
+
+TEST(Utils_String, CompressSymbol_RemovesConsecutiveDuplicates)
+{
+	EXPECT_EQ("a b c", utils::CompressSymbol("a  b  c", ' '));
+}
+
+TEST(Utils_String, CompressSymbol_NoDuplicates_Unchanged)
+{
+	EXPECT_EQ("abc", utils::CompressSymbol("abc", ' '));
+}
+
+TEST(Utils_String, CompressSymbol_MultipleRunsCollapsed)
+{
+	EXPECT_EQ("a b", utils::CompressSymbol("a   b", ' '));
+}
+
+// ===== ReplaceFirst =====
+
+TEST(Utils_String, ReplaceFirst_ReplacesFirstOccurrence)
+{
+	std::string s = "hello hello";
+	utils::ReplaceFirst(s, "hello", "world");
+	EXPECT_EQ("world hello", s);
+}
+
+TEST(Utils_String, ReplaceFirst_NotFound_Unchanged)
+{
+	std::string s = "hello";
+	utils::ReplaceFirst(s, "xyz", "abc");
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, ReplaceFirst_SingleOccurrence)
+{
+	std::string s = "foo bar";
+	utils::ReplaceFirst(s, "foo", "baz");
+	EXPECT_EQ("baz bar", s);
+}
+
+// ===== ReplaceAll =====
+
+TEST(Utils_String, ReplaceAll_ReplacesAllOccurrences)
+{
+	std::string s = "aaa";
+	utils::ReplaceAll(s, "a", "b");
+	EXPECT_EQ("bbb", s);
+}
+
+TEST(Utils_String, ReplaceAll_NotFound_Unchanged)
+{
+	std::string s = "hello";
+	utils::ReplaceAll(s, "xyz", "abc");
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, ReplaceAll_MultipleOccurrences)
+{
+	std::string s = "foo bar foo baz foo";
+	utils::ReplaceAll(s, "foo", "qux");
+	EXPECT_EQ("qux bar qux baz qux", s);
+}
+
+// ===== EraseAll =====
+
+TEST(Utils_String, EraseAll_RemovesAllOccurrences)
+{
+	std::string s = "hello world hello";
+	utils::EraseAll(s, "hello");
+	EXPECT_EQ(" world ", s);
+}
+
+TEST(Utils_String, EraseAll_NotFound_Unchanged)
+{
+	std::string s = "hello";
+	utils::EraseAll(s, "xyz");
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, EraseAll_RemovesAllSpaces)
+{
+	std::string s = "a b c";
+	utils::EraseAll(s, " ");
+	EXPECT_EQ("abc", s);
+}
+
+// ===== ConvertToLow =====
+
+TEST(Utils_String, ConvertToLow_StdString_ConvertsToLowercase)
+{
+	std::string s = "HELLO";
+	utils::ConvertToLow(s);
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, ConvertToLow_StdString_MixedCase)
+{
+	std::string s = "HeLLo";
+	utils::ConvertToLow(s);
+	EXPECT_EQ("hello", s);
+}
+
+TEST(Utils_String, ConvertToLow_CharPtr_ConvertsToLowercase)
+{
+	char buf[] = "HELLO";
+	utils::ConvertToLow(buf);
+	EXPECT_STREQ("hello", buf);
+}
+
+// ===== SubstStrToUpper =====
+
+TEST(Utils_String, SubstStrToUpper_ConvertsToUppercase)
+{
+	EXPECT_EQ("HELLO", utils::SubstStrToUpper("hello"));
+}
+
+TEST(Utils_String, SubstStrToUpper_MixedCase)
+{
+	EXPECT_EQ("HELLO WORLD", utils::SubstStrToUpper("Hello World"));
+}
+
+// ===== ExtractFirstArgument =====
+
+TEST(Utils_String, ExtractFirstArgument_ExtractsWord)
+{
+	std::string remains;
+	std::string word = utils::ExtractFirstArgument("hello world", remains);
+	EXPECT_EQ("hello", word);
+	EXPECT_EQ("world", remains);
+}
+
+TEST(Utils_String, ExtractFirstArgument_NoSpace_ReturnsWholeString)
+{
+	std::string remains;
+	std::string word = utils::ExtractFirstArgument("hello", remains);
+	EXPECT_EQ("hello", word);
+	EXPECT_TRUE(remains.empty());
+}
+
+TEST(Utils_String, ExtractFirstArgument_LeadingSpaces)
+{
+	std::string remains;
+	std::string word = utils::ExtractFirstArgument("  hello world", remains);
+	EXPECT_EQ("hello", word);
+	EXPECT_EQ("world", remains);
+}
+
+TEST(Utils_String, ExtractFirstArgument_OnlySpaces)
+{
+	std::string remains;
+	std::string word = utils::ExtractFirstArgument("   ", remains);
+	EXPECT_TRUE(word.empty());
+	EXPECT_TRUE(remains.empty());
+}
+
+TEST(Utils_String, ExtractFirstArgument_MultipleWords)
+{
+	std::string remains;
+	std::string word = utils::ExtractFirstArgument("one two three", remains);
+	EXPECT_EQ("one", word);
+	EXPECT_EQ("two three", remains);
+}
+
+TEST(Utils_String, ExtractFirstArgument_Aliasing)
+{
+	std::string s = "one two three";
+	std::string word = utils::ExtractFirstArgument(s, s);
+	EXPECT_EQ("one", word);
+	EXPECT_EQ("two three", s);
+}
+
+// ===== FirstWordOnString =====
+
+TEST(Utils_String, FirstWordOnString_ExtractsFirstWord)
+{
+	EXPECT_EQ("hello", utils::FirstWordOnString("hello world", " "));
+}
+
+TEST(Utils_String, FirstWordOnString_NoDelimiter_ReturnsWholeString)
+{
+	EXPECT_EQ("hello", utils::FirstWordOnString("hello", " "));
+}
+
+// ===== CAP =====
+
+TEST(Utils_String, CAP_CharPtr_CapitalizesFirstChar)
+{
+	char buf[] = "hello";
+	utils::CAP(buf);
+	EXPECT_STREQ("Hello", buf);
+}
+
+TEST(Utils_String, CAP_StdString_CapitalizesFirstChar)
+{
+	EXPECT_EQ("Hello", utils::CAP(std::string("hello")));
+}
+
+TEST(Utils_String, CAP_AlreadyUppercase_Unchanged)
+{
+	EXPECT_EQ("Hello", utils::CAP(std::string("Hello")));
+}
+
+// ===== IsAbbr =====
+
+TEST(Utils_String, IsAbbr_FullMatch_ReturnsTrue)
+{
+	EXPECT_TRUE(utils::IsAbbr("hello", "hello"));
+}
+
+TEST(Utils_String, IsAbbr_PrefixMatch_ReturnsTrue)
+{
+	EXPECT_TRUE(utils::IsAbbr("hel", "hello"));
+}
+
+TEST(Utils_String, IsAbbr_NoMatch_ReturnsFalse)
+{
+	EXPECT_FALSE(utils::IsAbbr("abc", "hello"));
+}
+
+TEST(Utils_String, IsAbbr_EmptyAbbr_ReturnsFalse)
+{
+	EXPECT_FALSE(utils::IsAbbr("", "hello"));
+}
+
+TEST(Utils_String, IsAbbr_CaseInsensitive)
+{
+	EXPECT_TRUE(utils::IsAbbr("HEL", "hello"));
+}
+
+// ===== IsEqual =====
+
+TEST(Utils_String, IsEqual_ExactMatch_ReturnsTrue)
+{
+	EXPECT_TRUE(utils::IsEqual("hello", "hello"));
+}
+
+TEST(Utils_String, IsEqual_NoMatch_ReturnsFalse)
+{
+	EXPECT_FALSE(utils::IsEqual("world", "hello"));
+}
+
+TEST(Utils_String, IsEqual_PrefixAbbrev_ReturnsTrue)
+{
+	EXPECT_TRUE(utils::IsEqual("hel", "hello"));
+}
+
+TEST(Utils_String, IsEqual_DotsSplitBothSides)
+{
+	// Точка в имени -- разделитель слов, как и в запросе.
+	EXPECT_TRUE(utils::IsEqual("макс.жизнь", "макс.жизнь"));
+	EXPECT_TRUE(utils::IsEqual("макс", "макс.жизнь"));
+	EXPECT_TRUE(utils::IsEqual("hel_wor", "hello_world"));
+	// Порядок слов по-прежнему обязателен, пропускать слова имени нельзя.
+	EXPECT_FALSE(utils::IsEqual("жизнь", "макс.жизнь"));
+}
+
+TEST(Utils_String, IsEqual_MultiWordNameTakesDottedAbbrev)
+{
+	// Так ищется режим в "реж": название из двух слов сокращается через точку,
+	// как цель у предметов ("меч.неизв"). search_block этого не умеет -- он сверяет
+	// строку целиком и спотыкается на точке.
+	EXPECT_TRUE(utils::IsEqual("перенос строк", "перенос строк"));
+	EXPECT_TRUE(utils::IsEqual("пер.стро", "перенос строк"));
+	EXPECT_TRUE(utils::IsEqual("перенос", "перенос строк"));
+	EXPECT_TRUE(utils::IsEqual("фл.ком", "флаги комнат"));
+	EXPECT_FALSE(utils::IsEqual("строк", "перенос строк"));
+}
+
+// ===== IsEquivalent =====
+
+TEST(Utils_String, IsEquivalent_AbbreviatedMatch_ReturnsTrue)
+{
+	EXPECT_TRUE(utils::IsEquivalent("hel wor", "hello world"));
+}
+
+TEST(Utils_String, IsEquivalent_NoMatch_ReturnsFalse)
+{
+	EXPECT_FALSE(utils::IsEquivalent("xyz", "hello world"));
+}
+
+TEST(Utils_String, IsEquivalent_SkipsWords_ReturnsTrue)
+{
+	EXPECT_TRUE(utils::IsEquivalent("wor", "hello world"));
+}
+
+TEST(Utils_String, IsEquivalent_EachAbbrTakesItsOwnWord)
+{
+	// Слово имени, которое уже совпало, второй раз не засчитывается.
+	EXPECT_FALSE(utils::IsEquivalent("hel hel", "hello world"));
+	EXPECT_TRUE(utils::IsEquivalent("hel hel", "hello hello"));
+}
+
+TEST(Utils_String, IsEquivalent_DotsSplitBothSides)
+{
+	// Точка в имени -- разделитель слов, как и в запросе.
+	EXPECT_TRUE(utils::IsEquivalent("макс.жизнь", "макс.жизнь"));
+	EXPECT_TRUE(utils::IsEquivalent("жизнь", "макс.жизнь"));
+	EXPECT_TRUE(utils::IsEquivalent("hel_wor", "hello_world"));
+}
+
+TEST(Utils_String, IsEquivalent_OrderMatters)
+{
+	// Слова запроса ищутся по порядку, пропуская лишние слова имени.
+	EXPECT_TRUE(utils::IsEquivalent("hel wor", "hello big world"));
+	EXPECT_FALSE(utils::IsEquivalent("wor hel", "hello big world"));
+}
+
+TEST(Utils_String, IsEquivalent_MatchesIsname)
+{
+	// Это строковый аналог isname, которым ищут предметы и персонажей по алиасам. Так что
+	// на том, как игрок набирает цель, обе функции обязаны отвечать одинаково.
+	const char *aliases = "книга возникновении огня огненная";
+	for (const char *query : {"кни.огн", "кни огн", "огн.кни", "книга", "кни.нет", "огненная"}) {
+		EXPECT_EQ(utils::IsEquivalent(query, aliases), isname(query, aliases)) << "запрос: " << query;
+	}
+}
+
+TEST(Utils_String, IsEquivalent_HyphenStaysInsideTheWord)
+{
+	// Разделитель у нас точка, дефис -- часть слова, поэтому правильный запрос к дефисному
+	// имени выглядит так, и обе функции находят по нему одинаково.
+	const char *aliases = "фехтовальный металлический веер шань-цзы";
+	EXPECT_TRUE(utils::IsEquivalent("веер.шань-цзы", aliases));
+	EXPECT_TRUE(isname("веер.шань-цзы", aliases));
+	EXPECT_TRUE(utils::IsEquivalent("шань-цзы", aliases));
+	EXPECT_TRUE(isname("шань-цзы", aliases));
+
+	// А вот дробление имени по дефису -- дикумадовская добавка isname, у которого разделитель
+	// любой не-буквенно-цифровой знак. Правилу она не соответствует, и на std::string её нет.
+	EXPECT_TRUE(isname("цзы", aliases));
+	EXPECT_FALSE(utils::IsEquivalent("цзы", aliases));
+}
+
+// ===== ExtractFirstArgument =====
+
+TEST(Utils_String, ExtractFirstArgument_SplitsWordAndRest)
+{
+	std::string rest;
+	EXPECT_EQ(utils::ExtractFirstArgument("frozen 30 за спам", rest), "frozen");
+	EXPECT_EQ(rest, "30 за спам");
+}
+
+TEST(Utils_String, ExtractFirstArgument_TabIsASeparator)
+{
+	// Раньше резали только по пробелу, и табуляция склеивала два аргумента в один.
+	std::string rest;
+	EXPECT_EQ(utils::ExtractFirstArgument("frozen\t30 спам", rest), "frozen");
+	EXPECT_EQ(rest, "30 спам");
+}
+
+TEST(Utils_String, ExtractFirstArgument_RestHasNoLeadingSpaces)
+{
+	std::string rest;
+	EXPECT_EQ(utils::ExtractFirstArgument("email   Vasya@Mail.RU", rest), "email");
+	EXPECT_EQ(rest, "Vasya@Mail.RU") << "остаток отдаётся уже подчищенным";
+}
+
+TEST(Utils_String, ExtractFirstArgument_SingleWordLeavesEmptyRest)
+{
+	std::string rest = "мусор";
+	EXPECT_EQ(utils::ExtractFirstArgument("  одно  ", rest), "одно");
+	EXPECT_TRUE(rest.empty());
+}
+
+TEST(Utils_String, ExtractFirstArgument_EmptyInputGivesEmptyParts)
+{
+	std::string rest = "мусор";
+	EXPECT_TRUE(utils::ExtractFirstArgument("   ", rest).empty());
+	EXPECT_TRUE(rest.empty());
+}
+
+TEST(Utils_String, ExtractFirstArgument_KeepsCaseAndFillWords)
+{
+	// В отличие от one_argument: регистр не понижается, служебные слова не пропускаются.
+	std::string rest;
+	EXPECT_EQ(utils::ExtractFirstArgument("FROZEN xxx", rest), "FROZEN");
+	EXPECT_EQ(utils::ExtractFirstArgument("to кто", rest), "to");
+	EXPECT_EQ(rest, "кто");
+}
+
+TEST(Utils_String, ExtractFirstArgument_SameVariableForInputAndRest)
+{
+	// Основной способ применения: разбор по одному слову в цикле.
+	std::string remains = "dgaffect цель свойство";
+	EXPECT_EQ(utils::ExtractFirstArgument(remains, remains), "dgaffect");
+	EXPECT_EQ(utils::ExtractFirstArgument(remains, remains), "цель");
+	EXPECT_EQ(utils::ExtractFirstArgument(remains, remains), "свойство");
+	EXPECT_TRUE(remains.empty());
+}
+
+TEST(Utils_String, ExtractFirstArgument_KeepsMultibyteLettersIntact)
+{
+	std::string rest;
+	EXPECT_EQ(utils::ExtractFirstArgument("волчица съела кролика", rest), "волчица");
+	EXPECT_EQ(rest, "съела кролика");
+}
+
+// Тестовая полоска ширины экрана (ScreenRuler) -- issue #3822.
+//
+// По ней игрок меряет реальную ширину окна, поэтому длина полоски обязана быть ровно
+// запрошенной. Раньше метка НАЧИНАЛАСЬ со своей позиции, и последняя не помещалась:
+// при ширине, кратной пяти, строка выходила на 1-2 знака длиннее (80 печаталось 81-м),
+// игрок видел перенос и решал, что у него 79.
+
+TEST(Utils_String, ScreenRulerHasExactlyRequestedWidth) {
+	// Кратные пяти -- та самая регрессия: только на них последняя метка и упиралась в край.
+	for (std::size_t width : {5u, 30u, 78u, 79u, 80u, 81u, 82u, 85u, 100u, 155u, 300u}) {
+		EXPECT_EQ(ScreenRuler(width).size(), width) << "ширина " << width;
+	}
+}
+
+TEST(Utils_String, ScreenRulerMarksEndAtTheirPosition) {
+	const std::string ruler = ScreenRuler(100);
+	// Метка заканчивается НА своей позиции: "5" на пятом знаке, "80" на восьмидесятом,
+	// "100" на сотом. Иначе по полоске нельзя отсчитать колонку.
+	EXPECT_EQ(ruler.substr(4, 1), "5");
+	EXPECT_EQ(ruler.substr(78, 2), "80");
+	EXPECT_EQ(ruler.substr(97, 3), "100");
+}
+
+TEST(Utils_String, ScreenRulerLooksAsExpected) {
+	EXPECT_EQ(ScreenRuler(30), "....5...10...15...20...25...30");
+	EXPECT_EQ(ScreenRuler(80),
+			  "....5...10...15...20...25...30...35...40...45...50...55...60...65...70...75...80");
+}
+
+TEST(Utils_String, ScreenRulerHandlesWidthsBelowFirstMark) {
+	// Меньше пяти знаков -- меток нет вовсе, но длина всё равно запрошенная.
+	EXPECT_EQ(ScreenRuler(0), "");
+	EXPECT_EQ(ScreenRuler(4), "....");
+}
+
+// ===== ExtractFirstArgumentLower =====
+// Полный строковый аналог one_argument: сверяемся именно с ним -- на нём держится вся замена
+// глобального arg в командах (#3807).
+
+TEST(Utils_String, ExtractFirstArgumentLower_MatchesOneArgumentOnPlainWords)
+{
+	char legacy[kMaxInputLength];
+	std::string rest;
+	const char *legacy_rest = one_argument("сбить гоблина палкой", legacy);
+
+	EXPECT_EQ(utils::ExtractFirstArgumentLower("сбить гоблина палкой", rest), legacy);
+	EXPECT_EQ(rest, legacy_rest);
+}
+
+TEST(Utils_String, ExtractFirstArgumentLower_LowersCase)
+{
+	// one_argument понижает регистр, ExtractFirstArgument -- нет.
+	EXPECT_EQ(utils::ExtractFirstArgumentLower("ГОБЛИН"), "гоблин");
+	EXPECT_EQ(utils::ExtractFirstArgumentLower("FROZEN"), "frozen");
+}
+
+TEST(Utils_String, ExtractFirstArgumentLower_KeepsFillWords)
+{
+	// in from with the on at to больше не пропускаются -- ни здесь, ни в one_argument (#3814):
+	// из-за пропуска молча исчезал аргумент-ключ вроде "hide on".
+	char legacy[kMaxInputLength];
+	one_argument("on причина", legacy);
+	EXPECT_STREQ(legacy, "on");
+
+	std::string rest;
+	EXPECT_EQ(utils::ExtractFirstArgumentLower("the goblin палкой", rest), "the");
+	EXPECT_EQ(rest, "goblin палкой");
+}
+
+TEST(Utils_String, ExtractFirstArgumentLower_EmptyInput)
+{
+	std::string rest = "мусор";
+	EXPECT_TRUE(utils::ExtractFirstArgumentLower("   ", rest).empty());
+	EXPECT_TRUE(rest.empty());
+}
+
+TEST(Utils_String, ExtractFirstArgumentLower_TabIsASeparator)
+{
+	std::string rest;
+	EXPECT_EQ(utils::ExtractFirstArgumentLower("сбить\tгоблина", rest), "сбить");
+	EXPECT_EQ(rest, "гоблина");
+}
+
+TEST(Utils_String, ExtractFirstArgumentLower_KeepsMultibyteLettersIntact)
+{
+	// Понижение регистра идёт посимвольно: русская буква не должна развалиться на байты.
+	EXPECT_EQ(utils::ExtractFirstArgumentLower("ВОЛЧИЦА съела"), "волчица");
+}
+
+TEST(Utils_String, ThousandsSep)
+{
+	EXPECT_EQ(thousands_sep(0), "0");
+	EXPECT_EQ(thousands_sep(20), "20");
+	EXPECT_EQ(thousands_sep(1000), "1,000");
+	EXPECT_EQ(thousands_sep(-1234567), "-1,234,567");
+}
+
+TEST(Utils_String, ThousandsSep_NoTrailingNul)
+{
+	// Хвостовой '\0' уезжал в сокет и обрубал строку у клиента (команда "уровни").
+	const auto value = thousands_sep(20);
+	EXPECT_EQ(value.size(), strlen(value.c_str()));
+}
+
+// ===== MayMatchName (предфильтр под isname) =====
+
+namespace {
+
+struct NameCase {
+	const char *query;
+	const char *aliases;
+};
+
+// Пары "запрос -- список алиасов" вперемешку: совпадающие, несовпадающие,
+// в разном регистре, с аббревиатурами и служебными символами.
+const NameCase kNameCases[] = {
+	{"меч", "меч клинок"},
+	{"меч", "мечта грёза"},
+	{"фридр", "посох фридриха"},
+	{"посох", "посох фридриха"},
+	{"МЕЧ", "меч клинок"},
+	{"меч", "МЕЧ КЛИНОК"},
+	{"Фридр", "ПОСОХ ФРИДРИХА"},
+	{"топор", "меч клинок"},
+	{"sword", "sword blade"},
+	{"SWORD", "sword blade"},
+	{"sword", "shield"},
+	{"", "меч клинок"},
+	{"меч", ""},
+	{".меч", "меч клинок"},
+	{"меч.клинок", "меч клинок"},
+	{"!меч", "меч клинок"},
+	{"чет", "четвёртый стилет"},
+	{"стилет", "четвёртый стилет"},
+	{"ё", "четвёртый стилет"},
+	{"я", "меч клинок"},
+};
+
+}  // namespace
+
+TEST(Utils_String, MayMatchName_NeverLosesAnIsnameMatch)
+{
+	// Единственное обещание предфильтра: false => isname тоже false.
+	for (const auto &c : kNameCases) {
+		if (isname(c.query, c.aliases)) {
+			EXPECT_TRUE(MayMatchName(c.query, c.aliases))
+				<< "запрос '" << c.query << "', алиасы '" << c.aliases << "'";
+		}
+	}
+}
+
+TEST(Utils_String, MayMatchName_CutsOffMissingLetters)
+{
+	// Буквы запроса нет в списке -- отсеиваем, не заходя в isname.
+	EXPECT_FALSE(MayMatchName("топор", "меч клинок"));
+	EXPECT_FALSE(MayMatchName("sword", "blade"));
+}
+
+TEST(Utils_String, MayMatchName_IgnoresLetterCase)
+{
+	EXPECT_TRUE(MayMatchName("МЕЧ", "меч клинок"));
+	EXPECT_TRUE(MayMatchName("меч", "МЕЧ КЛИНОК"));
+}
+
+TEST(Utils_String, MayMatchName_SkipsLeadingPunctuation)
+{
+	// isname пропускает ведущие не-буквы, предфильтр обязан вести себя так же.
+	EXPECT_TRUE(MayMatchName(".меч", "меч клинок"));
+	EXPECT_TRUE(MayMatchName("!меч", "меч клинок"));
+}
+
+TEST(Utils_String, MayMatchName_EmptyInputDefersToIsname)
+{
+	EXPECT_TRUE(MayMatchName("", "меч клинок"));
+	EXPECT_TRUE(MayMatchName("меч", ""));
+}
+
+TEST(Utils_String, VisibleWidth_SkipsBothColorForms)
+{
+	EXPECT_EQ(utils::VisibleWidth("abc"), 3u);
+	EXPECT_EQ(utils::VisibleWidth("&Rabc&n"), 3u);          // наши цветокоды
+	EXPECT_EQ(utils::VisibleWidth("\x1B[1;33mabc\x1B[0;37m"), 3u);  // готовый ANSI
+	EXPECT_EQ(utils::VisibleWidth("\x1B[1;33m&Rabc&n\x1B[0m"), 3u); // вперемешку
+}
+
+TEST(Utils_String, VisibleWidth_CountsCharactersNotBytes)
+{
+	// Русская буква в UTF-8 занимает два байта, а на экране -- одно место.
+	EXPECT_EQ(utils::VisibleWidth("меч"), 3u);
+	EXPECT_EQ(utils::VisibleWidth("\x1B[1;33mмеч\x1B[0;37m"), 3u);
+}
+
+TEST(Utils_String, OutWordsList_AnsiPrefixDoesNotEatWidth)
+{
+	// Регрессия: цвет из констант kColor* -- это готовый ANSI, а не "&X". Пока его считали
+	// за видимые символы, строка с цветом переносилась на длину escape раньше срока.
+	const std::string plain = utils::OutWordsList(std::string("aaa bbb ccc"), 11, " ");
+	const std::string colored = utils::OutWordsList(std::string("\x1B[1;33maaa bbb ccc\x1B[0;37m"), 11, " ");
+	EXPECT_EQ(plain.find("\r\n"), std::string::npos);
+	EXPECT_EQ(colored.find("\r\n"), std::string::npos);
+}
+
+TEST(Utils_String, WrapText_LeavesFittingLinesUntouched)
+{
+	// Перенос теперь стоит на всём выводе act и каналов, а короткие строки бывают выровнены
+	// пробелами. Собирать их заново из слов нельзя -- подряд идущие пробелы схлопнутся.
+	EXPECT_EQ(utils::WrapText("a    b", 20), "a    b");
+	EXPECT_EQ(utils::WrapText("  отступ", 20), "  отступ");
+	EXPECT_EQ(utils::WrapText("x  y\r\nz   w", 20), "x  y\r\nz   w");
+}
+
+TEST(Utils_String, WrapText_WrapsOnlyTheLongLine)
+{
+	const std::string wrapped = utils::WrapText("коротко  тут\r\nдлинная строка из слов", 12);
+	EXPECT_EQ(wrapped, "коротко  тут\r\nдлинная\r\nстрока из\r\nслов");
+}
+
+
+// Разбор ANSI-последовательностей на вводе: игрок присылает обратно строку, перехваченную
+// триггером клиента вместе с цветом, и в канал уходил печатный остаток "[1;35m".
+namespace {
+std::size_t EscapeLength(const std::string &text)
+{
+	return utils::AnsiEscapeLength(text.data(), text.data() + text.size());
+}
+
+// Так ввод чистит process_input: последовательности выбрасываются целиком, прочее остаётся.
+std::string StripEscapes(const std::string &text)
+{
+	std::string result;
+	const char *end = text.data() + text.size();
+	for (const char *ptr = text.data(); ptr < end; ++ptr) {
+		const auto escape = utils::AnsiEscapeLength(ptr, end);
+		if (escape > 0) {
+			ptr += escape - 1;
+			continue;
+		}
+		result += *ptr;
+	}
+	return result;
+}
+}  // namespace
+
+TEST(Utils_String, AnsiEscapeLength_NoEscapeAtAll)
+{
+	EXPECT_EQ(EscapeLength(""), 0u);
+	EXPECT_EQ(EscapeLength("наручи"), 0u);
+	EXPECT_EQ(EscapeLength("[1;35m"), 0u);
+}
+
+TEST(Utils_String, AnsiEscapeLength_ColorSequence)
+{
+	EXPECT_EQ(EscapeLength("\x1B[1;35m"), 7u);
+	EXPECT_EQ(EscapeLength("\x1B[0m наручи"), 4u);
+	EXPECT_EQ(EscapeLength("\x1B[m"), 3u);
+}
+
+TEST(Utils_String, AnsiEscapeLength_UnterminatedDropsEscapeOnly)
+{
+	// Завершающего байта нет -- выбрасываем только ESC, остальное отдаём общей чистке.
+	EXPECT_EQ(EscapeLength("\x1B"), 1u);
+	EXPECT_EQ(EscapeLength("\x1B["), 1u);
+	EXPECT_EQ(EscapeLength("\x1B[1;35"), 1u);
+	EXPECT_EQ(EscapeLength("\x1B[1;35наручи"), 1u);
+	EXPECT_EQ(EscapeLength("\x1BX"), 1u);
+}
+
+TEST(Utils_String, AnsiEscapeLength_StripsWholeSequenceFromInput)
+{
+	// Строка из issue: раньше от неё оставалось "[1;35mПарадные наручи ...".
+	EXPECT_EQ(StripEscapes("\x1B[1;35mПарадные наручи \x1B[1;34mзащитник небес\x1B[0;0m рассыпались"),
+			  "Парадные наручи защитник небес рассыпались");
+	EXPECT_EQ(StripEscapes("наручи"), "наручи");
+	EXPECT_EQ(StripEscapes("\x1B[1;35m"), "");
+}
+
+// vim: ts=4 sw=4 tw=0 noet syntax=cpp :

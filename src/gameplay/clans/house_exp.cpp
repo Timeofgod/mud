@@ -2,7 +2,10 @@
 // Copyright (c) 2009 Krodo
 // Part of Bylins http://www.mud.ru
 
+#include <sstream>
+#include "utils/native_text.h"
 #include "house_exp.h"
+#include "utils/grammar/gender.h"
 
 #include "engine/entities/char_data.h"
 #include "house.h"
@@ -43,7 +46,7 @@ long long ClanExp::get_exp() const {
 
 // * Сохранение списка и буффера в отдельный файл клана (по аббревиатуре).
 void ClanExp::save(const std::string &abbrev) const {
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + ".exp";
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + ".exp";
 	std::ofstream file(filename.c_str());
 	if (!file.is_open()) {
 		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
@@ -54,14 +57,20 @@ void ClanExp::save(const std::string &abbrev) const {
 	for (ExpListType::const_iterator it = list_.begin(); it != list_.end(); ++it) {
 		out << *it << "\n";
 	}
-	file << out.rdbuf();
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 }
 
 // * Загрузка списка экспы и буффера конкретного клана (по аббревиатуре).
 void ClanExp::load(const std::string &abbrev) {
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + ".exp";
-	std::ifstream file(filename.c_str());
-	if (!file.is_open()) {
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + ".exp";
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(filename.c_str()));
+	if (file.str().empty()) {
 		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
@@ -133,7 +142,7 @@ void ClanPkLog::save(const std::string &abbrev) {
 		return;
 	}
 
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + ".war";
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + ".war";
 	if (pk_log.empty()) {
 		remove(filename.c_str());
 		return;
@@ -145,19 +154,26 @@ void ClanPkLog::save(const std::string &abbrev) {
 		return;
 	}
 
+	std::ostringstream out;
 	for (std::list<std::string>::const_iterator i = pk_log.begin(); i != pk_log.end(); ++i) {
-		file << *i;
+		out << *i;
 	}
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 
-	file.close();
 	need_save = false;
 }
 
 void ClanPkLog::load(const std::string &abbrev) {
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + ".war";
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + ".war";
 
-	std::ifstream file(filename.c_str(), std::ios::binary);
-	if (!file.is_open()) {
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(filename.c_str()));
+	if (file.str().empty()) {
 		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
@@ -168,7 +184,6 @@ void ClanPkLog::load(const std::string &abbrev) {
 		buffer += "\r\n";
 		pk_log.push_back(buffer);
 	}
-	file.close();
 }
 
 void ClanPkLog::check(CharData *ch, CharData *victim) {
@@ -189,7 +204,7 @@ void ClanPkLog::check(CharData *ch, CharData *victim) {
 		strftime(timeBuf, sizeof(timeBuf), "%d-%m-%Y (%H:%M)", localtime(&curr_time));
 		std::stringstream out;
 		out << timeBuf << ": "
-			<< GET_NAME(victim) << " убит" << GET_CH_SUF_6(victim) << " "
+			<< GET_NAME(victim) << " убит" << grammar::SexEnding((victim)->get_sex(), 6) << " "
 			<< GET_PAD(killer, 4) << "\r\n";
 
 		CLAN(victim)->pk_log.add(out.str());
@@ -220,10 +235,12 @@ void ClanExpHistory::add_exp(long exp) {
 }
 
 void ClanExpHistory::load(const std::string &abbrev) {
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + "-history.exp";
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + "-history.exp";
 
-	std::ifstream file(filename.c_str(), std::ios::binary);
-	if (!file.is_open()) {
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(filename.c_str()));
+	if (file.str().empty()) {
 		log("Error open file: %s! (%s %s %d)", filename.c_str(), __FILE__, __func__, __LINE__);
 		return;
 	}
@@ -233,11 +250,10 @@ void ClanExpHistory::load(const std::string &abbrev) {
 	while (file >> buffer >> exp) {
 		list_[buffer] = exp;
 	}
-	file.close();
 }
 
 void ClanExpHistory::save(const std::string &abbrev) const {
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + "-history.exp";
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + "-history.exp";
 // и зачем удалять файл а потом проверять его наличие
 /*	if (list_.empty())
 	{
@@ -251,10 +267,15 @@ void ClanExpHistory::save(const std::string &abbrev) const {
 		return;
 	}
 
+	std::ostringstream out;
 	for (HistoryExpListType::const_iterator i = list_.begin(); i != list_.end(); ++i) {
-		file << i->first << " " << i->second << "\n";
+		out << i->first << " " << i->second << "\n";
 	}
-	file.close();
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 }
 
 /**
@@ -362,7 +383,7 @@ void ClanChestLog::save(const std::string &abbrev) {
 		return;
 	}
 
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + ".log";
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + ".log";
 	if (chest_log_.empty()) {
 		remove(filename.c_str());
 		return;
@@ -375,20 +396,27 @@ void ClanChestLog::save(const std::string &abbrev) {
 		return;
 	}
 
+	std::ostringstream out;
 	for (std::list<std::string>::const_iterator i = chest_log_.begin(),
 			 iend = chest_log_.end(); i != iend; ++i) {
-		file << *i;
+		out << *i;
 	}
+	// Граница записи: userdata хранится в нативной кодировке, поэтому пишем как есть.
+	// Чтение (from_disk_text/from_disk_line) принимает и старый KOI8-R, так что файлы,
+	// ещё не переведённые, читаются по-прежнему (issue #3787).
+	const std::string on_disk = out.str();
+	file.write(on_disk.data(), static_cast<std::streamsize>(on_disk.size()));
 
-	file.close();
 	need_save_ = false;
 }
 
 void ClanChestLog::load(const std::string &abbrev) {
-	std::string filename = LIB_HOUSE + abbrev + "/" + abbrev + ".log";
+	std::string filename = LIB_CLANS + abbrev + "/" + abbrev + ".log";
 
-	std::ifstream file(filename.c_str(), std::ios::binary);
-	if (!file.is_open()) {
+	// Граница чтения: файл лежит на диске в кодировке мира, поднимаем его целиком --
+	// дальше разбор идёт по нативному тексту и не меняется (issue #3681).
+	std::istringstream file(native_text::read_data_file(filename.c_str()));
+	if (file.str().empty()) {
 		return;
 	}
 
@@ -398,8 +426,31 @@ void ClanChestLog::load(const std::string &abbrev) {
 		buffer += "\r\n";
 		chest_log_.push_back(buffer);
 	}
-	file.close();
 }
 ////////////////////////////////////////////////////////////////////////////////
+
+
+bool change_rep(CharData *ch, CharData *killer) {
+	return false;
+	// проверяем, в кланах ли оба игрока
+	if ((!CLAN(ch)) || (!CLAN(killer)))
+		return false;
+	// кланы должны быть разные
+	if (CLAN(ch) == CLAN(killer))
+		return false;
+
+	// 1/10 репутации замка уходит замку киллера
+	int rep_ch = CLAN(ch)->get_rep() * 0.1 + 1;
+	CLAN(ch)->set_rep(CLAN(ch)->get_rep() - rep_ch);
+	CLAN(killer)->set_rep(CLAN(killer)->get_rep() + rep_ch);
+	SendMsgToChar("Вы потеряли очко репутации своего клана! Стыд и позор вам.\r\n", ch);
+	SendMsgToChar("Вы заработали очко репутации для своего клана! Честь и похвала вам.\r\n", killer);
+	// проверяем репу клана у убитого
+	if (CLAN(ch)->get_rep() < 1) {
+		// сам распустится
+		//CLAN(ch)->bank = 0;
+	}
+	return true;
+}
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

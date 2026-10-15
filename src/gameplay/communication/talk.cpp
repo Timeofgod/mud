@@ -6,9 +6,14 @@
 \detail Сюда нужно поместить весь код, связанный с теллми. реплиами в комнату и т.п.
 */
 
+#include <fmt/format.h>
 #include "engine/entities/char_data.h"
+#include "administration/privilege.h"
+#include "utils/grammar/gender.h"
 #include "engine/ui/color.h"
 #include "remember.h"
+#include "gameplay/mechanics/sight.h"
+#include "utils/utils_string.h"
 
 void do_echo(CharData *ch, char *argument, int cmd, int subcmd);
 
@@ -21,13 +26,13 @@ void tell_to_char(CharData *keeper, CharData *ch, const char *argument) {
 		return;
 	}
 	snprintf(local_buf, kMaxInputLength,
-			 "%s сказал%s вам : '%s'", GET_NAME(keeper), GET_CH_SUF_1(keeper), argument);
+			 "%s сказал%s вам : '%s'", GET_NAME(keeper), grammar::SexEnding((keeper)->get_sex(), 1), argument);
 	SendMsgToChar(ch, "%s%s%s\r\n",
 				  kColorBoldCyn, utils::CAP(local_buf), kColorNrm);
 }
 
 bool tell_can_see(CharData *ch, CharData *vict) {
-	if (CAN_SEE_CHAR(vict, ch) || IS_IMMORTAL(ch) || GET_INVIS_LEV(ch)) {
+	if (sight::CanSeeIgnoringLight(vict, ch) || privilege::IsImmortal(ch) || GET_INVIS_LEV(ch)) {
 		return true;
 	} else {
 		return false;
@@ -50,11 +55,11 @@ int is_tell_ok(CharData *ch, CharData *vict) {
 		return (false);
 	}
 
-	if (IS_GOD(ch) || ch->IsFlagged(EPrf::kCoderinfo))
+	if (privilege::IsGod(ch) || ch->IsFlagged(EPrf::kCoderinfo))
 		return (true);
 
 	if (ROOM_FLAGGED(ch->in_room, ERoomFlag::kSoundproof))
-		SendMsgToChar(SOUNDPROOF, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kSoundproof) + "\r\n", ch);
 	else if ((!vict->IsNpc() &&
 		(vict->IsFlagged(EPrf::kNoTell) || ignores(vict, ch, EIgnore::kTell))) ||
 		ROOM_FLAGGED(vict->in_room, ERoomFlag::kSoundproof)) {
@@ -75,8 +80,9 @@ int is_tell_ok(CharData *ch, CharData *vict) {
 }
 
 void perform_tell(CharData *ch, CharData *vict, char *arg) {
+	std::string tell_text;
 	if (vict->IsFlagged(EPrf::kNoInvistell)
-		&& !CAN_SEE(vict, ch)
+		&& !sight::CanSee(vict, ch)
 		&& GetRealLevel(ch) < kLvlImmortal
 		&& !ch->IsFlagged(EPrf::kCoderinfo)) {
 		act("$N не любит разговаривать с теми, кого не видит.", false, ch, nullptr, vict, kToChar | kToSleep);
@@ -85,35 +91,49 @@ void perform_tell(CharData *ch, CharData *vict, char *arg) {
 
 	// TODO: если в act() останется показ иммов, то это и эхо ниже переделать на act()
 	if (tell_can_see(ch, vict)) {
-		snprintf(buf, kMaxStringLength, "%s сказал%s вам : '%s'", GET_NAME(ch), GET_CH_SUF_1(ch), arg);
+		tell_text = fmt::format("{} сказал{} вам : '{}'", GET_NAME(ch), grammar::SexEnding((ch)->get_sex(), 1), arg);
 	} else {
-		snprintf(buf, kMaxStringLength, "Кто-то сказал вам : '%s'", arg);
+		tell_text = fmt::format("Кто-то сказал вам : '{}'", arg);
 	}
-	snprintf(buf1, kMaxStringLength, "%s%s%s\r\n", kColorBoldCyn, utils::CAP(buf), kColorNrm);
-	SendMsgToChar(buf1, vict);
+	// перенос длинного телла по словам на ширину экрана получателя (режим "перенос строк")
+	std::string tell_line = utils::CAP(tell_text);
+	if (const auto width = LineWrapWidth(vict); width > 0) {
+		tell_line = utils::WrapText(tell_line, width);
+	}
+	const std::string to_vict = fmt::format("{}{}{}\r\n", kColorBoldCyn, tell_line, kColorNrm);
+	SendMsgToChar(to_vict, vict);
 	if (!vict->IsNpc()) {
-		vict->remember_add(buf1, Remember::ALL);
+		vict->remember_add(to_vict, Remember::ALL);
 	}
 
 	if (!vict->IsNpc() && !ch->IsNpc()) {
-		snprintf(buf, kMaxStringLength, "%s%s : '%s'%s\r\n", kColorBoldCyn,
-				 tell_can_see(ch, vict) ? GET_NAME(ch) : "Кто-то", arg, kColorNrm);
-		vict->remember_add(buf, Remember::PERSONAL);
+		vict->remember_add(fmt::format("{}{} : '{}'{}\r\n", kColorBoldCyn,
+									   tell_can_see(ch, vict) ? GET_NAME(ch) : "Кто-то", arg, kColorNrm),
+						   Remember::PERSONAL);
 	}
 
 	if (ch->IsFlagged(EPrf::kNoRepeat)) {
-		SendMsgToChar(OK, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 	} else {
-		snprintf(buf, kMaxStringLength, "%sВы сказали %s : '%s'%s\r\n", kColorBoldCyn,
-				 tell_can_see(vict, ch) ? vict->player_data.PNames[ECase::kDat].c_str() : "кому-то", arg, kColorNrm);
-		SendMsgToChar(buf, ch);
+		// Эхо отправителю переносим по ЕГО ширине экрана -- так же, как выше переносится копия
+		// получателя. Раньше эхо уходило одной строкой, и длинный телл у клиентов без переноса
+		// обрезался по краю окна.
+		std::string echo = fmt::format("Вы сказали {} : '{}'",
+									   tell_can_see(vict, ch)
+											   ? vict->player_data.PNames[grammar::ECase::kDat] : "кому-то",
+									   arg);
+		if (const auto width = LineWrapWidth(ch); width > 0) {
+			echo = utils::WrapText(echo, width);
+		}
+		const std::string to_char = fmt::format("{}{}{}\r\n", kColorBoldCyn, echo, kColorNrm);
+		SendMsgToChar(to_char, ch);
 		if (!ch->IsNpc()) {
-			ch->remember_add(buf, Remember::ALL);
+			ch->remember_add(to_char, Remember::ALL);
 		}
 	}
 
 	if (!vict->IsNpc() && !ch->IsNpc()) {
-		vict->set_answer_id(GET_UID(ch));
+		vict->set_answer_id(ch->get_uid());
 	}
 }
 

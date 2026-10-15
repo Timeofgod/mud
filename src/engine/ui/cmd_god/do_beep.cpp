@@ -7,7 +7,7 @@
 */
 
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
 #include "engine/ui/color.h"
 
 void perform_beep(CharData *ch, CharData *vict);
@@ -15,12 +15,13 @@ void perform_beep(CharData *ch, CharData *vict);
 void do_beep(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	CharData *vict = nullptr;
 
-	one_argument(argument, buf);
+	char name[kMaxInputLength];
+	one_argument(argument, name);
 
-	if (!*buf)
+	if (!*name)
 		SendMsgToChar("Кого вызывать?\r\n", ch);
-	else if (!(vict = get_char_vis(ch, buf, EFind::kCharInWorld)) || vict->IsNpc())
-		SendMsgToChar(NOPERSON, ch);
+	else if (!(vict = target_resolver::FindCharInWorld(ch, name)) || vict->IsNpc())
+		SendMsgToChar(CommonMsg(ECommonMsg::kNoPerson) + "\r\n", ch);
 	else if (ch == vict)
 		SendMsgToChar("\007\007Вы вызвали себя!\r\n", ch);
 	else if (ch->IsFlagged(EPrf::kNoTell))
@@ -37,16 +38,14 @@ void do_beep(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 
 void perform_beep(CharData *ch, CharData *vict) {
 	SendMsgToChar(kColorRed, vict);
-	sprintf(buf, "\007\007 $n вызывает вас!");
-	act(buf, false, ch, nullptr, vict, kToVict | kToSleep);
+	act("\007\007 $n вызывает вас!", false, ch, nullptr, vict, kToVict | kToSleep);
 	SendMsgToChar(kColorNrm, vict);
 
 	if (ch->IsFlagged(EPrf::kNoRepeat))
-		SendMsgToChar(OK, ch);
+		SendMsgToChar(CommonMsg(ECommonMsg::kOk) + "\r\n", ch);
 	else {
 		SendMsgToChar(kColorRed, ch);
-		sprintf(buf, "Вы вызвали $N3.");
-		act(buf, false, ch, nullptr, vict, kToChar | kToSleep);
+		act("Вы вызвали $N3.", false, ch, nullptr, vict, kToChar | kToSleep);
 		SendMsgToChar(kColorNrm, ch);
 	}
 }

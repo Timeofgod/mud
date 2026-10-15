@@ -1,20 +1,25 @@
 #include "do_create.h"
 
+#include <fmt/format.h>
+#include "administration/privilege.h"
+#include "gameplay/mechanics/magic_item.h"
+
+#include <string>
+
 #include "gameplay/crafting/im.h"
 #include "gameplay/magic/magic_utils.h"
-#include "engine/core/handler.h"
+#include "engine/entities/char_data.h"
 
 void do_create(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
-	char *s;
-
 	if (ch->IsNpc())
 		return;
 
 	// get: blank, spell name, target name
-	argument = one_argument(argument, arg);
+	char item_kind[kMaxInputLength];
+	argument = one_argument(argument, item_kind);
 	skip_spaces(&argument);
 
-	if (!*arg) {
+	if (!*item_kind) {
 		if (subcmd == SCMD_RECIPE)
 			SendMsgToChar("Состав ЧЕГО вы хотите узнать?\r\n", ch);
 		else
@@ -22,16 +27,15 @@ void do_create(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		return;
 	}
 
-	size_t i = strlen(arg);
 	ESpellType itemnum;
-	if (!strn_cmp(arg, "potion", i) || !strn_cmp(arg, "напиток", i))
+	if (utils::IsAbbr(item_kind, "potion") || utils::IsAbbr(item_kind, "напиток"))
 		itemnum = ESpellType::kPotionCast;
-	else if (!strn_cmp(arg, "wand", i) || !strn_cmp(arg, "палочка", i))
+	else if (utils::IsAbbr(item_kind, "wand") || utils::IsAbbr(item_kind, "палочка"))
 		itemnum = ESpellType::kWandCast;
-	else if (!strn_cmp(arg, "scroll", i) || !strn_cmp(arg, "свиток", i))
+	else if (utils::IsAbbr(item_kind, "scroll") || utils::IsAbbr(item_kind, "свиток"))
 		itemnum = ESpellType::kScrollCast;
-	else if (!strn_cmp(arg, "recipe", i) || !strn_cmp(arg, "рецепт", i) ||
-		!strn_cmp(arg, "отвар", i)) {
+	else if (utils::IsAbbr(item_kind, "recipe") || utils::IsAbbr(item_kind, "рецепт") ||
+		utils::IsAbbr(item_kind, "отвар")) {
 		if (subcmd != SCMD_RECIPE) {
 			SendMsgToChar("Магическую смесь необходимо СМЕШАТЬ.\r\n", ch);
 			return;
@@ -39,7 +43,7 @@ void do_create(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 //		itemnum = SPELL_ITEMS;
 		compose_recipe(ch, argument, 0);
 		return;
-	} else if (!strn_cmp(arg, "runes", i) || !strn_cmp(arg, "руны", i)) {
+	} else if (utils::IsAbbr(item_kind, "runes") || utils::IsAbbr(item_kind, "руны")) {
 		if (subcmd != SCMD_RECIPE) {
 			SendMsgToChar("Руны требуется сложить.\r\n", ch);
 			return;
@@ -47,29 +51,35 @@ void do_create(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		itemnum = ESpellType::kRunes;
 	} else {
 		if (subcmd == SCMD_RECIPE)
-			snprintf(buf, kMaxInputLength, "Состав '%s' уже давно утерян.\r\n", arg);
+			SendMsgToChar(fmt::format("Состав '{}' уже давно утерян.\r\n", item_kind), ch);
 		else
-			snprintf(buf, kMaxInputLength, "Создание '%s' доступно только Великим Богам.\r\n", arg);
-		SendMsgToChar(buf, ch);
+			SendMsgToChar(fmt::format("Создание '{}' доступно только Великим Богам.\r\n", item_kind), ch);
 		return;
 	}
 	if (!*argument) {
-		sprintf(buf, "Уточните тип состава!\r\n");
-		SendMsgToChar(buf, ch);
+		SendMsgToChar("Уточните тип состава!\r\n", ch);
 		return;
 	}
-	s = strtok(argument, "'*!");
-	if (!str_cmp(s, argument)) {
+	std::string arg_str(argument);
+	auto quote1 = arg_str.find_first_of("'*!");
+	if (quote1 == std::string::npos) {
 		SendMsgToChar("Название состава должно быть заключено в символы : ' или * или !\r\n", ch);
 		return;
 	}
-	auto spell_id = FixNameAndFindSpellId(s);
+	auto quote2 = arg_str.find_first_of("'*!", quote1 + 1);
+	std::string spell_name_str;
+	if (quote2 != std::string::npos) {
+		spell_name_str = arg_str.substr(quote1 + 1, quote2 - quote1 - 1);
+	} else {
+		spell_name_str = arg_str.substr(quote1 + 1);
+	}
+	auto spell_id = FixNameAndFindSpellId(spell_name_str);
 	if (spell_id == ESpell::kUndefined) {
 		SendMsgToChar("И откуда вы набрались рецептов?\r\n", ch);
 		return;
 	}
 	// Caster is don't know this recipe
-	if (!IS_SET(GET_SPELL_TYPE(ch, spell_id), itemnum) && !IS_IMMORTAL(ch)) {
+	if (!IS_SET(GET_SPELL_TYPE(ch, spell_id), itemnum) && !privilege::IsImmortal(ch)) {
 		SendMsgToChar("Было бы неплохо прежде всего выучить этот состав.\r\n", ch);
 		return;
 	}

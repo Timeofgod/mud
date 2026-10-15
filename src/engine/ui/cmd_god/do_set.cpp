@@ -3,12 +3,17 @@
 //
 
 #include "administration/karma.h"
+#include "gameplay/core/experience.h"
+#include "gameplay/economics/currencies.h"
+#include "engine/db/global_objects.h"
+#include "gameplay/mechanics/mount.h"
 #include "administration/names.h"
 #include "administration/privilege.h"
 #include "administration/punishments.h"
 #include "gameplay/mechanics/depot.h"
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/core/target_resolver.h"
 #include "gameplay/mechanics/liquid.h"
 #include "engine/olc/olc.h"
 #include "engine/entities/char_player.h"
@@ -17,13 +22,15 @@
 #include "administration/password.h"
 #include "gameplay/statistics/top.h"
 #include "gameplay/fight/fight.h"
-#include "gameplay/classes/classes.h"
+#include "gameplay/classes/pc_classes.h"
 #include "gameplay/core/game_limits.h"
 #include "gameplay/mechanics/weather.h"
+#include "engine/db/player_index.h"
 
-#include <third_party_libs/fmt/include/fmt/format.h>
+#include <fmt/format.h>
 
 #include <memory>
+#include "utils/native_text.h"
 
 enum class ESetVict {
   kPc,
@@ -108,12 +115,12 @@ SetCmdStruct set_fields[] =
 		{"remort", kLvlImplementator, ESetVict::kPc, ESetValue::kNumber}, // 59
 		{"tester", kLvlImplementator, ESetVict::kPc, ESetValue::kBinary}, // 60
 		{"autobot", kLvlImplementator, ESetVict::kPc, ESetValue::kBinary}, // 61
-		{"hryvn", kLvlImplementator, ESetVict::kPc, ESetValue::kNumber}, // 62
+		{"currency", kLvlImplementator, ESetVict::kBoth, ESetValue::kMisc}, // 62 (generic: <text_id> <amount>, hand)
 		{"scriptwriter", kLvlImplementator, ESetVict::kPc, ESetValue::kBinary}, // 63
 		{"spammer", kLvlGod, ESetVict::kPc, ESetValue::kBinary}, // 64
 		{"gloryhide", kLvlImplementator, ESetVict::kPc, ESetValue::kBinary}, // 65
 		{"telegram", kLvlImplementator, ESetVict::kPc, ESetValue::kMisc}, // 66
-		{"nogata", kLvlImplementator, ESetVict::kPc, ESetValue::kNumber}, // 67
+		{"currency_bank", kLvlImplementator, ESetVict::kBoth, ESetValue::kMisc}, // 67 (generic: <text_id> <amount>, bank)
 		{"position", kLvlImplementator, ESetVict::kPc, ESetValue::kNumber},
 		{"skilltester", kLvlImplementator, ESetVict::kPc, ESetValue::kBinary}, //69
 		{"quest", kLvlImplementator, ESetVict::kPc, ESetValue::kNumber}, //70
@@ -124,7 +131,6 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg);
 void RenamePlayer(CharData *ch, char *oname);
 
 extern int _parse_name(char *arg, char *name);
-extern int reserved_word(const char *argument);
 
 void DoSet(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	CharData *vict = nullptr;
@@ -132,31 +138,32 @@ void DoSet(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	int mode, player_i = 0, retval;
 	char is_file = 0, is_player = 0;
 
-	half_chop(argument, name, buf);
+	char rest[kMaxInputLength];
+	half_chop(argument, name, rest);
 
 	if (!*name) {
-		strcpy(buf, "Возможные поля для изменения:\r\n");
+		std::string fields = "Возможные поля для изменения:\r\n";
 		for (int i = 0; set_fields[i].level; i++)
 			if (privilege::HasPrivilege(ch, std::string(set_fields[i].cmd), 0, 1))
-				sprintf(buf + strlen(buf), "%-15s%s", set_fields[i].cmd, (!((i + 1) % 5) ? "\r\n" : ""));
-		strcat(buf, "\r\n");
-		SendMsgToChar(buf, ch);
+				fields += fmt::format("{:<15}{}", set_fields[i].cmd, (!((i + 1) % 5) ? "\r\n" : ""));
+		fields += "\r\n";
+		SendMsgToChar(fields, ch);
 		return;
 	}
 
 	if (!strcmp(name, "file")) {
 		is_file = 1;
-		half_chop(buf, name, buf);
+		half_chop(rest, name, rest);
 	} else if (!str_cmp(name, "player")) {
 		is_player = 1;
-		half_chop(buf, name, buf);
+		half_chop(rest, name, rest);
 	} else if (!str_cmp(name, "mob")) {
-		half_chop(buf, name, buf);
+		half_chop(rest, name, rest);
 	} else
 		is_player = 1;
 
-	half_chop(buf, field, buf);
-	strcpy(val_arg, buf);
+	half_chop(rest, field, rest);
+	strcpy(val_arg, rest);
 
 	if (!*name || !*field) {
 		SendMsgToChar("Usage: set [mob|player|file] <victim> <field> <value>\r\n", ch);
@@ -168,14 +175,14 @@ void DoSet(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	if (!is_file) {
 		if (is_player) {
 
-			if (!(vict = get_player_pun(ch, name, EFind::kCharInWorld))) {
+			if (!(vict = target_resolver::FindPlayer(ch, name))) {
 				SendMsgToChar("Нет такого игрока.\r\n", ch);
 				return;
 			}
 
 			// Запрет на злоупотребление командой SET на бессмертных
 			if (!GET_GOD_FLAG(ch, EGf::kDemigod)) {
-				if ((GetRealLevel(ch) <= GetRealLevel(vict)) && !(is_head(ch->get_name_str()))) {
+				if ((GetRealLevel(ch) <= GetRealLevel(vict)) && !(privilege::IsOwner(ch))) {
 					SendMsgToChar("Вы не можете сделать этого.\r\n", ch);
 					return;
 				}
@@ -187,7 +194,7 @@ void DoSet(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 			}
 		} else    // is_mob
 		{
-			if (!(vict = get_char_vis(ch, name, EFind::kCharInWorld))
+			if (!(vict = target_resolver::FindCharInWorld(ch, name))
 				|| !vict->IsNpc()) {
 				SendMsgToChar("Нет такой твари Божьей.\r\n", ch);
 				return;
@@ -195,7 +202,7 @@ void DoSet(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		}
 	} else if (is_file)    // try to load the player off disk
 	{
-		if (get_player_pun(ch, name, EFind::kCharInWorld)) {
+		if (target_resolver::FindPlayer(ch, name)) {
 			SendMsgToChar("Да разуй же глаза! Оно в сети!\r\n", ch);
 			return;
 		}
@@ -204,7 +211,7 @@ void DoSet(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 		if ((player_i = LoadPlayerCharacter(name, cbuf.get(), ELoadCharFlags::kFindId)) > -1) {
 			// Запрет на злоупотребление командой SET на бессмертных
 			if (!GET_GOD_FLAG(ch, EGf::kDemigod)) {
-				if (GetRealLevel(ch) <= GetRealLevel(cbuf) && !(is_head(ch->get_name_str()))) {
+				if (GetRealLevel(ch) <= GetRealLevel(cbuf) && !(privilege::IsOwner(ch))) {
 					SendMsgToChar("Вы не можете сделать этого.\r\n", ch);
 					return;
 				}
@@ -242,7 +249,9 @@ void DoSet(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				vict->save_char();
 			}
 			if (is_file) {
-				vict->save_char();
+				// issue.3678-affect-timer: offline edit must NOT restamp the last-live-save time,
+				// or it would zero the player's offline interval on the next login.
+				vict->save_char(false);
 				SendMsgToChar("Файл сохранен.\r\n", ch);
 			}
 		}
@@ -256,7 +265,7 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 	int i, j, c, value = 0, return_code = 1, ptnum, times = 0;
 //	bool on = false;
 //	bool off = false;
-	char npad[ECase::kLastCase + 1][256];
+	char npad[grammar::ECase::kLastCase + 1][256];
 	char *reason;
 	RoomRnum rnum;
 	RoomVnum rvnum;
@@ -264,7 +273,7 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 	int rod;
 
 	// Check to make sure all the levels are correct
-	if (!IS_IMPL(ch)) {
+	if (!privilege::IsImpl(ch)) {
 		if (!vict->IsNpc() && vict != ch) {
 			if (!GET_GOD_FLAG(ch, EGf::kDemigod)) {
 				if (GetRealLevel(ch) <= GetRealLevel(vict) && !ch->IsFlagged(EPrf::kCoderinfo)) {
@@ -296,9 +305,9 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 	// Find the value of the argument
 	bool on_off_mode{false};
 	if (set_fields[mode].type == ESetValue::kBinary) {
-		if (!strn_cmp(val_arg, "on", 2) || !strn_cmp(val_arg, "yes", 3) || !strn_cmp(val_arg, "вкл", 3)) {
+		if (utils::IsAbbr("on", val_arg) || utils::IsAbbr("yes", val_arg) || utils::IsAbbr("вкл", val_arg)) {
 			on_off_mode = true;
-		} else if (!strn_cmp(val_arg, "off", 3) || !strn_cmp(val_arg, "no", 2) || !strn_cmp(val_arg, "выкл", 4)) {
+		} else if (utils::IsAbbr("off", val_arg) || utils::IsAbbr("no", val_arg) || utils::IsAbbr("выкл", val_arg)) {
 			on_off_mode = false;
 		} else {
 			SendMsgToChar("Значение может быть 'on' или 'off'.\r\n", ch);
@@ -334,10 +343,10 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 		case 8: break;
 		case 9:
 			// Выставляется род для РС
-			rod = PlayerRace::CheckRace(GET_KIN(ch), val_arg);
-			if (rod == RACE_UNDEFINED) {
+			rod = player_races::RaceVnumByMenuChoice(val_arg);
+			if (rod == player_races::kRaceUndefined) {
 				SendMsgToChar("Не было таких на земле русской!\r\n", ch);
-				SendMsgToChar(PlayerRace::ShowRacesMenu(GET_KIN(ch)), ch);
+				SendMsgToChar(player_races::FormatRacesMenu(), ch);
 				return (0);
 			} else {
 				GET_RACE(vict) = rod;
@@ -351,14 +360,14 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 		case 11: vict->real_abils.armor = std::clamp(value, -100, 100);
 			affect_total(vict);
 			break;
-		case 12: vict->set_gold(value);
+		case 12: currencies::SetHand(*vict, currencies::kGold, value);
 			break;
-		case 13: vict->set_bank(value);
+		case 13: currencies::SetBank(*vict, currencies::kGold, value);
 			break;
 		case 14: {
 			auto new_value = static_cast<long>(value);
-			new_value = std::clamp(new_value, 0L, GetExpUntilNextLvl(vict, kLvlImmortal) - 1) - vict->get_exp();
-			gain_exp_regardless(vict, new_value);
+			new_value = std::clamp(new_value, 0L, std::max(0L, experience::GetExpUntilNextLvl(vict, kLvlImmortal) - 1)) - vict->get_exp();
+			experience::gain_exp_regardless(vict, new_value);
 			break;
 		}
 		case 15: vict->real_abils.hitroll = std::clamp(value, -20, 20);
@@ -368,14 +377,14 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 			affect_total(vict);
 			break;
 		case 17:
-			if (!IS_IMPL(ch) && ch != vict && !ch->IsFlagged(EPrf::kCoderinfo)) {
+			if (!privilege::IsImpl(ch) && ch != vict && !ch->IsFlagged(EPrf::kCoderinfo)) {
 				SendMsgToChar("Вы не столь Божественны, как вам кажется!\r\n", ch);
 				return (0);
 			}
 			SET_INVIS_LEV(vict, std::clamp(value, 0, GetRealLevel(vict)));
 			break;
 		case 18:
-			if (!IS_IMPL(ch) && ch != vict && !ch->IsFlagged(EPrf::kCoderinfo)) {
+			if (!privilege::IsImpl(ch) && ch != vict && !ch->IsFlagged(EPrf::kCoderinfo)) {
 				SendMsgToChar("Вы не столь Божественны, как вам кажется!\r\n", ch);
 				return (0);
 			}
@@ -446,14 +455,14 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 				RemoveCharFromRoom(vict);
 			}
 			PlaceCharToRoom(vict, rnum);
-			vict->dismount();
+			mount::Dismount(vict);
 			break;
 		case 28: on_off_mode ? vict->SetFlag(EPrf::kRoomFlags) : vict->UnsetFlag(EPrf::kRoomFlags);
 			break;
 		case 29: on_off_mode ? vict->SetFlag(EPlrFlag::kSiteOk) : vict->UnsetFlag(EPlrFlag::kSiteOk);
 			break;
 		case 30:
-			if (IS_IMPL(vict) || vict->IsFlagged(EPrf::kCoderinfo)) {
+			if (privilege::IsImpl(vict) || vict->IsFlagged(EPrf::kCoderinfo)) {
 				SendMsgToChar("Истинные боги вечны!\r\n", ch);
 				return 0;
 			}
@@ -476,14 +485,14 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 		}
 		case 32:
 			// Флаг для морталов с привилегиями
-			if (!IS_IMPL(ch) && !ch->IsFlagged(EPrf::kCoderinfo)) {
+			if (!privilege::IsImpl(ch) && !ch->IsFlagged(EPrf::kCoderinfo)) {
 				SendMsgToChar("Вы не столь Божественны, как вам кажется!\r\n", ch);
 				return 0;
 			}
 			if (on_off_mode) {
-				SET_GOD_FLAG(vict, EGf::kDemigod);
+				SET_BIT(vict->player_specials->saved.GodsLike, EGf::kDemigod);
 			} else {
-				CLR_GOD_FLAG(vict, EGf::kDemigod);
+				REMOVE_BIT(vict->player_specials->saved.GodsLike, EGf::kDemigod);
 			}
 			break;
 		case 33:
@@ -512,11 +521,11 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 			return 0;
 			break;
 		case 36:
-			if (!IS_IMPL(ch) && !ch->IsFlagged(EPrf::kCoderinfo) && ch != vict) {
+			if (!privilege::IsImpl(ch) && !ch->IsFlagged(EPrf::kCoderinfo) && ch != vict) {
 				SendMsgToChar("Давайте не будем экспериментировать.\r\n", ch);
 				return (0);
 			}
-			if (IS_IMPL(vict) && ch != vict) {
+			if (privilege::IsImpl(vict) && ch != vict) {
 				SendMsgToChar("Вы не можете ЭТО изменить.\r\n", ch);
 				return (0);
 			}
@@ -526,8 +535,7 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 			}
 			Password::set_password(vict, val_arg);
 			Password::send_password(GET_EMAIL(vict), val_arg, std::string(GET_NAME(vict)));
-			sprintf(buf, "%s заменен пароль богом.", GET_PAD(vict, 2));
-			AddKarma(vict, buf, GET_NAME(ch));
+			AddKarma(vict, fmt::format("{} заменен пароль богом.", GET_PAD(vict, 2)), GET_NAME(ch));
 			sprintf(output, "Пароль изменен на '%s'.", val_arg);
 			break;
 		case 37: on_off_mode ? vict->SetFlag(EPlrFlag::kNoDelete) : vict->UnsetFlag(EPlrFlag::kNoDelete);
@@ -566,36 +574,34 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 
 		case 42:
 			if (on_off_mode) {
-				SET_GOD_FLAG(vict, EGf::kGodsLike);
+				SET_BIT(vict->player_specials->saved.GodsLike, EGf::kGodsLike);
 				if (sscanf(val_arg, "%s %d", npad[0], &i) != 0)
-					GCURSE_DURATION(vict) = (i > 0) ? time(nullptr) + i * 60 * 60 : MAX_TIME;
+					punishments::Get(vict, punishments::EType::kGcurse).duration = (i > 0) ? time(nullptr) + i * 60 * 60 : MAX_TIME;
 				else
-					GCURSE_DURATION(vict) = 0;
-				sprintf(buf, "%s установил GUDSLIKE персонажу %s.", GET_NAME(ch), GET_NAME(vict));
-				mudlog(buf, BRF, kLvlImplementator, SYSLOG, 0);
+					punishments::Get(vict, punishments::EType::kGcurse).duration = 0;
+				mudlog(fmt::format("{} установил GUDSLIKE персонажу {}.", GET_NAME(ch), GET_NAME(vict)), BRF, kLvlImplementator, SYSLOG, 0);
 
 			} else {
-				CLR_GOD_FLAG(vict, EGf::kGodsLike);
+				REMOVE_BIT(vict->player_specials->saved.GodsLike, EGf::kGodsLike);
 			}
 			break;
 		case 43:
 			if (on_off_mode) {
-				SET_GOD_FLAG(vict, EGf::kGodscurse);
+				SET_BIT(vict->player_specials->saved.GodsLike, EGf::kGodscurse);
 				if (sscanf(val_arg, "%s %d", npad[0], &i) != 0) {
-					GCURSE_DURATION(vict) = (i > 0) ? time(nullptr) + i * 60 * 60 : MAX_TIME;
+					punishments::Get(vict, punishments::EType::kGcurse).duration = (i > 0) ? time(nullptr) + i * 60 * 60 : MAX_TIME;
 				} else {
-					GCURSE_DURATION(vict) = 0;
+					punishments::Get(vict, punishments::EType::kGcurse).duration = 0;
 				}
 			} else {
-				CLR_GOD_FLAG(vict, EGf::kGodscurse);
+				REMOVE_BIT(vict->player_specials->saved.GodsLike, EGf::kGodscurse);
 			}
 			break;
 		case 44:
-			if (ch->IsFlagged(EPrf::kCoderinfo) || IS_IMPL(ch))
+			if (ch->IsFlagged(EPrf::kCoderinfo) || privilege::IsImpl(ch))
 				GET_OLC_ZONE(vict) = value;
 			else {
-				sprintf(buf, "Слишком низкий уровень чтоб раздавать права OLC.\r\n");
-				SendMsgToChar(buf, ch);
+				SendMsgToChar("Слишком низкий уровень чтоб раздавать права OLC.\r\n", ch);
 			}
 			break;
 
@@ -603,32 +609,29 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 			// изменение имени !!!
 
 			if ((i = sscanf(val_arg, "%s %s %s %s %s %s", npad[0], npad[1], npad[2], npad[3], npad[4], npad[5])) != 6) {
-				sprintf(buf, "Требуется указать 6 падежей, найдено %d\r\n", i);
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Требуется указать 6 падежей, найдено {}\r\n", i), ch);
 				return (0);
 			}
 
 			if (*npad[0] == '*')    // Only change pads
 			{
-				for (i = ECase::kGen; i <= ECase::kLastCase; i++)
+				for (i = grammar::ECase::kGen; i <= grammar::ECase::kLastCase; i++)
 					if (!_parse_name(npad[i], npad[i])) {
 						vict->player_data.PNames[i] = std::string(npad[i]);
 					}
-				sprintf(buf, "Произведена замена падежей.\r\n");
-				SendMsgToChar(buf, ch);
+				SendMsgToChar("Произведена замена падежей.\r\n", ch);
 			} else {
-				for (i = ECase::kFirstCase; i <= ECase::kLastCase; i++) {
-					if (strlen(npad[i]) < kMinNameLength || strlen(npad[i]) > kMaxNameLength) {
-						sprintf(buf, "Падеж номер %d некорректен.\r\n", ++i);
-						SendMsgToChar(buf, ch);
+				for (i = grammar::ECase::kFirstCase; i <= grammar::ECase::kLastCase; i++) {
+					if (static_cast<int>(native_text::char_count(npad[i])) < kMinNameLength || static_cast<int>(native_text::char_count(npad[i])) > kMaxNameLength) {
+						SendMsgToChar(fmt::format("Падеж номер {} некорректен.\r\n", ++i), ch);
 						return (0);
 					}
 				}
 
 				if (_parse_name(npad[0], npad[0]) ||
-					strlen(npad[0]) < kMinNameLength ||
-					strlen(npad[0]) > kMaxNameLength ||
-					!IsNameAvailable(npad[0]) || reserved_word(npad[0]) || fill_word(npad[0])) {
+					static_cast<int>(native_text::char_count(npad[0])) < kMinNameLength ||
+					static_cast<int>(native_text::char_count(npad[0])) > kMaxNameLength ||
+					!IsNameAvailable(npad[0])) {
 					SendMsgToChar("Некорректное имя.\r\n", ch);
 					return (0);
 				}
@@ -647,22 +650,22 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 
 				if (!vict->IsFlagged(EPlrFlag::kFrozen)
 					&& !vict->IsFlagged(EPlrFlag::kDeleted)
-					&& !IS_IMMORTAL(vict)) {
+					&& !privilege::IsImmortal(vict)) {
 					TopPlayer::Remove(vict);
 				}
 
-				for (i = ECase::kFirstCase; i <= ECase::kLastCase; i++) {
+				for (i = grammar::ECase::kFirstCase; i <= grammar::ECase::kLastCase; i++) {
 					if (!_parse_name(npad[i], npad[i])) {
 						vict->player_data.PNames[i] = std::string(npad[i]);
 					}
 				}
-				sprintf(buf, "Name changed from %s to %s", GET_NAME(vict), npad[0]);
+				const std::string rename_note = fmt::format("Name changed from {} to {}", GET_NAME(vict), npad[0]);
 				vict->set_name(npad[0]);
-				AddKarma(vict, buf, GET_NAME(ch));
+				AddKarma(vict, rename_note, GET_NAME(ch));
 
 				if (!vict->IsFlagged(EPlrFlag::kFrozen)
 					&& !vict->IsFlagged(EPlrFlag::kDeleted)
-					&& !IS_IMMORTAL(vict)) {
+					&& !privilege::IsImmortal(vict)) {
 					TopPlayer::Refresh(vict);
 				}
 
@@ -743,8 +746,7 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 		case 50:
 			if (IsValidEmail(val_arg)) {
 				utils::ConvertToLow(val_arg);
-				sprintf(buf, "Email changed from %s to %s", GET_EMAIL(vict), val_arg);
-				AddKarma(vict, buf, GET_NAME(ch));
+				AddKarma(vict, fmt::format("Email changed from {} to {}", GET_EMAIL(vict), val_arg), GET_NAME(ch));
 				strncpy(GET_EMAIL(vict), val_arg, 127);
 				*(GET_EMAIL(vict) + 127) = '\0';
 			} else {
@@ -768,9 +770,9 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 		case 52:
 			// Отдельный лог команд персонажа
 			if (on_off_mode) {
-				SET_GOD_FLAG(vict, EGf::kPerslog);
+				SET_BIT(vict->player_specials->saved.GodsLike, EGf::kPerslog);
 			} else {
-				CLR_GOD_FLAG(vict, EGf::kPerslog);
+				REMOVE_BIT(vict->player_specials->saved.GodsLike, EGf::kPerslog);
 			}
 			break;
 
@@ -815,30 +817,30 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 					return (0);
 			}
 			break;
-		case 55:
-			if (GetRealLevel(vict) >= kLvlImmortal && !IS_IMPL(ch) && !ch->IsFlagged(EPrf::kCoderinfo)) {
+		case 55: {
+			if (GetRealLevel(vict) >= kLvlImmortal && !privilege::IsImpl(ch) && !ch->IsFlagged(EPrf::kCoderinfo)) {
 				SendMsgToChar("Кем вы себя возомнили?\r\n", ch);
 				return 0;
 			}
 			reason = strdup(val_arg);
 			if (reason && *reason) {
 				skip_spaces(&reason);
-				sprintf(buf, "add by %s", GET_NAME(ch));
+				const std::string karma_source = fmt::format("add by {}", GET_NAME(ch));
 				if (!strcmp(reason, "clear")) {
 					if KARMA(vict)
 						free(KARMA(vict));
 
 					KARMA(vict) = nullptr;
 					act("Вы отпустили $N2 все грехи.", false, ch, nullptr, vict, kToChar);
-					sprintf(buf, "%s", GET_NAME(ch));
-					AddKarma(vict, "Очистка грехов", buf);
+					AddKarma(vict, "Очистка грехов", GET_NAME(ch));
 
-				} else AddKarma(vict, buf, reason);
+				} else AddKarma(vict, karma_source, reason);
 			} else {
 				SendMsgToChar("Формат команды: set [ file | player ] <character> karma <reason>\r\n", ch);
 				return (0);
 			}
 			break;
+		}
 
 		case 56:      // Разрегистрация персонажа
 			reason = one_argument(val_arg, num);
@@ -848,8 +850,7 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 		case 57:      // Установка флага палач
 			reason = one_argument(val_arg, num);
 			skip_spaces(&reason);
-			sprintf(buf, "executor %s by %s", (on_off_mode ? "on" : "off"), GET_NAME(ch));
-//			AddKarma(vict, buf, reason);
+//			AddKarma(vict, fmt::format("executor {} by {}", on_off_mode ? "on" : "off", GET_NAME(ch)).c_str(), reason);
 			if (on_off_mode) {
 				vict->SetFlag(EPrf::kExecutor);
 			} else {
@@ -859,47 +860,51 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 
 		case 58: on_off_mode ? vict->SetFlag(EPlrFlag::kKiller) : vict->UnsetFlag(EPlrFlag::kKiller);
 			break;
-		case 59: // флаг реморта
+		case 59: { // флаг реморта
 			if (value > 1 && value < 75) {
-				sprintf(buf, "Иммортал %s установил реморт %d  для игрока %s ", GET_NAME(ch), value, GET_NAME(vict));
-				AddKarma(vict, buf, GET_NAME(ch));
-				AddKarma(ch, buf, GET_NAME(vict));
+				const std::string remort_note =
+					fmt::format("Иммортал {} установил реморт {}  для игрока {} ", GET_NAME(ch), value, GET_NAME(vict));
+				AddKarma(vict, remort_note, GET_NAME(ch));
+				AddKarma(ch, remort_note, GET_NAME(vict));
 				vict->set_remort(value);
-				SendMsgToGods(buf);
+				SendMsgToGods(remort_note.c_str());
 			} else {
 				SendMsgToChar(ch, "Неправильно указан реморт.\r\n");
 			}
 			break;
+		}
 		case 60: // флаг тестера
 			if (!str_cmp(val_arg, "off") || !str_cmp(val_arg, "выкл")) {
-				CLR_GOD_FLAG(vict, EGf::kAllowTesterMode);
+				REMOVE_BIT(vict->player_specials->saved.GodsLike, EGf::kAllowTesterMode);
 				vict->UnsetFlag(EPrf::kTester); // обнулим реж тестер
-				sprintf(buf, "%s убрал флаг тестера для игрока %s", GET_NAME(ch), GET_NAME(vict));
-				mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+				mudlog(fmt::format("{} убрал флаг тестера для игрока {}", GET_NAME(ch), GET_NAME(vict)), BRF, kLvlImmortal, SYSLOG, true);
 			} else {
-				SET_GOD_FLAG(vict, EGf::kAllowTesterMode);
-				sprintf(buf, "%s установил флаг тестера для игрока %s", GET_NAME(ch), GET_NAME(vict));
-				mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+				SET_BIT(vict->player_specials->saved.GodsLike, EGf::kAllowTesterMode);
+				mudlog(fmt::format("{} установил флаг тестера для игрока {}", GET_NAME(ch), GET_NAME(vict)), BRF, kLvlImmortal, SYSLOG, true);
 				//			send_to_gods(buf);
 			}
 			break;
 		case 61: on_off_mode ? vict->SetFlag(EPlrFlag::kAutobot) : vict->UnsetFlag(EPlrFlag::kAutobot);
 			break;
-		case 62: vict->set_hryvn(value);
+		case 62: {
+			char cur_id[64] = {0}; long amt = 0;
+			if (sscanf(val_arg, "%63s %ld", cur_id, &amt) == 2 && MUD::Currencies().FindAvailableItem(cur_id).GetId() >= 0) {
+				currencies::SetHand(*vict, cur_id, amt, true, true);
+			} else {
+				SendMsgToChar("Формат: set <имя> currency <id_валюты> <количество>.\r\n", ch);
+			}
 			break;
+		}
 		case 63: // флаг скриптера
-			sprintf(buf, "%s", GET_NAME(ch));
 			if (!str_cmp(val_arg, "off") || !str_cmp(val_arg, "выкл")) {
 				vict->UnsetFlag(EPlrFlag::kScriptWriter);
-				AddKarma(vict, "Снятие флага скриптера", buf);
-				sprintf(buf, "%s убрал флаг скриптера для игрока %s", GET_NAME(ch), GET_NAME(vict));
-				mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+				AddKarma(vict, "Снятие флага скриптера", GET_NAME(ch));
+				mudlog(fmt::format("{} убрал флаг скриптера для игрока {}", GET_NAME(ch), GET_NAME(vict)), BRF, kLvlImmortal, SYSLOG, true);
 				return (1);
 			} else if (!str_cmp(val_arg, "on") || !str_cmp(val_arg, "вкл")) {
 				vict->SetFlag(EPlrFlag::kScriptWriter);
-				AddKarma(vict, "Установка флага скриптера", buf);
-				sprintf(buf, "%s установил  флаг скриптера для игрока %s", GET_NAME(ch), GET_NAME(vict));
-				mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+				AddKarma(vict, "Установка флага скриптера", GET_NAME(ch));
+				mudlog(fmt::format("{} установил  флаг скриптера для игрока {}", GET_NAME(ch), GET_NAME(vict)), BRF, kLvlImmortal, SYSLOG, true);
 				return (1);
 			} else {
 				SendMsgToChar(ch, "Значение может быть только on/off или вкл/выкл.\r\n");
@@ -920,21 +925,27 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 
 			unsigned long int id = strtoul(val_arg, nullptr, 10);
 			if (!ch->IsNpc() && id != 0) {
-				sprintf(buf, "Telegram chat_id изменен с %lu на %lu\r\n", vict->player_specials->saved.telegram_id, id);
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("Telegram chat_id изменен с {} на {}\r\n", vict->player_specials->saved.telegram_id, id), ch);
 				vict->setTelegramId(id);
 			} else
 				SendMsgToChar("Ошибка, указано неверное число или персонаж.\r\n", ch);
 			break;
 		}
-		case 67: vict->set_nogata(value);
+		case 67: {
+			char cur_id[64] = {0}; long amt = 0;
+			if (sscanf(val_arg, "%63s %ld", cur_id, &amt) == 2 && MUD::Currencies().FindAvailableItem(cur_id).GetId() >= 0) {
+				currencies::SetBank(*vict, cur_id, amt, true, true);
+			} else {
+				SendMsgToChar("Формат: set <имя> currency_bank <id_валюты> <количество>.\r\n", ch);
+			}
 			break;
+		}
 		case 68: {
 			auto tmpval = (EPosition) value;
 			if (tmpval > EPosition::kDead && tmpval < EPosition::kLast) {
-				sprinttype(value, position_types, smallBuf);
-				sprintf(buf, "Для персонажа %s установлена позиция: %s.\r\n", GET_NAME(vict), smallBuf);
-				SendMsgToChar(buf, ch);
+				char position_name[kMaxInputLength];
+				sprinttype(value, position_types, position_name);
+				SendMsgToChar(fmt::format("Для персонажа {} установлена позиция: {}.\r\n", GET_NAME(vict), position_name), ch);
 				vict->SetPosition(tmpval);
 			} else {
 				const auto msg = fmt::format("Позиция может принимать значения от {} до {}.\r\n",
@@ -946,13 +957,11 @@ int PerformSet(CharData *ch, CharData *vict, int mode, char *val_arg) {
 		}
 		case 69: // флаг скилл тестера
 			if (!str_cmp(val_arg, "off") || !str_cmp(val_arg, "выкл")) {
-				CLR_GOD_FLAG(vict, EGf::kSkillTester);
-				sprintf(buf, "%s убрал флаг &Rскилл тестера&n для игрока %s", GET_NAME(ch), GET_NAME(vict));
-				mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+				REMOVE_BIT(vict->player_specials->saved.GodsLike, EGf::kSkillTester);
+				mudlog(fmt::format("{} убрал флаг &Rскилл тестера&n для игрока {}", GET_NAME(ch), GET_NAME(vict)), BRF, kLvlImmortal, SYSLOG, true);
 			} else {
-				SET_GOD_FLAG(vict, EGf::kSkillTester);
-				sprintf(buf, "%s установил флаг &Rскилл тестера&n для игрока %s", GET_NAME(ch), GET_NAME(vict));
-				mudlog(buf, BRF, kLvlImmortal, SYSLOG, true);
+				SET_BIT(vict->player_specials->saved.GodsLike, EGf::kSkillTester);
+				mudlog(fmt::format("{} установил флаг &Rскилл тестера&n для игрока {}", GET_NAME(ch), GET_NAME(vict)), BRF, kLvlImmortal, SYSLOG, true);
 			}
 			break;
 		case 70: //quest

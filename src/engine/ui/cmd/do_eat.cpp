@@ -1,7 +1,13 @@
+#include <fmt/format.h>
+
 #include "do_eat.h"
+#include "gameplay/mechanics/condition.h"
+#include "administration/privilege.h"
 
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_handler.h"
+#include "engine/core/obj_handler.h"
+#include "engine/core/target_resolver.h"
 #include "do_hire.h"
 #include "gameplay/mechanics/liquid.h"
 #include "gameplay/fight/fight.h"
@@ -16,8 +22,6 @@ extern void die(CharData *ch, CharData *killer);
 void feed_charmice(CharData *ch, char *local_arg) {
 	int max_charm_duration = 1;
 	int chance_to_eat = 0;
-	struct FollowerType *k;
-	int reformed_hp_summ = 0;
 
 	auto obj = get_obj_in_list_vis(ch, local_arg, world[ch->in_room]->contents);
 
@@ -25,19 +29,9 @@ void feed_charmice(CharData *ch, char *local_arg) {
 		return;
 	}
 
-	for (k = ch->get_master()->followers; k; k = k->next) {
-		if (AFF_FLAGGED(k->follower, EAffect::kCharmed)
-			&& k->follower->get_master() == ch->get_master()) {
-			reformed_hp_summ += GetReformedCharmiceHp(ch->get_master(), k->follower, ESpell::kAnimateDead);
-		}
-	}
-
-	if (reformed_hp_summ >= CalcCharmPoint(ch->get_master(), ESpell::kAnimateDead)) {
-		SendMsgToChar("Вы не можете управлять столькими последователями.\r\n", ch->get_master());
-		ExtractCharFromWorld(ch, false);
-		return;
-	}
-
+	// issue.animate-dead: animate dead no longer uses the reformed-HP budget (its control
+	// limit is the skill-based count cap enforced at summon), so devouring a corpse just
+	// heals + extends the charm -- no budget gate / cull here.
 	int mob_level = 1;
 	// труп не игрока
 	if (GET_OBJ_VAL(obj, 2) != -1) {
@@ -45,7 +39,7 @@ void feed_charmice(CharData *ch, char *local_arg) {
 	}
 	const int max_heal_hp = 3 * mob_level;
 	chance_to_eat = (100 - 2 * mob_level) / 2;
-	if (IsAffectedBySpell(ch->get_master(), ESpell::kFascination)) {
+	if (IsAffected(ch->get_master(), EAffect::kFascination)) {
 		chance_to_eat -= 30;
 	}
 	if (number(1, 100) < chance_to_eat) {
@@ -61,23 +55,24 @@ void feed_charmice(CharData *ch, char *local_arg) {
 	}
 	if (weather_info.moon_day < 14) {
 		max_charm_duration =
-			CalcDuration(ch, GetRealWis(ch->get_master()) - 6 + number(0, weather_info.moon_day % 14), 0, 0, 0, 0);
+			CalcDuration(ch, ch, ESkill::kUndefined, GetRealWis(ch->get_master()) - 6 + number(0, weather_info.moon_day % 14), 0, 0, 0);
 	} else {
 		max_charm_duration =
-			CalcDuration(ch,
-						 GetRealWis(ch->get_master()) - 6 + number(0, 14 - weather_info.moon_day % 14),
-						 0, 0, 0, 0);
+			CalcDuration(ch, ch, ESkill::kUndefined, GetRealWis(ch->get_master()) - 6 + number(0, 14 - weather_info.moon_day % 14), 0, 0, 0);
 	}
 
 	Affect<EApply> af;
-	af.type = ESpell::kCharm;
 	af.duration = std::min(max_charm_duration, (int) (mob_level * max_charm_duration / 30));
 	af.modifier = 0;
 	af.location = EApply::kNone;
-	af.bitvector = to_underlying(EAffect::kCharmed);
-	af.battleflag = 0;
+	af.affect_type = EAffect::kCharmed;
+	af.battleflag = {kAfCharmBond};
 
 	ImposeAffect(ch, af);
+	// issue #4002: вместе с привязкой продлеваем весь её пакет -- прибавки нежити носят тот же флаг
+	// и раньше оставались с прежним сроком, так что истекали, а индикатор «скоро уйдёт» ещё горел.
+	ExtendCharmBond(ch, af.duration);
+	if (ch->IsNpc()) { ch->SetFlag(EMobFlag::kCompanion); }	// any NPC ally
 
 	act("Громко чавкая, $N сожрал$G труп.", true, ch, obj, ch, kToRoom | kToArenaListen);
 	act("Похоже, лакомство пришлось по вкусу.", true, ch, nullptr, ch->get_master(), kToVict);
@@ -100,13 +95,16 @@ void feed_charmice(CharData *ch, char *local_arg) {
 void do_eat(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	ObjData *food;
 	int amount;
+	char name[kMaxInputLength];
 
-	one_argument(argument, arg);
+	one_argument(argument, name);
 
 	if (subcmd == kScmdDevour) {
-		if (ch->IsFlagged(EMobFlag::kResurrected)
+		// kUndead покрывает и умертвий (animate dead), и оживлённых (kResurrection):
+		// раньше тут было kResurrected, но animate dead его больше не ставит (issue #3482)
+		if (ch->IsFlagged(EMobFlag::kUndead)
 			&& CanUseFeat(ch->get_master(), EFeat::kZombieDrover)) {
-			feed_charmice(ch, arg);
+			feed_charmice(ch, name);
 			return;
 		}
 	}
@@ -119,7 +117,7 @@ void do_eat(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 	if (ch->IsNpc())        // Cannot use GET_COND() on mobs.
 		return;
 
-	if (!*arg) {
+	if (!*name) {
 		SendMsgToChar("Чем вы собрались закусить?\r\n", ch);
 		return;
 	}
@@ -128,9 +126,8 @@ void do_eat(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		return;
 	}
 
-	if (!(food = get_obj_in_list_vis(ch, arg, ch->carrying))) {
-		snprintf(buf, kMaxInputLength, "У вас нет '%s'.\r\n", arg);
-		SendMsgToChar(buf, ch);
+	if (!(food = get_obj_in_list_vis(ch, name, ch->carrying))) {
+		SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", name), ch);
 		return;
 	}
 	if (subcmd == kScmdTaste
@@ -140,8 +137,8 @@ void do_eat(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 		return;
 	}
 
-	if (!IS_GOD(ch)) {
-		if (food->get_type() == EObjType::kMagicIngredient) //Сообщение на случай попытки проглотить ингры
+	if (!privilege::IsGod(ch)) {
+		if (food->get_type() == EObjType::kMagicComponent) //Сообщение на случай попытки проглотить ингры
 		{
 			SendMsgToChar("Не можешь приготовить - покупай готовое!\r\n", ch);
 			return;
@@ -152,7 +149,7 @@ void do_eat(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			return;
 		}
 	}
-	if (GET_COND(ch, FULL) == 0
+	if (GET_COND(ch, condition::kFull) == 0
 		&& food->get_type() != EObjType::kNote)    // Stomach full
 	{
 		SendMsgToChar("Вы слишком сыты для этого!\r\n", ch);
@@ -173,48 +170,48 @@ void do_eat(CharData *ch, char *argument, int/* cmd*/, int subcmd) {
 			  ? GET_OBJ_VAL(food, 0)
 			  : 1);
 
-	gain_condition(ch, FULL, -2 * amount);
+	gain_condition(ch, condition::kFull, -2 * amount);
 
-	if (GET_COND(ch, FULL) == 0) {
+	if (GET_COND(ch, condition::kFull) == 0) {
 		SendMsgToChar("Вы наелись.\r\n", ch);
 	}
 
-	for (int i = 0; i < kMaxObjAffect; i++) {
+	// Immortals use "eat" to destroy any object (the non-food guard above is skipped for gods). Only a
+	// real food item confers the well-fed buff -- otherwise eating an item to delete it would graft its
+	// apply modifiers onto the eater as kWellFed affects (which then persist across saves).
+	for (int i = 0; food->get_type() == EObjType::kFood && i < kMaxObjAffect; i++) {
 		if (food->get_affected(i).modifier) {
 			Affect<EApply> af;
 			af.location = food->get_affected(i).location;
 			af.modifier = food->get_affected(i).modifier;
-			af.bitvector = 0;
-			af.type = ESpell::kFullFeed;
-//			af.battleflag = 0;
-			af.duration = CalcDuration(ch, 10 * 2, 0, 0, 0, 0);
+			af.affect_type = EAffect::kWellFed;
+//			af.battleflag.clear();
+			af.duration = CalcDuration(ch, ch, ESkill::kUndefined, 10 * 2, 0, 0, 0);
 			ImposeAffect(ch, af);
 		}
 
 	}
 
-	if ((GET_OBJ_VAL(food, 3) == 1) && !IS_IMMORTAL(ch))    // The shit was poisoned !
+	if ((GET_OBJ_VAL(food, 3) == 1) && !privilege::IsImmortal(ch))    // The shit was poisoned !
 	{
 		SendMsgToChar("Однако, какой странный вкус!\r\n", ch);
 		act("$n закашлял$u и начал$g отплевываться.",
 			false, ch, nullptr, nullptr, kToRoom | kToArenaListen);
 
 		Affect<EApply> af;
-		af.type = ESpell::kPoison;
-		af.duration = CalcDuration(ch, amount == 1 ? amount : amount * 2, 0, 0, 0, 0);
+		af.duration = CalcDuration(ch, ch, ESkill::kUndefined, amount == 1 ? amount : amount * 2, 0, 0, 0);
 		af.modifier = 0;
 		af.location = EApply::kStr;
-		af.bitvector = to_underlying(EAffect::kPoisoned);
-		af.battleflag = kAfSameTime;
+		af.affect_type = EAffect::kPoisoned;
+		af.battleflag = {kAfSameTime};
 		ImposeAffect(ch, af, false, false, false, false);
-		af.type = ESpell::kPoison;
-		af.duration = CalcDuration(ch, amount == 1 ? amount : amount * 2, 0, 0, 0, 0);
+		af.duration = CalcDuration(ch, ch, ESkill::kUndefined, amount == 1 ? amount : amount * 2, 0, 0, 0);
 		af.modifier = amount * 3;
 		af.location = EApply::kPoison;
-		af.bitvector = to_underlying(EAffect::kPoisoned);
-		af.battleflag = kAfSameTime;
+		af.affect_type = EAffect::kPoisoned;
+		af.battleflag = {kAfSameTime};
 		ImposeAffect(ch, af, false, false, false, false);
-		ch->poisoner = 0;
+		// отравленная еда -- сам виноват: у аффекта нет автора (caster_id остаётся 0)
 	}
 	if (subcmd == kScmdEat
 		|| (subcmd == kScmdTaste

@@ -3,8 +3,10 @@
 // Part of Bylins http://www.mud.ru
 
 #include "file_crc.h"
+#include "engine/db/player_index.h"
 
 #include "engine/db/db.h"
+#include "engine/db/global_objects.h"
 #include "logger.h"
 #include "utils/utils.h"
 #include "engine/ui/interpreter.h"
@@ -68,20 +70,9 @@ uint32_t calculate_str_crc(const std::string &text) {
 	return CRC32_function(text.c_str(), text.size());
 }
 
-// * Подсчет crc для файла.
-uint32_t calculate_file_crc(const char *name) {
-	std::ifstream in(name, std::ios::binary);
-	if (!in.is_open())
-		return 0;
-
-	std::ostringstream t_out;
-	t_out << in.rdbuf();
-	return calculate_str_crc(t_out.str());
-}
-
 // * Загрузка глобального списка crc.
 void load() {
-	const char *file_name = LIB_PLRSTUFF"crc.lst";
+	const char *file_name = MUD::StateManager().Path(state::EStateFile::kSaveChecksums).c_str();
 	std::ifstream file(file_name);
 	if (!file.is_open()) {
 		add_message("SYSERROR: не удалось открыть файл на чтение: %s", file_name);
@@ -162,7 +153,7 @@ void save(bool force_save) {
 	const uint32_t crc = calculate_str_crc(out.str());
 
 	// это все в конце, чтобы не завалить на креше файл
-	const char *file_name = LIB_PLRSTUFF"crc.lst";
+	const char *file_name = MUD::StateManager().Path(state::EStateFile::kSaveChecksums).c_str();
 	std::ofstream file(file_name);
 	if (!file.is_open()) {
 		add_message("SYSERROR: не удалось открыть файл на запись: %s", file_name);
@@ -172,23 +163,15 @@ void save(bool force_save) {
 	file.close();
 }
 
-void create_message(std::string &name, int mode, const uint32_t &expected, const uint32_t &calculated) {
+void create_message(std::string &name, EType file, const uint32_t &expected, const uint32_t &calculated) {
 	char time_buf[20];
 	time_t ct = time(nullptr);
 	strftime(time_buf, sizeof(time_buf), "%d-%m-%y %H:%M:%S", localtime(&ct));
 	std::string file_type;
-	switch (mode) {
-		case PLAYER: file_type = "player";
-			break;
-
-		case TEXTOBJS: file_type = "textobjs";
-			break;
-
-		case TIMEOBJS: file_type = "timeobjs";
-			break;
-
-		default: file_type = "error mode";
-			break;
+	switch (file) {
+		case kPlayer:   file_type = "player";   break;
+		case kTextObjs: file_type = "textobjs"; break;
+		case kTimeObjs: file_type = "timeobjs"; break;
 	}
 
 	add_message("%s несовпадение контрольной суммы %s файла: %s (expected: %u; calculated: %u)",
@@ -199,89 +182,91 @@ void create_message(std::string &name, int mode, const uint32_t &expected, const
 				static_cast<unsigned>(calculated));
 }
 
-/**
-* Проверка crc файлоа плеера.
-* \param mode - PLAYER для просто сверки, UPDATE_PLAYER - для сверки с перезаписью нового crc.
-*/
-void check_crc(const char *filename, int mode, long uid) {
-	CRCListType::const_iterator it = crc_list.find(uid);
-	if (it != crc_list.end()) {
-		switch (mode) {
-			case PLAYER: {
-				const auto crc = calculate_file_crc(filename);
-				if (it->second->player != crc) {
-					create_message(it->second->name, mode, it->second->player, crc);
-				}
-				break;
-			}
-
-			case TEXTOBJS: {
-				const auto crc = calculate_file_crc(filename);
-				if (it->second->textobjs != crc) {
-					create_message(it->second->name, mode, it->second->textobjs, crc);
-				}
-				break;
-			}
-
-			case TIMEOBJS: {
-				const auto crc = calculate_file_crc(filename);
-				if (it->second->timeobjs != crc) {
-					create_message(it->second->name, mode, it->second->timeobjs, crc);
-				}
-				break;
-			}
-
-			case UPDATE_PLAYER: it->second->player = calculate_file_crc(filename);
-				it->second->name = GetNameByUnique(uid);
-				break;
-
-			case UPDATE_TEXTOBJS: it->second->textobjs = calculate_file_crc(filename);
-				it->second->name = GetNameByUnique(uid);
-				break;
-
-			case UPDATE_TIMEOBJS: it->second->timeobjs = calculate_file_crc(filename);
-				it->second->name = GetNameByUnique(uid);
-				break;
-
-			default:
-				add_message("SYSERROR: мы не должны были сюда попасть, uid: %ld, mode: %d, func: %s",
-							uid,
-							mode,
-							__func__);
-				return;
-		}
-	} else {
-		CRCListPtr tmp_crc(new PlayerCRC);
-		tmp_crc->name = GetNameByUnique(uid);
-		switch (mode) {
-			case PLAYER:
-			case UPDATE_PLAYER: tmp_crc->player = calculate_file_crc(filename);
-				break;
-
-			case TEXTOBJS:
-			case UPDATE_TEXTOBJS: tmp_crc->textobjs = calculate_file_crc(filename);
-				break;
-
-			case TIMEOBJS:
-			case UPDATE_TIMEOBJS: tmp_crc->timeobjs = calculate_file_crc(filename);
-				break;
-
-			default: add_message("SYSERROR: мы не должны были сюда попасть2, mode: %d, func: %s", mode, __func__);
-				break;
-		}
-		crc_list[uid] = tmp_crc;
-	}
-
-	if (mode >= UPDATE_PLAYER)
-		need_save = true;
-}
-
 // * Вывод лога событий имму по show crc.
 void show(CharData *ch) {
 	if (message.empty())
 		SendMsgToChar("Вроде ничего не происходило...\r\n", ch);
 	else
 		SendMsgToChar(message.c_str(), ch);
+}
+
+// Внутренний upsert: создаёт запись uid при отсутствии и кладёт CRC в поле
+// по типу файла. Флаг need_save -- забота вызывающего.
+static void set_crc_field(long uid, EType file, uint32_t crc) {
+	auto it = crc_list.find(uid);
+	if (it == crc_list.end()) {
+		it = crc_list.emplace(uid, CRCListPtr(new PlayerCRC)).first;
+	}
+	switch (file) {
+		case kPlayer:   it->second->player = crc;   break;
+		case kTextObjs: it->second->textobjs = crc; break;
+		case kTimeObjs: it->second->timeobjs = crc; break;
+	}
+	it->second->name = GetNameByUnique(uid);
+}
+
+// Чтение текущего CRC поля по типу файла (для сверки).
+static uint32_t get_crc_field(const PlayerCRC &p, EType file) {
+	switch (file) {
+		case kPlayer:   return p.player;
+		case kTextObjs: return p.textobjs;
+		case kTimeObjs: return p.timeobjs;
+	}
+	return 0;  // недостижимо: switch исчерпывающий по EType
+}
+
+// Записывает CRC из готового буфера в памяти, без перечитывания файла.
+// Вызывается при сохранении: CRC считается из того же буфера, что и на диск.
+void update_from_content(long uid, EType file, const char *data, std::size_t len) {
+	set_crc_field(uid, file, CRC32_function(data, static_cast<unsigned long>(len)));
+	need_save = true;
+}
+
+// Сброс CRC файла игрока в 0: файл удалён (Crash_delete_files). Раньше для
+// этого звали check_crc на уже удалённом файле, чтобы получить 0 чтением.
+std::size_t forget_all() {
+	const std::size_t forgotten = crc_list.size();
+	crc_list.clear();
+	need_save = true;
+	save(true);
+	return forgotten;
+}
+
+void reset(long uid, EType file) {
+	set_crc_field(uid, file, 0);
+	need_save = true;
+}
+
+// Сверка CRC из готового буфера со снимком в crc_list (вместо повторного
+// чтения файла на загрузке). Возвращает true при совпадении; при расхождении
+// -- сообщение имму в лог и false. Если снимка ещё нет -- заводит базовый
+// (как делал check_crc для режимов сверки) и возвращает true.
+bool verify_from_content(long uid, EType file, const char *data, std::size_t len) {
+	const uint32_t crc = CRC32_function(data, static_cast<unsigned long>(len));
+	auto it = crc_list.find(uid);
+	if (it == crc_list.end()) {
+		set_crc_field(uid, file, crc);
+		return true;
+	}
+	const uint32_t stored = get_crc_field(*it->second, file);
+	// Ноль в поле player означает "снимка нет", а не "ожидаем нулевую сумму". Запись могла
+	// появиться из-за сброса соседнего поля: истекла рента -> reset для objs заводит запись со
+	// всеми нулями, а в player CRC ни разу не писали. Раньше такой ноль сверялся как настоящий
+	// ожидаемый CRC, и игрок при каждом входе давал имму ложную тревогу; сам собой этот ноль не
+	// чинился, потому что при несовпадении снимок не обновляется.
+	//
+	// Только для player: файл персонажа существует всегда, и reset для него не вызывается. У
+	// файлов объектов ноль осмыслен -- это "файл удален сервером", и появление такого файла
+	// заново как раз должно поднимать тревогу.
+	if (file == kPlayer && stored == 0) {
+		set_crc_field(uid, file, crc);
+		return true;
+	}
+	if (stored != crc) {
+		create_message(it->second->name, file, stored, crc);
+		return false;
+	}
+	return true;
 }
 
 } // namespace FileCRC

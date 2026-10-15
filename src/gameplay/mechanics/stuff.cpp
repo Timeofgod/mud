@@ -11,10 +11,14 @@
 
 #include <cmath>
 #include <algorithm>
+#include <fmt/format.h>
 
 #include "engine/db/world_objects.h"
 #include "engine/db/obj_prototypes.h"
-#include "engine/core/handler.h"
+#include "engine/core/char_equip_flags.h"
+#include "engine/core/obj_handler.h"
+#include "engine/entities/char_data.h"
+#include "gameplay/mechanics/equipment.h"
 #include "corpse.h"
 #include "engine/ui/color.h"
 #include "sets_drop.h"
@@ -93,12 +97,13 @@ void oload_class::init() {
 	std::istringstream isstream;
 	bool in_block = false;
 	ObjVnum ovnum;
+	ObjRnum orn = -1;
 	MobVnum mvnum;
 	int oqty, lprob;
 
 	clear();
 
-	std::ifstream fp(LIB_MISC "stuff.lst");
+	std::ifstream fp(LIB_WORLDDATA "stuff.lst");
 
 	if (!fp) {
 		cppstr = "oload_class:: Unable open input file !!!";
@@ -124,7 +129,8 @@ void oload_class::init() {
 			isstream.str(cppstr);
 			isstream >> std::noskipws >> ovnum;
 
-			if (!isstream.eof() || GetObjRnum(ovnum) < 0) {
+			orn = GetObjRnum(ovnum);
+			if (!isstream.eof() || orn < 0) {
 				isstream.clear();
 				cppstr = "oload_class:: Error in line '#" + cppstr + "' expected '#<RIGHT_obj_vnum>' !!!";
 				mudlog(cppstr.c_str(), LGH, kLvlImmortal, SYSLOG, true);
@@ -153,7 +159,7 @@ void oload_class::init() {
 
 			isstream.clear();
 
-			add_elem(mvnum, ovnum, obj_load_info(oqty, lprob));
+			add_elem(mvnum, orn, obj_load_info(oqty, lprob));
 		} else {
 			cppstr = "oload_class:: Error in line '" + cppstr + "' expected '#<RIGHT_obj_vnum>' !!!";
 			mudlog(cppstr.c_str(), LGH, kLvlImmortal, SYSLOG, true);
@@ -164,7 +170,7 @@ void oload_class::init() {
 oload_class oload_table;
 
 ObjRnum ornum_by_info(const std::pair<ObjVnum, obj_load_info> &it) {
-	ObjRnum i = GetObjRnum(it.first);
+	ObjRnum i = it.first;
 	ObjRnum resutl_obj = number(1, MAX_LOAD_PROB) <= it.second.load_prob
 						  ? (it.first >= 0 && i >= 0
 							 ? (obj_proto.actual_count(i) < it.second.obj_qty
@@ -230,12 +236,12 @@ void generate_book_upgrd(ObjData *obj) {
 	obj->set_short_description("книга секретов умения: " + book_name);
 	obj->set_description("Книга секретов умения: " + book_name + " лежит здесь.");
 
-	obj->set_PName(ECase::kNom, "книга секретов умения: " + book_name);
-	obj->set_PName(ECase::kGen, "книги секретов умения: " + book_name);
-	obj->set_PName(ECase::kDat, "книге секретов умения: " + book_name);
-	obj->set_PName(ECase::kAcc, "книгу секретов умения: " + book_name);
-	obj->set_PName(ECase::kIns, "книгой секретов умения: " + book_name);
-	obj->set_PName(ECase::kPre, "книге секретов умения: " + book_name);
+	obj->set_PName(grammar::ECase::kNom, "книга секретов умения: " + book_name);
+	obj->set_PName(grammar::ECase::kGen, "книги секретов умения: " + book_name);
+	obj->set_PName(grammar::ECase::kDat, "книге секретов умения: " + book_name);
+	obj->set_PName(grammar::ECase::kAcc, "книгу секретов умения: " + book_name);
+	obj->set_PName(grammar::ECase::kIns, "книгой секретов умения: " + book_name);
+	obj->set_PName(grammar::ECase::kPre, "книге секретов умения: " + book_name);
 }
 
 void generate_warrior_enchant(ObjData *obj) {
@@ -269,8 +275,8 @@ void generate_warrior_enchant(ObjData *obj) {
 			set_obj_eff(obj, stat, get_stat_mod(stat));
 			break;
 		}
-		default: sprintf(buf2, "SYSERR: Unknown vnum warrior enchant object: %d", GET_OBJ_VNUM(obj));
-			mudlog(buf2, BRF, kLvlImmortal, SYSLOG, true);
+		default: mudlog(fmt::format("SYSERR: Unknown vnum warrior enchant object: {}", GET_OBJ_VNUM(obj)),
+						BRF, kLvlImmortal, SYSLOG, true);
 			break;
 	}
 }
@@ -316,8 +322,8 @@ void generate_magic_enchant(ObjData *obj) {
 			}
 			break;
 		}
-		default: sprintf(buf2, "SYSERR: Unknown vnum magic enchant object: %d", GET_OBJ_VNUM(obj));
-			mudlog(buf2, BRF, kLvlImmortal, SYSLOG, true);
+		default: mudlog(fmt::format("SYSERR: Unknown vnum magic enchant object: {}", GET_OBJ_VNUM(obj)),
+						BRF, kLvlImmortal, SYSLOG, true);
 			break;
 	}
 }
@@ -380,7 +386,7 @@ void obj_load_on_death(ObjData *corpse, CharData *ch) {
 		return;
 	}
 
-	const int rnum = SetsDrop::check_mob(GET_MOB_RNUM(ch));
+	const int rnum = SetsDrop::check_mob(ch->get_rnum());
 	if (rnum > 0) {
 		obj_to_corpse(corpse, ch, rnum, true);
 	}
@@ -412,13 +418,13 @@ void create_charmice_stuff(CharData *ch, const ESkill skill_id, int diff) {
 	const std::string descr = std::string("острые когти ") + ch->get_pad(1);
 	obj->set_short_description(descr);
 	obj->set_description("Острые когти лежат здесь.");
-	obj->set_ex_description(descr.c_str(), "Острые когти лежат здесь.");
-	obj->set_PName(ECase::kNom, "острые когти");
-	obj->set_PName(ECase::kGen, "острых когтей");
-	obj->set_PName(ECase::kDat, "острым когтям");
-	obj->set_PName(ECase::kAcc, "острые когти");
-	obj->set_PName(ECase::kIns, "острыми когтями");
-	obj->set_PName(ECase::kPre, "острых когтях");
+	obj->set_ex_description(descr, "Острые когти лежат здесь.");
+	obj->set_PName(grammar::ECase::kNom, "острые когти");
+	obj->set_PName(grammar::ECase::kGen, "острых когтей");
+	obj->set_PName(grammar::ECase::kDat, "острым когтям");
+	obj->set_PName(grammar::ECase::kAcc, "острые когти");
+	obj->set_PName(grammar::ECase::kIns, "острыми когтями");
+	obj->set_PName(grammar::ECase::kPre, "острых когтях");
 	obj->set_sex(EGender::kPoly);
 //	obj->set_type(EObjType::kWeapon);
 	// среднее оружки
@@ -519,15 +525,15 @@ void create_charmice_stuff(CharData *ch, const ESkill skill_id, int diff) {
 	case ESkill::kShieldBlock: // блок щитом ? делаем щит
 		obj->set_type(EObjType::kArmor);
 		obj->set_description("Роговые пластины лежат здесь.");
-		obj->set_ex_description(descr.c_str(), "Роговые пластины лежат здесь.");
+		obj->set_ex_description(descr, "Роговые пластины лежат здесь.");
 		obj->set_aliases("роговые пластины");
 		obj->set_short_description("роговые пластины");
-		obj->set_PName(ECase::kNom, "роговые пластины");
-		obj->set_PName(ECase::kGen, "роговых пластин");
-		obj->set_PName(ECase::kDat, "роговым пластинам");
-		obj->set_PName(ECase::kAcc, "роговые пластины");
-		obj->set_PName(ECase::kIns, "роговыми пластинами");
-		obj->set_PName(ECase::kPre, "роговых пластинах");
+		obj->set_PName(grammar::ECase::kNom, "роговые пластины");
+		obj->set_PName(grammar::ECase::kGen, "роговых пластин");
+		obj->set_PName(grammar::ECase::kDat, "роговым пластинам");
+		obj->set_PName(grammar::ECase::kAcc, "роговые пластины");
+		obj->set_PName(grammar::ECase::kIns, "роговыми пластинами");
+		obj->set_PName(grammar::ECase::kPre, "роговых пластинах");
 		obj->set_val(1, floorf(diff/13.0));
 		obj->set_val(2, floorf(diff/8.0));
 		obj->set_affected(0, EApply::kSavingStability, -floorf(diff/3.0));
@@ -541,30 +547,30 @@ void create_charmice_stuff(CharData *ch, const ESkill skill_id, int diff) {
 			obj->set_sex(EGender::kPoly);
 			obj->set_weight(50);
 			obj->set_description("Оторванная лапа зверя лежит здесь.");
-			obj->set_ex_description(descr.c_str(), "Оторванная лапа зверя лежит здесь.");
+			obj->set_ex_description(descr, "Оторванная лапа зверя лежит здесь.");
 			obj->set_aliases("огромные лапы");
 			obj->set_short_description("огромные лапы");
-			obj->set_PName(ECase::kNom, "огромные лапы");
-			obj->set_PName(ECase::kGen, "огромных лап");
-			obj->set_PName(ECase::kDat, "огромным лапам");
-			obj->set_PName(ECase::kAcc, "огромные лапы");
-			obj->set_PName(ECase::kIns, "огромными лапами");
-			obj->set_PName(ECase::kPre, "огромных лапах");
+			obj->set_PName(grammar::ECase::kNom, "огромные лапы");
+			obj->set_PName(grammar::ECase::kGen, "огромных лап");
+			obj->set_PName(grammar::ECase::kDat, "огромным лапам");
+			obj->set_PName(grammar::ECase::kAcc, "огромные лапы");
+			obj->set_PName(grammar::ECase::kIns, "огромными лапами");
+			obj->set_PName(grammar::ECase::kPre, "огромных лапах");
 			position = 8; // слот ступни
 			break;
 		}
 		obj->set_type(EObjType::kArmor);
 		obj->set_sex(EGender::kFemale);
 		obj->set_description("Прочная шкура лежит здесь.");
-		obj->set_ex_description(descr.c_str(), "Прочная шкура лежит здесь.");
+		obj->set_ex_description(descr, "Прочная шкура лежит здесь.");
 		obj->set_aliases("прочная шкура");
 		obj->set_short_description("прочная шкура");
-		obj->set_PName(ECase::kNom, "прочная шкура");
-		obj->set_PName(ECase::kGen, "прочной шкурой");
-		obj->set_PName(ECase::kDat, "прочной шкуре");
-		obj->set_PName(ECase::kAcc, "прочную шкуру");
-		obj->set_PName(ECase::kIns, "прочной шкурой");
-		obj->set_PName(ECase::kPre, "прочной шкуре");
+		obj->set_PName(grammar::ECase::kNom, "прочная шкура");
+		obj->set_PName(grammar::ECase::kGen, "прочной шкурой");
+		obj->set_PName(grammar::ECase::kDat, "прочной шкуре");
+		obj->set_PName(grammar::ECase::kAcc, "прочную шкуру");
+		obj->set_PName(grammar::ECase::kIns, "прочной шкурой");
+		obj->set_PName(grammar::ECase::kPre, "прочной шкуре");
 		obj->set_val(1, floorf(diff/11.0));
 		obj->set_val(2, floorf(diff/7.0));
 		obj->set_affected(0, EApply::kSavingStability, -floorf(diff*0.7));

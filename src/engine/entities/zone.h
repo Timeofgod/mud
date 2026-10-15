@@ -5,13 +5,9 @@
 
 #include <vector>
 
-struct ZoneCategory {
-	char *name = nullptr;            // type name //
-	int ingr_qty = 0;        // quantity of ingredient types //
-	int *ingr_types = nullptr;    // types of ingredients, which are loaded in zones of this type //
-};
-
-extern struct ZoneCategory *zone_types;
+// (issue.ztypes-migrate) ZoneCategory + zone_types[] were retired in favour of
+// the info_container-backed zone_types::ZoneTypesInfo registry. Reach the data
+// via MUD::ZoneTypes() / MUD::ZoneType(int vnum); see engine/entities/zone_types.h.
 
 // zone definition structure. for the 'zone-table'
 class ZoneData {
@@ -19,10 +15,10 @@ class ZoneData {
 	ZoneData();
 
 	ZoneData(const ZoneData &) = delete;
-	ZoneData(ZoneData &&) = default;
+	ZoneData(ZoneData &&) noexcept;
 
 	ZoneData &operator=(const ZoneData &) = delete;
-	ZoneData &operator=(ZoneData &&) = default;
+	ZoneData &operator=(ZoneData &&) noexcept;
 
 	~ZoneData();
 
@@ -83,6 +79,12 @@ class ZoneData {
 
 using ZoneTable = std::vector<ZoneData>;
 extern ZoneTable &zone_table;
+
+// issue.mob-flag-affect-materialization: mark a zone used, and on the dormant->awake edge realize its
+// NPCs' materializable buff flags into real affects. Idempotent (materializes only on false->true).
+// Use this in place of a bare `zone_table[z].used = true;` at PC-entry / after-reset wake points.
+// Defined in gameplay/affects/affect_data.cpp.
+void MarkZoneUsed(ZoneRnum zrn);
 
 ZoneVnum GetZoneVnumByCharPlace(CharData *ch);
 

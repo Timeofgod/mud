@@ -1,9 +1,6 @@
-<?xml version="1.0" encoding="koi8-r"?>
+<?xml version="1.0" encoding="utf-8"?>
 <class id="kMerchant">
-    <name abbr="Кп">
-        <singular nom="купец" gen="купца" dat="купцу" acc="купца" ins="купцом" pre="купце"/>
-        <plural nom="купцы" gen="купцов" dat="купцам" acc="купцов" ins="купцами" pre="купцах"/>
-    </name>
+    <experience_table id="kAssasineTable"/>
     <stats>
         <base_stats>
             <stat id="kStr"	gen_min="18"	gen_max="21"	auto="18"	cap="60"/>
@@ -30,6 +27,7 @@
         <skill id="kDarkMagic"		level="1"	remort="0"	improve="200"/>
         <skill id="kMindMagic"		level="1"	remort="0"	improve="200"/>
         <skill id="kLifeMagic"		level="1"	remort="0"	improve="100"/>
+        <skill id="kEarthMagic"         level="1"       remort="0"      improve="200"/>
         <skill id="kHangovering"	level="3"	remort="0"	improve="95000"/>
         <skill id="kDigging"		level="5"	remort="0"	improve="600"/>
         <skill id="kHide"		level="5"	remort="0"	improve="200"/>
@@ -62,6 +60,7 @@
         <spell id="kGroupArmor"			level="22"	remort="0"	circle="4"	mem="0"		cast="0.4"/>
         <spell id="kCommonMeal"			level="22"	remort="0"	circle="4"	mem="0"		cast="0.4"/>
 	<spell id="kMassFailure"		level="28"	remort="0"	circle="4"	mem="0"		cast="0.4"/>
+        <spell id="kUnweave" level="12" remort="0" circle="4" mem="0" cast="0.0"/>
     </spells>
     <feats remorts_for_slot="4">
         <feat id="kSilverTongue"		level="1"	remort="0"	slot="0"	inborn="1"/>
@@ -109,4 +108,38 @@
         <feat id="kSpadesMaster"		level="1"	remort="0"	slot="4"	inborn="0"/>
         <feat id="kWarriorSpirit"		level="1"	remort="0"	slot="5"	inborn="0"/>
     </feats>
+    <ingredient_magic>
+		<recipe id="AxePorridge"	level="1"	remort="0"/>
+		<recipe id="SoaringBrew"	level="7"	remort="0"/>
+		<recipe id="WardingPotion"	level="3"	remort="0"/>
+		<recipe id="YarrowDecoction"	level="3"	remort="0"/>
+		<recipe id="AloeInfusion"	level="3"	remort="0"/>
+		<recipe id="AconiteDecoction"	level="18"	remort="0"/>
+		<recipe id="PlantainDecoction"	level="3"	remort="0"/>
+		<recipe id="ChagaInfusion"	level="1"	remort="0"/>
+		<recipe id="MurkyBrew"	level="1"	remort="0"/>
+		<recipe id="RavensEyeInfusion"	level="1"	remort="0"/>
+		<recipe id="BurnetRootDecoction"	level="1"	remort="0"/>
+		<recipe id="FearlessnessDecoction"	level="5"	remort="0"/>
+		<recipe id="ClearInfusion"	level="3"	remort="0"/>
+		<recipe id="DandelionWine"	level="22"	remort="0"/>
+		<recipe id="CockroachWhiskerDecoction"	level="25"	remort="4"/>
+		<recipe id="OwlSightInfusion"	level="1"	remort="0"/>
+		<recipe id="WaterStriderInfusion"	level="10"	remort="0"/>
+		<recipe id="OnionInfusion"	level="15"	remort="0"/>
+		<recipe id="OakBarkDecoction"	level="15"	remort="0"/>
+		<recipe id="GreenFroglingTincture"	level="3"	remort="0"/>
+		<recipe id="ElecampaneDecoction"	level="1"	remort="0"/>
+		<recipe id="MeatBroth"	level="1"	remort="0"/>
+		<recipe id="SnakeAgilityPotion"	level="12"	remort="0"/>
+		<recipe id="WolfHearingPotion"	level="12"	remort="0"/>
+		<recipe id="LongRoadPotion"	level="5"	remort="0"/>
+		<recipe id="SmallBugInfusion"	level="22"	remort="0"/>
+		<recipe id="FlintDecoction"	level="16"	remort="0"/>
+		<recipe id="MouseInfusion"	level="12"	remort="0"/>
+		<recipe id="TalkativenessDecoction"	level="15"	remort="0"/>
+		<recipe id="SmokyPotion"	level="25"	remort="2"/>
+		<recipe id="CatFurInfusion"	level="20"	remort="2"/>
+		<recipe id="BitterTincture"	level="25"	remort="2"/>
+    </ingredient_magic>
 </class>

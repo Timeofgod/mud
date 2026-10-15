@@ -25,14 +25,23 @@ class ExitData {
 	RoomRnum to_room() const;
 	void to_room(const RoomRnum _);
 
+	// Полностью пустой D-блок из .wld/yaml/sqlite (мусор из старых редакторов).
+	// На рантайм не влияет и фильтруется загрузчиком, чтобы не засорять
+	// отчёт show errors и зря не держать ExitData в памяти.
+	bool is_empty() const;
+
 	std::string general_description;    // When look DIR.         //
 
 	char *keyword;        // for open/close       //
 	char *vkeyword;        // алиас двери в винительном падеже для открывания/закрывания
 
-	byte exit_info;    // Exit info             //
+	BitsetFlags<EExitFlag> exit_info;    // Exit info (issue.flags-migration)             //
 	ubyte lock_complexity;
 	ObjVnum key;        // Key's number (-1 for no key) //
+	// issue.room-affect-trigger-improve (door affects): a room affect (Affect<ERoomApply>) may be hosted
+	// on the EXIT/door itself, not just the room -- so a door enchantment is reachable from either side
+	// via the reverse exit (see ForEachDoorAffect). Same type as RoomData::affected; runtime-only.
+	room_spells::RoomAffects affected;
 
  private:
 	RoomRnum to_room_;    // Where direction leads (kNowhere) //
@@ -75,13 +84,13 @@ struct RoomData {
 	char *name;        // Rooms name 'You are ...'           //
 	size_t description_num;    // номер описания в глобальном списке
 	char *temp_description; // для олц, пока редактора не будет нормального
-	ExtraDescription::shared_ptr ex_description;    // for examine/look       //
+	std::vector<ExtraDescription> ex_description;    // for examine/look       //
 	std::array<exit_data_ptr, EDirection::kMaxDirNum> dir_option;    // Directions //
 	std::array<exit_data_ptr, EDirection::kMaxDirNum> dir_option_proto;
 
-	byte light;        // Number of lightsources in room //
-	byte glight;        // Number of lightness person     //
-	byte gdark;        // Number of darkness  person     //
+	int light;        // Number of lightsources in room //
+	int glight;        // Number of lightness person     //
+	int gdark;        // Number of darkness  person     //
 	struct WeatherControl weather;        // Weather state for room //
 	int (*func)(CharData *, void *, int, char *);
 
@@ -89,7 +98,7 @@ struct RoomData {
 	Script::shared_ptr script;    // script info for the object //
 	struct TrackData *track;
 
-	ObjData *contents;    // List of items in room              //
+	ObjData::obj_list_t contents;    // List of items in room              //
 	people_t people;    // List of NPC / PC in room           //
 
 	room_spells::RoomAffects affected;    // affected by what spells       //
@@ -98,25 +107,27 @@ struct RoomData {
 	ubyte fires;        // Time when fires - костерок    //
 	ubyte ices;        // Time when ices restore //
 
-	long pkPenterUnique; //Постановщик пенты по мести
+	// pkPenterUnique retired (issue.affect-flags): the imposing-caster's uid
+	// for a PK-revenge pentagram moved onto the kPortalTimer affect itself
+	// (Affect::pk_unique). Read via room_spells::FindRoomPkPortalUid.
 	int holes;        // Дырки для камне - копателей //
 	int poison;        // Степень заражения территории в SPELL_DEADLY_FOG //
-	bool get_flag(const Bitvector flag) const { return m_room_flags.get(flag); }
-	void set_flag(const Bitvector flag) { m_room_flags.set(flag); }
-	FlagData read_flags() {return m_room_flags; }
-	void write_flags(FlagData fl) {m_room_flags = fl; }
-	void unset_flag(const Bitvector flag) { m_room_flags.unset(flag); }
+	bool get_flag(const Bitvector flag) const { return m_room_flags.get(static_cast<ERoomFlag>(flag)); }
+	void set_flag(const Bitvector flag) { m_room_flags.set(static_cast<ERoomFlag>(flag)); }
+	BitsetFlags<ERoomFlag> read_flags() const { return m_room_flags; }
+	void write_flags(BitsetFlags<ERoomFlag> fl) {m_room_flags = fl; }
+	void unset_flag(const Bitvector flag) { m_room_flags.unset(static_cast<ERoomFlag>(flag)); }
 	bool toggle_flag(const size_t plane, const Bitvector flag) { return m_room_flags.toggle_flag(plane, flag); }
 	void clear_flags() { m_room_flags.clear(); }
 
 	void flags_from_string(const char *flag) { m_room_flags.from_string(flag); };
-	bool flags_sprint(char *result, const char *div, const int print_flag = 0) const {
+	bool flags_sprint(char *result, size_t result_size, const char *div, const int print_flag = 0) const {
 		return m_room_flags.sprintbits(room_bits,
-									   result,
+									   result, result_size,
 									   div,
 									   print_flag);
 	}
-	void flags_tascii(int num_planes, char *ascii) { m_room_flags.tascii(num_planes, ascii); }
+	void flags_tascii(int num_planes, char *ascii, size_t ascii_size) { m_room_flags.tascii(num_planes, ascii, ascii_size); }
 
 	void gm_flag(char *subfield, const char *const *const list, char *res) {
 		m_room_flags.gm_flag(subfield,
@@ -130,7 +141,7 @@ struct RoomData {
 	void set_name(std::string const &name);
 
  private:
-	FlagData m_room_flags;    // DEATH,DARK ... etc //
+	BitsetFlags<ERoomFlag> m_room_flags;    // DEATH,DARK ... etc //
 };
 
 #endif // ROOM_HPP_INCLUDED

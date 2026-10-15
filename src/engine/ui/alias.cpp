@@ -13,8 +13,13 @@
 *  $Revision$                                                      *
 *********************************************************************** */
 
+#include <sstream>
+#include <string>
+#include <vector>
+
 #include "engine/entities/char_data.h"
 #include "engine/ui/alias.h"
+#include "utils/native_text.h"
 
 void WriteAliases(CharData *ch) {
 	FILE *file;
@@ -35,16 +40,20 @@ void WriteAliases(CharData *ch) {
 	}
 
 	for (temp = GET_ALIASES(ch); temp; temp = temp->next) {
-		size_t aliaslen = strlen(temp->alias);
-		size_t repllen = strlen(temp->replacement);
+		// Файл синонимов лежит в нативной кодировке, пишем как есть (issue #3787). Длины в
+		// формате -- байтовые, и считаются ниже по этим же строкам: читатель берёт ровно
+		// столько байт, сколько записано, а уже потом зовёт from_disk_line. Поэтому файл,
+		// оставшийся в KOI8-R, читается по-прежнему -- там и длины koi8-байтовые.
+		const std::string alias_on_disk = temp->alias;
+		const std::string repl_on_disk = temp->replacement;
 
 		fprintf(file, "%d\n%s\n"    // Alias
 					  "%d\n%s\n"    // Replacement
 					  "%d\n",    // Type
-				static_cast<int>(aliaslen),
-				temp->alias,
-				static_cast<int>(repllen),
-				temp->replacement,
+				static_cast<int>(alias_on_disk.size()),
+				alias_on_disk.c_str(),
+				static_cast<int>(repl_on_disk.size()),
+				repl_on_disk.c_str(),
 				temp->type);
 	}
 
@@ -77,11 +86,13 @@ void ReadAliases(CharData *ch) {
 	{
 		dummyi = fscanf(file, "%d\n", &length);
 		dummyc = fgets(xbuf, length + 1, file);
-		t2->alias = str_dup(xbuf);
+		// from_disk_line, а не from_koi8: он распознаёт уже нативный текст и не перекодирует
+		// повторно -- файлы, записанные сборкой без перекодировки, читаются как есть.
+		t2->alias = str_dup(native_text::from_disk_line(xbuf).c_str());
 		// Build the replacement.
 		dummyi = fscanf(file, "%d\n", &length);
 		dummyc = fgets(xbuf, length + 1, file);
-		t2->replacement = str_dup(xbuf);
+		t2->replacement = str_dup(native_text::from_disk_line(xbuf).c_str());
 		// Figure out the alias type.
 		dummyi = fscanf(file, "%d\n", &length);
 		t2->type = length;
@@ -123,53 +134,61 @@ void FreeAlias(struct alias_data *a) {
  * is "$*", which stands for the entire original line after the alias.
  * ";" is used to delimit commands.
  */
-constexpr int kNumTokens{0};
+constexpr int kNumTokens{9};
 
 void perform_complex_alias(struct iosystem::TextBlocksQueue *input_q, char *orig, struct alias_data *a) {
 	struct iosystem::TextBlocksQueue temp_queue;
-	char *tokens[kNumTokens], *temp, *write_point;
-	int num_of_tokens = 0, num;
-
-	// First, parse the original string
-	temp = strtok(strcpy(buf2, orig), " ");
-	while (temp != nullptr && num_of_tokens < kNumTokens) {
-		tokens[num_of_tokens++] = temp;
-		temp = strtok(nullptr, " ");
-	}
-
-	// initialize
-	write_point = buf;
 	temp_queue.head = temp_queue.tail = nullptr;
 
-	// now parse the alias
-	for (temp = a->replacement; *temp; temp++) {
-		if (*temp == kAliasSepChar) {
-			*write_point = '\0';
-			buf[kMaxInputLength - 1] = '\0';
-			write_to_q(buf, &temp_queue, 1);
-			write_point = buf;
-		} else if (*temp == kAliasVarChar) {
-			temp++;
-			if ((num = *temp - '1') < num_of_tokens && num >= 0) {
-				strcpy(write_point, tokens[num]);
-				write_point += strlen(tokens[num]);
-			} else if (*temp == kAliasGlobChar) {
-				strcpy(write_point, orig);
-				write_point += strlen(orig);
-			} else if ((*(write_point++) = *temp) == '$')    // redouble $ for act safety
-				*(write_point++) = '$';
-		} else
-			*(write_point++) = *temp;
+	// разбиваем аргументы (пропуская первое слово если это имя алиаса)
+	std::vector<std::string> tokens;
+	std::string orig_str(orig);
+	std::istringstream stream(orig_str);
+	std::string word;
+	if (stream >> word) {
+		// первое слово может быть именем алиаса - пропускаем его
+		if (str_cmp(word.c_str(), a->alias) != 0) {
+			tokens.push_back(word);
+		}
+		while (stream >> word && tokens.size() < static_cast<size_t>(kNumTokens)) {
+			tokens.push_back(word);
+		}
 	}
 
-	*write_point = '\0';
-	buf[kMaxInputLength - 1] = '\0';
-	write_to_q(buf, &temp_queue, 1);
+	// подставляем переменные в шаблон замены
+	std::string result;
+	const char *repl = a->replacement;
+	while (*repl) {
+		if (*repl == kAliasSepChar) {
+			write_to_q(result.c_str(), &temp_queue, 1);
+			result.clear();
+		} else if (*repl == kAliasVarChar) {
+			repl++;
+			int num = *repl - '1';
+			if (num >= 0 && num < static_cast<int>(tokens.size())) {
+				result += tokens[num];
+			} else if (*repl == kAliasGlobChar) {
+				result += orig_str;
+			} else {
+				result += *repl;
+				if (*repl == '$') {
+					result += '$';
+				}
+			}
+		} else {
+			result += *repl;
+		}
+		repl++;
+	}
+
+	if (!result.empty()) {
+		write_to_q(result.c_str(), &temp_queue, 1);
+	}
 
 	// push our temp_queue on to the _front_ of the input queue
-	if (input_q->head == nullptr)
+	if (input_q->head == nullptr) {
 		*input_q = temp_queue;
-	else {
+	} else {
 		temp_queue.tail->next = input_q->head;
 		input_q->head = temp_queue.head;
 	}
@@ -196,7 +215,7 @@ int PerformAlias(DescriptorData *d, char *orig) {
 		return (0);
 
 	// find the alias we're supposed to match //
-	ptr = any_one_arg(orig, first_arg);
+	ptr = one_argument(orig, first_arg);
 
 	// bail out if it's null //
 	if (!*first_arg)

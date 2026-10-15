@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "administration/ban.h"
+#include "utils/logging/log_manager.h"
 
 namespace {
 // This struct defines order of creating and destroying global objects
@@ -11,6 +12,9 @@ struct GlobalObjectsStorage {
 
 	/// This object should be destroyed last because it serves all output operations. So I define it first.
 	std::shared_ptr<OutputThread> output_thread;
+
+	/// Declared before other game objects so it is destroyed after them (C++ reverse-init order).
+	std::unique_ptr<logging::LogManager> log_manager;
 
 	celebrates::CelebrateList mono_celebrates;
 	celebrates::CelebrateList poly_celebrates;
@@ -30,11 +34,41 @@ struct GlobalObjectsStorage {
 	abilities::AbilitiesInfo abilities_info;
 	SkillsInfo skills_info;
 	spells::SpellsInfo spells_info;
+	spells::SpellMessages spell_messages;
+	points_intensity::PointsIntensity points_intensity;
+	skills::SkillMessages skill_messages;
+    fight::FightMessages fight_messages;
 	feats::FeatsInfo feats_info;
+	feats::FeatMessages feat_messages;
 	cfg_manager::CfgManager cfg_mngr;
+	state::StateManager state_mngr;
 	classes::ClassesInfo classes_info;
+	mob_classes::MobClassesInfo mob_classes_info;
 	guilds::GuildsInfo guilds_info;
+	communication::social::SocialsInfo socials_info;
+	guilds::GuildMessages guild_messages;
+	cities::CitiesInfo cities_info;
+	regions::RegionsInfo regions_info;
+	animate_dead::AnimateDeadInfo animate_dead_info;
+	regions::RegionMessages region_messages;
+	system_messages::SystemMessages system_messages;
+	cities::CityMessages city_messages;
+	player_races::PcRacesInfo pc_races_info;
+	player_races::RaceMessages race_messages;
+	specials::SpecialMessages special_messages;
+	specials::BankMessages bank_messages;
+	specials::MailMessages mail_messages;
+	specials::HorseMessages horse_messages;
+	specials::TorcMessages torc_messages;
+	specials::MercMessages merc_messages;
+	specials::ExchMessages exch_messages;
+	specials::RentMessages rent_messages;
+	specials::ShopMessages shop_messages;
+	specials::BoardMessages board_messages;
+	zone_types::ZoneTypesInfo zone_types_info;
+	rune_spells::Registry rune_spells_info;
 	currencies::CurrenciesInfo currencies_info;
+	mob_races::MobRacesInfo mob_races_info;
   	RunestoneRoster runestone_roster;
 	WorldObjects world_objects;
 	ShopExt::ShopListType shop_list;
@@ -45,14 +79,17 @@ struct GlobalObjectsStorage {
   	InspectRequestDeque inspect_request_deque;
 	BanList *ban;
 	Heartbeat heartbeat;
-	std::shared_ptr<influxdb::Sender> stats_sender;
 	ZoneTable zone_table;
 	DailyQuest::DailyQuestMap daily_quests;
 	Strengthening strengthening;
 	obj2triggers_t obj2triggers;
+	RoomDescriptions room_descriptions;
+	ClanSystem::IngrChestSaver ingr_chest_saver;
+	ClanSystem::ChestSaver chest_saver;
 };
 
 GlobalObjectsStorage::GlobalObjectsStorage() :
+	log_manager(std::make_unique<logging::LogManager>()),
 	ban(nullptr) {
 }
 
@@ -88,6 +125,26 @@ const spells::SpellInfo &GlobalObjects::Spell(ESpell spell_id) {
 	return global_objects().spells_info[spell_id];
 }
 
+spells::SpellMessages &GlobalObjects::SpellMessages() {
+	return global_objects().spell_messages;
+}
+
+points_intensity::PointsIntensity &GlobalObjects::PointsIntensity() {
+	return global_objects().points_intensity;
+}
+
+skills::SkillMessages &GlobalObjects::SkillMessages() {
+	return global_objects().skill_messages;
+}
+
+feats::FeatMessages &GlobalObjects::FeatMessages() {
+	return global_objects().feat_messages;
+}
+
+fight::FightMessages &GlobalObjects::FightMessages() {
+    return global_objects().fight_messages;
+}
+
 feats::FeatsInfo &GlobalObjects::Feats() {
 	return global_objects().feats_info;
 }
@@ -100,6 +157,10 @@ cfg_manager::CfgManager &GlobalObjects::CfgManager() {
 	return global_objects().cfg_mngr;
 }
 
+state::StateManager &GlobalObjects::StateManager() {
+	return global_objects().state_mngr;
+}
+
 classes::ClassesInfo &GlobalObjects::Classes() {
 	return global_objects().classes_info;
 }
@@ -108,16 +169,120 @@ const classes::CharClassInfo &GlobalObjects::Class(ECharClass class_id) {
 	return global_objects().classes_info[class_id];
 }
 
+mob_classes::MobClassesInfo &GlobalObjects::MobClasses() {
+	return global_objects().mob_classes_info;
+}
+
+const mob_classes::MobClassInfo &GlobalObjects::MobClass(EMobClass mob_class_id) {
+	return global_objects().mob_classes_info[mob_class_id];
+}
+
 guilds::GuildsInfo &GlobalObjects::Guilds() {
 	return global_objects().guilds_info;
+}
+
+communication::social::SocialsInfo &GlobalObjects::Socials() {
+	return global_objects().socials_info;
+}
+
+guilds::GuildMessages &GlobalObjects::GuildMessages() {
+	return global_objects().guild_messages;
+}
+
+cities::CitiesInfo &GlobalObjects::Cities() {
+	return global_objects().cities_info;
+}
+
+regions::RegionsInfo &GlobalObjects::Regions() {
+	return global_objects().regions_info;
+}
+
+animate_dead::AnimateDeadInfo &GlobalObjects::AnimateDead() {
+	return global_objects().animate_dead_info;
+}
+
+regions::RegionMessages &GlobalObjects::RegionMessages() {
+	return global_objects().region_messages;
+}
+
+system_messages::SystemMessages &GlobalObjects::SystemMessages() {
+	return global_objects().system_messages;
+}
+
+cities::CityMessages &GlobalObjects::CityMessages() {
+	return global_objects().city_messages;
+}
+
+player_races::PcRacesInfo &GlobalObjects::PcRaces() {
+	return global_objects().pc_races_info;
+}
+
+player_races::RaceMessages &GlobalObjects::RaceMessages() {
+	return global_objects().race_messages;
+}
+
+specials::SpecialMessages &GlobalObjects::SpecialMessages() {
+	return global_objects().special_messages;
+}
+
+specials::BankMessages &GlobalObjects::BankMessages() {
+	return global_objects().bank_messages;
+}
+
+specials::MailMessages &GlobalObjects::MailMessages() {
+	return global_objects().mail_messages;
+}
+
+specials::HorseMessages &GlobalObjects::HorseMessages() {
+	return global_objects().horse_messages;
+}
+
+specials::TorcMessages &GlobalObjects::TorcMessages() {
+	return global_objects().torc_messages;
+}
+
+specials::MercMessages &GlobalObjects::MercMessages() {
+	return global_objects().merc_messages;
+}
+
+specials::ExchMessages &GlobalObjects::ExchMessages() {
+	return global_objects().exch_messages;
+}
+
+specials::RentMessages &GlobalObjects::RentMessages() {
+	return global_objects().rent_messages;
+}
+
+specials::ShopMessages &GlobalObjects::ShopMessages() {
+	return global_objects().shop_messages;
+}
+
+specials::BoardMessages &GlobalObjects::BoardMessages() {
+	return global_objects().board_messages;
 }
 
 const guilds::GuildInfo &GlobalObjects::Guild(Vnum guild_vnum) {
 	return global_objects().guilds_info[guild_vnum];
 }
 
+zone_types::ZoneTypesInfo &GlobalObjects::ZoneTypes() {
+	return global_objects().zone_types_info;
+}
+
+const zone_types::ZoneTypeInfo &GlobalObjects::ZoneType(int type_vnum) {
+	return global_objects().zone_types_info[type_vnum];
+}
+
+rune_spells::Registry &GlobalObjects::RuneSpells() {
+	return global_objects().rune_spells_info;
+}
+
 currencies::CurrenciesInfo &GlobalObjects::Currencies() {
 	return global_objects().currencies_info;
+};
+
+mob_races::MobRacesInfo &GlobalObjects::MobRaces() {
+	return global_objects().mob_races_info;
 };
 
 const currencies::CurrencyInfo &GlobalObjects::Currency(Vnum currency_vnum) {
@@ -160,13 +325,8 @@ Heartbeat &GlobalObjects::heartbeat() {
 	return global_objects().heartbeat;
 }
 
-influxdb::Sender &GlobalObjects::stats_sender() {
-	if (!global_objects().stats_sender) {
-		global_objects().stats_sender = std::make_shared<influxdb::Sender>(
-			runtime_config.statistics().host(), runtime_config.statistics().port());
-	}
-
-	return *global_objects().stats_sender;
+observability::OtelProvider &GlobalObjects::otel_provider() {
+	return observability::OtelProvider::Instance();
 }
 
 OutputThread &GlobalObjects::output_thread() {
@@ -239,6 +399,21 @@ Strengthening &GlobalObjects::strengthening() {
 
 obj2triggers_t &GlobalObjects::obj_triggers() {
 	return global_objects().obj2triggers;
+}
+
+logging::LogManager &GlobalObjects::log_manager() {
+	return *global_objects().log_manager;
+}
+RoomDescriptions &GlobalObjects::descriptions() {
+	return global_objects().room_descriptions;
+}
+
+ClanSystem::IngrChestSaver &GlobalObjects::ingr_chest_saver() {
+	return global_objects().ingr_chest_saver;
+}
+
+ClanSystem::ChestSaver &GlobalObjects::chest_saver() {
+	return global_objects().chest_saver;
 }
 
 // vim: ts=4 sw=4 tw=0 noet syntax=cpp :

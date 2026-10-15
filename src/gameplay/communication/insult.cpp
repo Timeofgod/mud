@@ -4,30 +4,34 @@
  \brief Команда "оскорбить".
 */
 
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "engine/core/target_resolver.h"
+#include "utils/utils_string.h"
 
 void do_insult(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	CharData *victim;
 
-	one_argument(argument, arg);
+	std::string remains;
+	const std::string arg = utils::ExtractFirstArgumentLower(argument, remains);
 
 	if (ch->IsFlagged(EPlrFlag::kDumbed)) {
 		SendMsgToChar("Боги наказали вас и вы не можете выражать эмоции!\r\n", ch);
 		return;
 	}
-	if (*arg) {
-		if (!(victim = get_char_vis(ch, arg, EFind::kCharInRoom)))
+	if (!arg.empty()) {
+		victim = target_resolver::FindCharInRoom(ch, arg);
+		if (!victim)
 			SendMsgToChar("&KА он вас и не услышит :(&n\r\n", ch);
 		else {
 			if (victim != ch) {
-				sprintf(buf, "&KВы оскорбили %s.&n\r\n", GET_PAD(victim, 3));
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("&KВы оскорбили {}.&n\r\n", GET_PAD(victim, 3)), ch);
 
 				switch (number(0, 2)) {
 					case 0:
-						if (IS_MALE(ch)) {
-							if (IS_MALE(victim))
+						if (IsMale(ch)) {
+							if (IsMale(victim))
 								act("&K$n высмеял$g вашу манеру держать меч !&n",
 									false, ch, nullptr, victim, kToVict);
 							else
@@ -35,7 +39,7 @@ void do_insult(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 									false, ch, nullptr, victim, kToVict);
 						} else    // Ch == Woman
 						{
-							if (IS_MALE(victim))
+							if (IsMale(victim))
 								act("&K$n заявил$g вам, что у н$s больше... (что $e имел$g в виду?)&n",
 									false, ch, nullptr, victim, kToVict);
 							else

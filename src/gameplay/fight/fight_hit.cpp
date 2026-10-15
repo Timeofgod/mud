@@ -1,5 +1,13 @@
 #include "fight_hit.h"
+#include "utils/logger.h"
+#include "administration/privilege.h"
+#include "gameplay/mechanics/condition.h"
+#include "gameplay/mechanics/minions.h"
+#include "gameplay/mechanics/animate_dead.h"
+#include "gameplay/mechanics/mount.h"
+#include "gameplay/mechanics/resist.h"
 
+#include "engine/observability/event_sink.h"
 #include "engine/ui/color.h"
 #include "gameplay/magic/magic.h"
 #include "pk.h"
@@ -9,8 +17,11 @@
 #include "gameplay/ai/mobact.h"
 #include "fight.h"
 #include "engine/db/global_objects.h"
-#include "gameplay/classes/classes.h"
+#include "utils/backtrace.h"
+#include "gameplay/ai/mob_memory.h"
+#include "gameplay/classes/pc_classes.h"
 #include "gameplay/mechanics/groups.h"
+#include "gameplay/core/remort.h"
 #include "gameplay/core/base_stats.h"
 #include "gameplay/affects/affect_data.h"
 #include "utils/utils_time.h"
@@ -25,8 +36,13 @@
 #include "gameplay/skills/shield_block.h"
 #include "gameplay/skills/backstab.h"
 #include "gameplay/skills/ironwind.h"
+#include "engine/observability/helpers.h"
+#include "engine/observability/metrics.h"
+
+#include <chrono>
 #include "gameplay/mechanics/armor.h"
 #include "gameplay/skills/addshot.h"
+#include "gameplay/mechanics/sight.h"
 
 /**
 * Расчет множителя дамаги пушки с концентрацией силы.
@@ -45,7 +61,7 @@ int CalcStrCondensationDamage(CharData *ch, ObjData * /*wielded*/, int damage) {
 	}
 	double str_mod = (GetRealStr(ch) - 25.0) * 0.4;
 	double lvl_mod = GetRealLevel(ch) * 0.2;
-	double rmt_mod = std::min(5, GetRealRemort(ch)) / 5.0;
+	double rmt_mod = std::min(5, remort::GetRealRemort(ch)) / 5.0;
 	double res_mod = 1.0 + (str_mod + lvl_mod) / 10.0 * rmt_mod;
 
 	return static_cast<int>(damage * res_mod);
@@ -56,14 +72,14 @@ int CalcStrCondensationDamage(CharData *ch, ObjData * /*wielded*/, int damage) {
 * (скилл/5 + реморты*3) * (среднее/(10 + среднее/2)) * (левел/30)
 */
 int CalcNoparryhitDmg(CharData *ch, ObjData *wielded) {
-	if (!ch->GetSkill(ESkill::kNoParryHit)) return 0;
+	if (!GetSkill(ch, ESkill::kNoParryHit)) return 0;
 
 	double weap_dmg = (((GET_OBJ_VAL(wielded, 2) + 1) / 2.0) * GET_OBJ_VAL(wielded, 1));
 	double weap_mod = weap_dmg / (10.0 + weap_dmg / 2.0);
 	double level_mod = static_cast<double>(GetRealLevel(ch)) / 30.0;
-	double skill_mod = static_cast<double>(ch->GetSkill(ESkill::kNoParryHit)) / 5.0;
+	double skill_mod = static_cast<double>(GetSkill(ch, ESkill::kNoParryHit)) / 5.0;
 
-	return static_cast<int>((skill_mod + GetRealRemort(ch) * 3.0) * weap_mod * level_mod);
+	return static_cast<int>((skill_mod + remort::GetRealRemort(ch) * 3.0) * weap_mod * level_mod);
 }
 
 // бонусы/штрафы классам за юзание определенных видов оружия (редкостный бред)
@@ -245,7 +261,7 @@ int HitData::ProcessExtradamage(CharData *ch, CharData *victim) {
 	dam = std::max(0, dam);
 	ProcessMighthit(ch, victim, *this);
 	ProcessOverhelm(ch, victim, *this);
-	ProcessPoisonedWeapom(ch, victim, *this);
+	RunObjAffectWeaponHit(wielded, ch, victim, dam);   // issue.obj-affects: poison-on-hit via trigger
 	ProcessToxicMob(ch, victim, *this);
 	ProcessPunctualStyle(ch, victim, *this);
 	auto dmg = GenerateExtradamage(memorized_dam);
@@ -257,7 +273,7 @@ Damage HitData::GenerateExtradamage(int initial_dmg) {
 	// Вызывается damage с отрицательным уроном
 	dam = (initial_dmg >= 0 ? dam : -1);
 	Damage dmg(SkillDmg(skill_num), dam, fight::kPhysDmg, wielded);
-	dmg.hit_type = hit_type;
+	dmg.damage_source = fight::EDamageSource(hit_type);
 	dmg.dam_critic = dam_critic;
 	dmg.flags = GetFlags();
 	dmg.ch_start_pos = ch_start_pos;
@@ -294,12 +310,15 @@ void HitData::Init(CharData *ch, CharData *victim) {
 		// удар голыми руками
 		weap_skill = ESkill::kPunch;
 	}
+	if (skill_num == ESkill::kBackstab || skill_num == ESkill::kThrow) {
+		TrainSkill(ch, weap_skill, true, victim);
+	}
 	if (skill_num == ESkill::kUndefined) {
 		TrainSkill(ch, weap_skill, true, victim);
 		SkillRollResult result = MakeSkillTest(ch, weap_skill, victim);
 		weap_skill_is = result.SkillRate;
 		if (result.CritLuck) {
-			SendMsgToChar(ch, "Вы удачно поразили %s в уязвимое место.\r\n", victim->player_data.PNames[ECase::kAcc].c_str());
+			SendMsgToChar(ch, "Вы удачно поразили %s в уязвимое место.\r\n", victim->player_data.PNames[grammar::ECase::kAcc].c_str());
 			act("$n поразил$g вас в уязвимое место.", true, ch, nullptr, victim, kToVict);
 			act("$n поразил$g $N3 в уязвимое место.", true, ch, nullptr, victim, kToNotVict);
 			SetFlag(fight::kCritLuck);
@@ -309,7 +328,7 @@ void HitData::Init(CharData *ch, CharData *victim) {
 		}
 	}
 	//* обработка ESkill::kNoParryHit //
-	if (skill_num == ESkill::kUndefined && ch->GetSkill(ESkill::kNoParryHit)) {
+	if ((skill_num == ESkill::kUndefined || skill_num == ESkill::kBackstab) && GetSkill(ch, ESkill::kNoParryHit)) {
 		int tmp_skill = CalcCurrentSkill(ch, ESkill::kNoParryHit, victim);
 		bool success = tmp_skill >= number(1, MUD::Skill(ESkill::kNoParryHit).difficulty);
 		TrainSkill(ch, ESkill::kNoParryHit, success, victim);
@@ -372,7 +391,7 @@ void HitData::CalcBaseHitroll(CharData *ch) {
 	CheckWeapFeats(ch, weap_skill, calc_thaco, dam);
 
 	if (ch->battle_affects.get(kEafOverwhelm) || ch->battle_affects.get(kEafHammer)) {
-		calc_thaco -= std::max(0, (ch->GetSkill(weap_skill) - 70) / 8);
+		calc_thaco -= std::max(0, (GetSkill(ch, weap_skill) - 70) / 8);
 	}
 
 	//    AWAKE style - decrease hitroll
@@ -382,11 +401,11 @@ void HitData::CalcBaseHitroll(CharData *ch) {
 		&& skill_num != ESkill::kBackstab) {
 		if (CanPerformAutoblock(ch)) {
 			// осторожка со щитом в руках у дружа с блоком - штрафы на хитролы (от 0 до 10)
-			calc_thaco += ch->GetSkill(ESkill::kAwake) * 5 / 100;
+			calc_thaco += GetSkill(ch, ESkill::kAwake) * 5 / 100;
 		} else {
 			// здесь еще были штрафы на дамаг через деление, но положительного дамага
 			// на этом этапе еще нет, так что делили по сути нули
-			calc_thaco += ((ch->GetSkill(ESkill::kAwake) + 9) / 10) + 2;
+			calc_thaco += ((GetSkill(ch, ESkill::kAwake) + 9) / 10) + 2;
 		}
 	}
 
@@ -431,7 +450,7 @@ void HitData::CalcBaseHitroll(CharData *ch) {
 	}
 
 	//Вычисляем штраф за голод
-	float p_hitroll = ch->get_cond_penalty(P_HITROLL);
+	float p_hitroll = condition::GetCondPenalty(ch, condition::kHitroll);
 
 	calc_thaco -= static_cast<int>(GET_REAL_HR(ch) * p_hitroll);
 	calc_thaco -= static_cast<int>(str_bonus(GetRealStr(ch), STR_TO_HIT) * p_hitroll);
@@ -440,16 +459,14 @@ void HitData::CalcBaseHitroll(CharData *ch) {
 		&& wielded
 		&& wielded->get_type() == EObjType::kWeapon) {
 		if (skill_num == ESkill::kBackstab) {
-			calc_thaco -= std::max(0, (ch->GetSkill(ESkill::kSneak) + ch->GetSkill(ESkill::kHide) - 100) / 30);
+			calc_thaco -= std::max(0, (GetSkill(ch, ESkill::kSneak) + GetSkill(ch, ESkill::kHide) - 100) / 30);
 		}
 	} else {
 		calc_thaco += 4;
 	}
 
-	if (IsAffectedBySpell(ch, ESpell::kBerserk)) {
-		if (AFF_FLAGGED(ch, EAffect::kBerserk)) {
-			calc_thaco -= (12 * ((ch->get_real_max_hit() / 2) - ch->get_hit()) / ch->get_real_max_hit());
-		}
+	if (IsAffected(ch, EAffect::kBerserk)) {
+		calc_thaco -= (12 * ((ch->get_real_max_hit() / 2) - ch->get_hit()) / ch->get_real_max_hit());
 	}
 
 }
@@ -461,7 +478,7 @@ void HitData::CalcBaseHitroll(CharData *ch) {
  */
 void HitData::CalcCircumstantialHitroll(CharData *ch, CharData *victim) {
 	//считаем штраф за голод
-	float p_hitroll = ch->get_cond_penalty(P_HITROLL);
+	float p_hitroll = condition::GetCondPenalty(ch, condition::kHitroll);
 	// штраф в размере 1 хитролла за каждые
 	// недокачанные 10% скилла "удар левой рукой"
 
@@ -474,36 +491,36 @@ void HitData::CalcCircumstantialHitroll(CharData *ch, CharData *victim) {
 	}
 
 	// courage
-	if (IsAffectedBySpell(ch, ESpell::kCourage)) {
+	if (IsAffected(ch, EAffect::kCourage)) {
 		int range = number(1, MUD::Skill(ESkill::kCourage).difficulty + ch->get_real_max_hit() - ch->get_hit());
 		int prob = CalcCurrentSkill(ch, ESkill::kCourage, victim);
 		TrainSkill(ch, ESkill::kCourage, prob > range, victim);
 		if (prob > range) {
-			dam += ((ch->GetSkill(ESkill::kCourage) + 19) / 20);
-			calc_thaco -= static_cast<int>(((ch->GetSkill(ESkill::kCourage) + 9.0) / 20.0) * p_hitroll);
+			dam += ((GetSkill(ch, ESkill::kCourage) + 19) / 20);
+			calc_thaco -= static_cast<int>(((GetSkill(ch, ESkill::kCourage) + 9.0) / 20.0) * p_hitroll);
 		}
 	}
 
 	// Horse modifier for attacker
-	if (!ch->IsNpc() && skill_num != ESkill::kThrow && skill_num != ESkill::kBackstab && ch->IsOnHorse()) {
-		TrainSkill(ch, ESkill::kRiding, true, victim);
-		calc_thaco += 10 - ch->GetSkill(ESkill::kRiding) / 20;
+	if (!ch->IsNpc() && skill_num != ESkill::kThrow && skill_num != ESkill::kBackstab && mount::IsOnHorse(ch)) {
+		mount::ApplyRiderToHit(ch, victim, calc_thaco);
 	}
 
 	// not can see (blind, dark, etc)
-	if (!CAN_SEE(ch, victim))
+	if (!sight::CanSee(ch, victim))
 		calc_thaco += (CanUseFeat(ch, EFeat::kBlindFight) ? 2 : ch->IsNpc() ? 6 : 10);
-	if (!CAN_SEE(victim, ch))
+	if (!sight::CanSee(victim, ch))
 		calc_thaco -= (CanUseFeat(victim, EFeat::kBlindFight) ? 2 : 8);
 
 	// "Dirty" methods for battle
 	if (skill_num != ESkill::kThrow && skill_num != ESkill::kBackstab) {
-		int prob = (ch->GetSkill(weap_skill) + cha_app[GetRealCha(ch)].illusive) -
-			(victim->GetSkill(weap_skill) + int_app[GetRealInt(victim)].observation);
+		int prob = (GetSkill(ch, weap_skill) + ChaApp(GetRealCha(ch)).illusive) -
+			(GetSkill(victim, weap_skill) + IntApp(GetRealInt(victim)).observation);
+
 		if (prob >= 30 && !victim->battle_affects.get(kEafAwake)
 			&& (ch->IsNpc() || !ch->battle_affects.get(kEafPunctual))) {
-			calc_thaco -= static_cast<int>((ch->GetSkill(weap_skill) -
-				victim->GetSkill(weap_skill) > 60 ? 2 : 1) * p_hitroll);
+			calc_thaco -= static_cast<int>((GetSkill(ch, weap_skill) -
+				GetSkill(victim, weap_skill) > 60 ? 2 : 1) * p_hitroll);
 			if (!victim->IsNpc())
 				dam += (prob >= 70 ? 3 : (prob >= 50 ? 2 : 1));
 		}
@@ -537,7 +554,7 @@ void HitData::CalcCircumstantialHitroll(CharData *ch, CharData *victim) {
 // * Версия calc_rand_hr для показа по 'счет', без рандомов и статов жертвы.
 void HitData::CalcStaticHitroll(CharData *ch) {
 	//считаем штраф за голод
-	float p_hitroll = ch->get_cond_penalty(P_HITROLL);
+	float p_hitroll = condition::GetCondPenalty(ch, condition::kHitroll);
 	// штраф в размере 1 хитролла за каждые
 	// недокачанные 10% скилла "удар левой рукой"
 	if (weapon == fight::AttackType::kOffHand
@@ -545,35 +562,27 @@ void HitData::CalcStaticHitroll(CharData *ch) {
 		&& skill_num != ESkill::kBackstab
 		&& !(wielded && wielded->get_type() == EObjType::kWeapon)
 		&& !ch->IsNpc()) {
-		calc_thaco += (MUD::Skill(ESkill::kLeftHit).difficulty - ch->GetSkill(ESkill::kLeftHit)) / 10;
+		calc_thaco += (MUD::Skill(ESkill::kLeftHit).difficulty - GetSkill(ch, ESkill::kLeftHit)) / 10;
 	}
 
 	// courage
-	if (IsAffectedBySpell(ch, ESpell::kCourage)) {
-		dam += ((ch->GetSkill(ESkill::kCourage) + 19) / 20);
-		calc_thaco -= static_cast<int>(((ch->GetSkill(ESkill::kCourage) + 9.0) / 20.0) * p_hitroll);
+	if (IsAffected(ch, EAffect::kCourage)) {
+		dam += ((GetSkill(ch, ESkill::kCourage) + 19) / 20);
+		calc_thaco -= static_cast<int>(((GetSkill(ch, ESkill::kCourage) + 9.0) / 20.0) * p_hitroll);
 	}
 
 	// Horse modifier for attacker
-	if (!ch->IsNpc() && skill_num != ESkill::kThrow && skill_num != ESkill::kBackstab && ch->IsOnHorse()) {
-		int prob = ch->GetSkill(ESkill::kRiding);
-		int range = MUD::Skill(ESkill::kRiding).difficulty / 2;
-
-		dam += ((prob + 19) / 10);
-
-		if (range > prob)
-			calc_thaco += ((range - prob) + 19 / 20);
-		else
-			calc_thaco -= ((prob - range) + 19 / 20);
+	if (!ch->IsNpc() && skill_num != ESkill::kThrow && skill_num != ESkill::kBackstab && mount::IsOnHorse(ch)) {
+		mount::ApplyRiderHitAndDamage(ch, dam, calc_thaco);
 	}
 
 	// скилл владения пушкой или голыми руками
-	if (ch->GetSkill(weap_skill) <= 80)
-		calc_thaco -= static_cast<int>((ch->GetSkill(weap_skill) / 20.0) * p_hitroll);
-	else if (ch->GetSkill(weap_skill) <= 160)
-		calc_thaco -= static_cast<int>((4.0 + (ch->GetSkill(weap_skill) - 80.0) / 10.0) * p_hitroll);
+	if (GetSkill(ch, weap_skill) <= 80)
+		calc_thaco -= static_cast<int>((GetSkill(ch, weap_skill) / 20.0) * p_hitroll);
+	else if (GetSkill(ch, weap_skill) <= 160)
+		calc_thaco -= static_cast<int>((4.0 + (GetSkill(ch, weap_skill) - 80.0) / 10.0) * p_hitroll);
 	else
-		calc_thaco -= static_cast<int>((12.0 + (ch->GetSkill(weap_skill) - 160.0) / 5.0) * p_hitroll);
+		calc_thaco -= static_cast<int>((12.0 + (GetSkill(ch, weap_skill) - 160.0) / 5.0) * p_hitroll);
 }
 
 // * Подсчет армор класса жертвы.
@@ -606,8 +615,7 @@ void HitData::AddWeaponDmg(CharData *ch, bool need_dice) {
 		damroll = (GET_OBJ_VAL(wielded, 1) * GET_OBJ_VAL(wielded, 2) + GET_OBJ_VAL(wielded, 1)) / 2;
 	}
 	if (ch->IsNpc()
-		&& !AFF_FLAGGED(ch, EAffect::kCharmed)
-		&& !(ch->IsFlagged(EMobFlag::kTutelar) || ch->IsFlagged(EMobFlag::kMentalShadow))) {
+		&& !ch->IsFlagged(EMobFlag::kCompanion)) {
 		damroll *= kMobDamageMult;
 	} else {
 		damroll = std::min(damroll, damroll * wielded->get_current_durability() / std::max(1, wielded->get_maximum_durability()));
@@ -621,9 +629,9 @@ void HitData::AddBareHandsDmg(CharData *ch, bool need_dice) {
 
 	if (AFF_FLAGGED(ch, EAffect::kStoneHands)) {
 		if (GetFlags()[fight::kCritLuck]) {
-			dam += 8 + GetRealRemort(ch) / 2;
+			dam += 8 + remort::GetRealRemort(ch) / 2;
 		} else {
-			dam += need_dice ? RollDices(2, 4) + GetRealRemort(ch) / 2  : 5 + GetRealRemort(ch) / 2;
+			dam += need_dice ? RollDices(2, 4) + remort::GetRealRemort(ch) / 2  : 5 + remort::GetRealRemort(ch) / 2;
 		}
 		if (CanUseFeat(ch, EFeat::kBully)) {
 			dam += GetRealLevel(ch) / 5;
@@ -664,18 +672,18 @@ void HitData::CalcCritHitChance(CharData *ch) {
 	if ((!ch->IsNpc() && !IsMage(ch) && !IS_MAGUS(ch))
 			|| (ch->IsNpc() && (!AFF_FLAGGED(ch, EAffect::kCharmed)
 			&& !AFF_FLAGGED(ch, EAffect::kHelper)))) {
-		calc_critic = std::min(ch->GetSkill(weap_skill), 70);
+		calc_critic = std::min(GetSkill(ch, weap_skill), 70);
 		if (CanUseFeat(ch, FindWeaponMasterFeat(weap_skill))) {
-			calc_critic += std::max(0, ch->GetSkill(weap_skill) - 70);
+			calc_critic += std::max(0, GetSkill(ch, weap_skill) - 70);
 		}
 		if (CanUseFeat(ch, EFeat::kThieveStrike)) {
-			calc_critic += ch->GetSkill(ESkill::kBackstab);
+			calc_critic += GetSkill(ch, ESkill::kBackstab);
 		}
 		if (!ch->IsNpc()) {
-			calc_critic += static_cast<int>(ch->GetSkill(ESkill::kPunctual) / 2);
-			calc_critic += static_cast<int>(ch->GetSkill(ESkill::kNoParryHit) / 3);
+			calc_critic += static_cast<int>(GetSkill(ch, ESkill::kPunctual) / 2);
+			calc_critic += static_cast<int>(GetSkill(ch, ESkill::kNoParryHit) / 3);
 		}
-		calc_critic += GetRealLevel(ch) + GetRealRemort(ch);
+		calc_critic += GetRealLevel(ch) + remort::GetRealRemort(ch);
 	}
 	if (number(0, 2000) < calc_critic) {
 		SetFlag(fight::kCritHit);
@@ -687,14 +695,14 @@ int HitData::CalcDmg(CharData *ch, bool need_dice) {
 	if (ch->IsFlagged(EPrf::kExecutor)) {
 		SendMsgToChar(ch, "&YСкилл: %s. Дамага без бонусов == %d&n\r\n", MUD::Skill(weap_skill).GetName(), dam);
 	}
-	if (ch->GetSkill(weap_skill) == 0) {
+	if (GetSkill(ch, weap_skill) == 0) {
 		calc_thaco += (50 - std::min(50, GetRealInt(ch))) / 3;
 		dam -= (50 - std::min(50, GetRealInt(ch))) / 6;
 	} else {
 		GetClassWeaponMod(ch->GetClass(), weap_skill, &dam, &calc_thaco);
 	}
-	if (ch->GetSkill(weap_skill) >= 60) { //от уровня скилла
-		dam += ((ch->GetSkill(weap_skill) - 50) / 10);
+	if (GetSkill(ch, weap_skill) >= 60) { //от уровня скилла
+		dam += ((GetSkill(ch, weap_skill) - 50) / 10);
 		if (ch->IsFlagged(EPrf::kExecutor))
 			SendMsgToChar(ch, "&YДамага с уровнем скилла == %d&n\r\n", dam);
 	}
@@ -711,25 +719,22 @@ int HitData::CalcDmg(CharData *ch, bool need_dice) {
 	if (ch->IsFlagged(EPrf::kExecutor))
 		SendMsgToChar(ch, "&YДамага с учетом перков мощная-улучш == %d&n\r\n", dam);
 	// courage
-	if (IsAffectedBySpell(ch, ESpell::kCourage)) {
-		int range = number(1, MUD::Skill(ESkill::kCourage).difficulty + ch->get_real_max_hit() - ch->get_hit());
+	// issue.affects-improve: courage is an affect identity now (IsAffected/EAffect::kCourage), not a
+	// spell-affect. Keep master's need_dice averaging so identify (need_dice == false) shows a stable
+	// expected damage instead of a fresh roll.
+	if (IsAffected(ch, EAffect::kCourage)) {
+		const int courage_range = MUD::Skill(ESkill::kCourage).difficulty + ch->get_real_max_hit() - ch->get_hit();
+		int range = need_dice ? number(1, courage_range) : (1 + courage_range) / 2;
 		int prob = CalcCurrentSkill(ch, ESkill::kCourage, ch);
 		if (prob > range) {
-			dam += ((ch->GetSkill(ESkill::kCourage) + 19) / 20);
+			dam += ((GetSkill(ch, ESkill::kCourage) + 19) / 20);
 		if (ch->IsFlagged(EPrf::kExecutor))
 			SendMsgToChar(ch, "&YДамага с бухлом == %d&n\r\n", dam);
 		}
 	}
-/*	// Horse modifier for attacker
-	if (!ch->IsNpc() && skill_num != ESkill::kThrow && skill_num != ESkill::kBackstab && ch->IsOnHorse()) {
-		int prob = ch->get_skill(ESkill::kRiding);
-		dam += ((prob + 19) / 10);
-		SendMsgToChar(ch, "&YДамага с учетом лошади == %d&n\r\n", dam);
-	}
-*/
 	// обработка по факту попадания
 	if (skill_num < ESkill::kFirst) {
-		dam += GetAutoattackDamroll(ch, ch->GetSkill(weap_skill));
+		dam += GetAutoattackDamroll(ch, GetSkill(ch, weap_skill));
 	if (ch->IsFlagged(EPrf::kExecutor))
 		SendMsgToChar(ch, "&YДамага +дамролы автоатаки == %d&n\r\n", dam);
 	} else {
@@ -751,7 +756,7 @@ int HitData::CalcDmg(CharData *ch, bool need_dice) {
 		AddWeaponDmg(ch, need_dice);
 		if (ch->IsFlagged(EPrf::kExecutor))
 			SendMsgToChar(ch, "&YДамага +кубики оружия дамага == %d вооружен %s vnum %d&n\r\n", dam,
-						  wielded->get_PName(ECase::kGen).c_str(), GET_OBJ_VNUM(wielded));
+						  wielded->get_PName(grammar::ECase::kGen).c_str(), GET_OBJ_VNUM(wielded));
 		if (GET_EQ(ch, EEquipPos::kBoths) && weap_skill != ESkill::kBows) { //двуруч множим на 2
 			dam *= 2;
 		if (ch->IsFlagged(EPrf::kExecutor))
@@ -784,28 +789,25 @@ int HitData::CalcDmg(CharData *ch, bool need_dice) {
 		SendMsgToChar(ch, "&YДамага после расчета руки или оружия == %d&n\r\n", dam);
 
 	if (ch->battle_affects.get(kEafIronWind)) {
-		dam += ch->GetSkill(ESkill::kIronwind) / 2;
+		dam += GetSkill(ch, ESkill::kIronwind) / 2;
 		if (ch->IsFlagged(EPrf::kExecutor))
 			SendMsgToChar(ch, "&YДамага после расчета железного ветра == %d&n\r\n", dam);
 	}
 
-	if (IsAffectedBySpell(ch, ESpell::kBerserk)) {
-		if (AFF_FLAGGED(ch, EAffect::kBerserk)) {
-			dam = (dam*std::max(150, 150 + GetRealLevel(ch) +
-				RollDices(0, GetRealRemort(ch)) * 2)) / 100;
-			if (ch->IsFlagged(EPrf::kExecutor))
-				SendMsgToChar(ch, "&YДамага с учетом берсерка== %d&n\r\n", dam);
-		}
+	if (IsAffected(ch, EAffect::kBerserk)) {
+		dam = (dam*std::max(150, 150 + GetRealLevel(ch) +
+			RollDices(0, remort::GetRealRemort(ch)) * 2)) / 100;
+		if (ch->IsFlagged(EPrf::kExecutor))
+			SendMsgToChar(ch, "&YДамага с учетом берсерка== %d&n\r\n", dam);
 	}
 	if (ch->IsNpc()) { // урон моба из олц
-		dam += RollDices(ch->mob_specials.damnodice, ch->mob_specials.damsizedice);
+		// при показе (need_dice == false) берём среднее кубиков, иначе урон в опознании "плавает"
+		dam += need_dice
+			? RollDices(ch->mob_specials.damnodice, ch->mob_specials.damsizedice)
+			: ch->mob_specials.damnodice * (ch->mob_specials.damsizedice + 1) / 2;
 	}
 
-	if (ch->GetSkill(ESkill::kRiding) > 100 && ch->IsOnHorse()) {
-		dam *= 1.0 + (ch->GetSkill(ESkill::kRiding) - 100) / 500.0;
-		if (ch->IsFlagged(EPrf::kExecutor))
-			SendMsgToChar(ch, "&YДамага с учетом лошади (при скилле 200 +20 процентов)== %d&n\r\n", dam);
-	}
+	mount::ApplyRiderDamageMult(ch, dam);
 
 	if (ch->add_abils.percent_physdam_add > 0) {
 		int tmp;
@@ -820,32 +822,94 @@ int HitData::CalcDmg(CharData *ch, bool need_dice) {
 			SendMsgToChar(ch, "&YДамага c + процентами дамаги== %d, добавили = %d процентов &n\r\n", dam, tmp);
 	}
 	//режем дамаг от голода
-	dam *= ch->get_cond_penalty(P_DAMROLL);
+	dam *= condition::GetCondPenalty(ch, condition::kDamroll);
 	if (ch->IsFlagged(EPrf::kExecutor))
 		SendMsgToChar(ch, "&YДамага с бонусами итого == %d&n\r\n", dam);
 	return dam;
 
 }
 
-ESpell GetSpellIdByBreathflag(CharData *ch) {
-	if (ch->IsFlagged((EMobFlag::kFireBreath))) {
-		return ESpell::kFireBreath;
-	} else if (ch->IsFlagged((EMobFlag::kGasBreath))) {
-		return ESpell::kGasBreath;
-	} else if (ch->IsFlagged((EMobFlag::kFrostBreath))) {
-		return ESpell::kFrostBreath;
-	} else if (ch->IsFlagged((EMobFlag::kAcidBreath))) {
-		return ESpell::kAcidBreath;
-	} else if (ch->IsFlagged((EMobFlag::kLightingBreath))) {
-		return ESpell::kLightingBreath;
-	}
+// Breath as magic melee (issue: breath without a pseudo-spell). A breathing mob's
+// EMobFlag selects an element + an attack type; the hit is dealt as kMagicDmg of
+// that element, so Damage::Process picks the matching resist channel. Replaces the
+// old GetSpellIdByBreathflag + CastDamage(kService breath spell) workaround.
+namespace {
+struct BreathAttack {
+	EElement element{EElement::kUndefined};
+	fight::EDamageSource source{fight::EDamageSource::kUndefined};
+};
 
-	return ESpell::kUndefined;
+BreathAttack GetBreathAttack(CharData *ch) {
+	if (ch->IsFlagged(EMobFlag::kFireBreath))     return {EElement::kFire,  fight::EDamageSource::kFireBreath};
+	if (ch->IsFlagged(EMobFlag::kGasBreath))      return {EElement::kEarth, fight::EDamageSource::kGasBreath};
+	if (ch->IsFlagged(EMobFlag::kFrostBreath))    return {EElement::kAir,   fight::EDamageSource::kFrostBreath};
+	if (ch->IsFlagged(EMobFlag::kAcidBreath))     return {EElement::kWater, fight::EDamageSource::kAcidBreath};
+	if (ch->IsFlagged(EMobFlag::kLightingBreath)) return {EElement::kDark,  fight::EDamageSource::kLightingBreath};
+	return {};
 }
+
+// One breath hit: the mob's melee dice dealt as kMagicDmg of the breath element.
+// GET_MR keeps its legacy role as a flat chance to fully resist the elemental hit.
+// CalcMagicElementCoeff is deliberately NOT applied -- breath is magic melee, not a
+// spell; the element alone drives the resist channel inside Damage::Process.
+// issue #4000: дыхание -- тоже удар мобом, и триггеры аффектов на удар должны стрелять и для него.
+// Раньше ветка дыхания уходила из hit() до блока kPreHit/kPostHit, поэтому дышащий моб не запускал
+// ни одного действия своих аффектов на удар (у дышащего вампира, например, не срабатывало лечение).
+// Стреляем после нанесения урона: только если урон дошёл и жертва жива (-1 -- погибла).
+static void RunBreathHitTriggers(CharData *ch, CharData *victim, int dam) {
+	if (dam <= 0 || !victim || victim->purged() || ch->purged()) {
+		return;
+	}
+	EventContext event;
+	event.trigger = talents_actions::EActionTrigger::kPostHit;
+	event.amount = dam;
+	event.actor = victim;
+	event.skill = ESkill::kUndefined;
+	RunCharEventTriggers(ch, event);
+}
+
+// issue #4000: возвращает нанесённый урон (-1, если жертва погибла, 0 если сопротивилась) --
+// по нему вызывающий решает, стрелять ли триггерам аффектов на удар.
+int DealBreathDamage(CharData *ch, CharData *victim, const BreathAttack &breath) {
+	if (!pk_agro_action(ch, victim)) {
+		return 0;
+	}
+	int dam = 0;
+	const int max_resist = ch->IsNpc() ? kMaxNpcResist : kMaxPcResist;
+	if (number(1, 100) > std::min(max_resist, GET_MR(victim))) {
+		dam = RollDices(ch->mob_specials.damnodice, ch->mob_specials.damsizedice)
+			+ GetRealDamroll(ch) + str_bonus(GetRealStr(ch), STR_TO_DAM);
+		dam = std::clamp(dam, 0, kMaxHits);
+	}
+	Damage breath_dmg(SimpleDmg(breath.source), dam, fight::kMagicDmg);
+	breath_dmg.element = breath.element;
+	return breath_dmg.Process(ch, victim);
+}
+}  // namespace
 
 /**
 * обработка ударов оружием, санка, призма, стили, итд.
 */
+namespace {
+
+// Эмиссия события 'miss' для автономного симулятора баланса (issue #2967).
+// reason: 'auto_5pct' / 'level_diff' / 'thac0_roll' -- какая ветка hit()
+// привела к промаху. В проде список sink'ов пуст -- ранний выход до
+// построения Event.
+void EmitMissEvent(CharData *ch, CharData *victim, const char *reason) {
+	if (!observability::HasAnyEventSink()) return;
+	observability::Event ev;
+	ev.name = "miss";
+	ev.ts_unix_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::system_clock::now().time_since_epoch()).count();
+	ev.attrs["attacker_name"] = GET_NAME(ch) ? GET_NAME(ch) : "";
+	ev.attrs["victim_name"] = GET_NAME(victim) ? GET_NAME(victim) : "";
+	ev.attrs["reason"] = std::string(reason);
+	observability::EmitToAllSinks(ev);
+}
+
+}  // namespace
+
 void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) {
 	if (!victim) {
 		return;
@@ -856,6 +920,10 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 			victim->purged() ? "purged" : "true", __FILE__, __LINE__);
 		return;
 	}
+
+
+	// OpenTelemetry: Measure hit duration
+	observability::ScopedMetric hit_metric("combat.hit.duration");
 	// Do some sanity checking, in case someone flees, etc.
 	if (ch->in_room != victim->in_room || ch->in_room == kNowhere) {
 		if (ch->GetEnemy() && ch->GetEnemy() == victim) {
@@ -864,7 +932,7 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 		return;
 	}
 	// Stand awarness mobs
-	if (CAN_SEE(victim, ch)
+	if (sight::CanSee(victim, ch)
 		&& !victim->GetEnemy()
 		&& ((victim->IsNpc() && (victim->get_hit() < victim->get_max_hit()
 			|| victim->IsFlagged(EMobFlag::kAware)))
@@ -873,30 +941,33 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 		set_battle_pos(victim);
 	}
 
-	// дышащий моб может оглушить, и нанесёт физ.дамаг!!
+	// Breathing mob: a magic-typed melee attack of an element (no pseudo-spell).
 	if (type == ESkill::kUndefined) {
-		ESpell spell_id;
-		spell_id = GetSpellIdByBreathflag(ch);
-		if (spell_id != ESpell::kUndefined) { // защита от падения
+		const BreathAttack breath = GetBreathAttack(ch);
+		if (breath.element != EElement::kUndefined) {
 			if (!ch->GetEnemy())
 				SetFighting(ch, victim);
 			if (!victim->GetEnemy())
 				SetFighting(victim, ch);
-			// AOE атаки всегда магические. Раздаём каждому игроку и уходим.
+			// AOE breath hits every non-groupmate in the room.
 			if (ch->IsFlagged(EMobFlag::kAreaAttack)) {
-				const auto
-					people = world[ch->in_room]->people;    // make copy because inside loop this list might be changed.
+				const auto people = world[ch->in_room]->people;    // copy: list may change inside the loop
 				for (const auto &tch : people) {
-					if (IS_IMMORTAL(tch) || ch->in_room == kNowhere || tch->in_room == kNowhere)
+					if (privilege::IsImmortal(tch) || ch->in_room == kNowhere || tch->in_room == kNowhere)
 						continue;
 					if (tch != ch && !group::same_group(ch, tch)) {
-						CastDamage(GetRealLevel(ch), ch, tch, spell_id);
+						const int breath_dam = DealBreathDamage(ch, tch, breath);
+						if (ch->purged())
+							return;
+						RunBreathHitTriggers(ch, tch, breath_dam);
+						if (ch->purged())
+							return;
 					}
 				}
 				return;
 			}
-			// а теперь просто дышащие
-			CastDamage(GetRealLevel(ch), ch, victim, spell_id);
+			const int breath_dam = DealBreathDamage(ch, victim, breath);
+			RunBreathHitTriggers(ch, victim, breath_dam);
 			return;
 		}
 	}
@@ -911,24 +982,30 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 	hit_params.weapon = weapon;
 	hit_params.Init(ch, victim);
 	//  дополнительный маг. дамаг независимо от попадания физ. атаки
-	if (AFF_FLAGGED(ch, EAffect::kCloudOfArrows)
-		&& hit_params.skill_num == ESkill::kUndefined
-		&& (ch->GetEnemy() 
+	// issue.character-affect-triggers: per-hit (kPreHit) affect triggers, fired once per basic melee hit
+	// (skill_num kUndefined; not an overwhelm/hammer setup) -- the same gate the hand-coded kCloudOfArrows
+	// proc used. kCloudOfArrows is now data-driven: <actions><trigger kPreHit><target kTarFightVict>
+	// <side_spell kCloudOfArrowsBolt>; RunCharHitTriggers casts each bearer's kPreHit action on the current
+	// opponent at the proc level (NPC -> real level, как раньше для болта облака стрел).
+	if (hit_params.skill_num == ESkill::kUndefined
+		&& (ch->GetEnemy()
 		|| (!ch->battle_affects.get(kEafHammer) && !ch->battle_affects.get(kEafOverwhelm)))) {
 		// здесь можно получить спурженного victim, но ch не умрет от зеркала
-		if (ch->IsNpc()) {
-			CastDamage(GetRealLevel(ch), ch, victim, ESpell::kMagicMissile);
-		} else {
-			CastDamage(1, ch, victim, ESpell::kMagicMissile);
-		}
+		// issue.character-affect-triggers: kPreHit event = pre-damage swing (weapon + weapon-skill known;
+		// the physical amount is computed below, so it rides on kPostHit, not here).
+		EventContext hit_event;
+		hit_event.trigger = talents_actions::EActionTrigger::kPreHit;
+		hit_event.weapon = hit_params.wielded;
+		hit_event.skill = hit_params.weap_skill;
+		hit_event.actor = victim;
+		RunCharEventTriggers(ch, hit_event);
 		if (ch->purged() || victim->purged()) { // вдруг помер
 			return;
 		}
+
 		if (ch->in_room != victim->in_room) {  //если сбег по трусости
 			return;
 		}
-		auto skillnum = GetMagicSkillId(ESpell::kCloudOfArrows);
-		TrainSkill(ch, skillnum, true, victim);
 	}
 	// вычисление хитролов/ац
 	hit_params.CalcBaseHitroll(ch);
@@ -942,8 +1019,8 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 		hit_params.dam = std::max(1, number(min_rnd, max_rnd));
 	}
 	if (hit_params.skill_num  == ESkill::kUndefined && !hit_params.GetFlags()[fight::kCritLuck]) { //автоатака
-		const int victim_lvl_miss = GetRealLevel(victim) + GetRealRemort(victim);
-		const int ch_lvl_miss = GetRealLevel(ch) + GetRealRemort(ch);
+		const int victim_lvl_miss = GetRealLevel(victim) + remort::GetRealRemort(victim);
+		const int ch_lvl_miss = GetRealLevel(ch) + remort::GetRealRemort(ch);
 
 		// собсно выяснение попали или нет
 		if (victim_lvl_miss - ch_lvl_miss <= 5 || (!ch->IsNpc() && !victim->IsNpc())) {
@@ -952,15 +1029,17 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 				hit_params.dam = 0;
 				hit_params.ProcessExtradamage(ch, victim);
 				hitprcnt_mtrigger(victim);
+				EmitMissEvent(ch, victim, "auto_5pct");
 				return;
 			}
 		} else {
 			// шанс промазать = разнице уровней и мортов
 			const int diff = victim_lvl_miss - ch_lvl_miss;
-			if (number(1, 100) <= diff) {
+			if (number(1, 200) <= diff) {
 				hit_params.dam = 0;
 				hit_params.ProcessExtradamage(ch, victim);
 				hitprcnt_mtrigger(victim);
+				EmitMissEvent(ch, victim, "level_diff");
 				return;
 			}
 		}
@@ -970,6 +1049,7 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 			hit_params.dam = 0;
 			hit_params.ProcessExtradamage(ch, victim);
 			hitprcnt_mtrigger(victim);
+			EmitMissEvent(ch, victim, "thac0_roll");
 			return;
 		}
 	}
@@ -995,24 +1075,25 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 		return;
 	}
 	//Рассчёт шанса точного стиля:
-	if (!IS_CHARMICE(ch) && ch->battle_affects.get(kEafPunctual) && ch->punctual_wait <= 0 && ch->get_wait() <= 0
+	bool paladine_inspiration = false;
+	if (!IsCharmice(ch) && ch->battle_affects.get(kEafPunctual) && ch->punctual_wait <= 0 && ch->get_wait() <= 0
 		&& (hit_params.diceroll >= 18 - AFF_FLAGGED(victim, EAffect::kHold))) {
 		SkillRollResult result = MakeSkillTest(ch, ESkill::kPunctual, victim);
 		bool success = result.success;
 		TrainSkill(ch, ESkill::kPunctual, success, victim);
-		if (!IS_IMMORTAL(ch)) {
+		if (!privilege::IsImmortal(ch)) {
 			PUNCTUAL_WAIT_STATE(ch, 1 * kBattleRound);
 		}
 		if (success && (hit_params.calc_thaco - hit_params.diceroll < hit_params.victim_ac - 5
 			|| result.CritLuck)) {
 			hit_params.SetFlag(fight::kCritHit);
 			hit_params.dam_critic = CalcPunctualCritDmg(ch, victim, hit_params.wielded);
-			ch->send_to_TC(false, true, false, "&CДамага точки равна = %d&n\r\n", hit_params.dam_critic);
-			victim->send_to_TC(false, true, false, "&CДамага точки равна = %d&n\r\n", hit_params.dam_critic);
-			if (!IS_IMMORTAL(ch)) {
+			SendToTC(ch, false, true, false, "&CДамага точки равна = %d&n\r\n", hit_params.dam_critic);
+			SendToTC(victim, false, true, false, "&CДамага точки равна = %d&n\r\n", hit_params.dam_critic);
+			if (!privilege::IsImmortal(ch)) {
 				PUNCTUAL_WAIT_STATE(ch, 2 * kBattleRound);
 			}
-			CallMagic(ch, victim, nullptr, nullptr, ESpell::kPaladineInspiration, GetRealLevel(ch));
+			paladine_inspiration = true;
 		}
 	}
 
@@ -1025,10 +1106,37 @@ void hit(CharData *ch, CharData *victim, ESkill type, fight::AttackType weapon) 
 	// обработка защитных скилов (захват, уклон, парир, веер, блок)
 	hit_params.ProcessDefensiveAbilities(ch, victim);
 
+	// точный стиль: если точка сработала, дамаг не может быть нулевым
+	if (hit_params.GetFlags()[fight::kCritHit] && hit_params.dam_critic && hit_params.dam <= 0) {
+		hit_params.dam = 1;
+	}
+
+	// kPaladineInspiration - только если удар не заблокирован полностью
+	if (paladine_inspiration && hit_params.dam > 0) {
+		CallMagic(ch, victim, nullptr, nullptr, ESpell::kPaladineInspiration, GetRealLevel(ch));
+	}
+
 	// итоговый дамаг
-	ch->send_to_TC(false, true, true, "&CНанёс: Регуляр дамаг = %d&n\r\n", hit_params.dam);
-	victim->send_to_TC(false, true, true, "&CПолучил: Регуляр дамаг = %d&n\r\n", hit_params.dam);
+	SendToTC(ch, false, true, true, "&CНанёс: Регуляр дамаг = %d&n\r\n", hit_params.dam);
+	SendToTC(victim, false, true, true, "&CПолучил: Регуляр дамаг = %d&n\r\n", hit_params.dam);
 	int made_dam = hit_params.ProcessExtradamage(ch, victim);
+
+	// issue.character-affect-triggers: kPostHit event = a landed melee hit resolved. Fires only when
+	// the hit dealt damage AND the victim survived (made_dam == -1 means the victim died this hit -> no
+	// post-hit trigger on a corpse). Event carries the actual amount, the weapon, the weapon-skill and
+	// the victim, for handlers (no XML grammar for these).
+	if (made_dam != -1 && hit_params.dam > 0) {
+		EventContext dmg_event;
+		dmg_event.trigger = talents_actions::EActionTrigger::kPostHit;
+		dmg_event.amount = hit_params.dam;
+		dmg_event.weapon = hit_params.wielded;
+		dmg_event.skill = hit_params.weap_skill;
+		dmg_event.actor = victim;
+		RunCharEventTriggers(ch, dmg_event);
+		if (ch->purged() || victim->purged()) {
+			return;
+		}
+	}
 
 	//Обнуление лага, когда виктим убит с применением
 	//оглушить или молотить. Чтобы все это было похоже на
@@ -1062,7 +1170,6 @@ void ProcessExtrahits(CharData *ch, CharData *victim, ESkill type, fight::Attack
 		log("SYSERROR: ch = %s (%s:%d)", ch ? (ch->purged() ? "purged" : "true") : "false", __FILE__, __LINE__);
 		return;
 	}
-
 	ProcessIronWindHits(ch, weapon);
 	ProcessMultyShotHits(ch, victim, type, weapon);
 	hit(ch, victim, type, weapon);
@@ -1074,11 +1181,11 @@ int CalcPcDamrollBonus(CharData *ch) {
 		{0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8};
 	int bonus = 0;
 	if (IS_VIGILANT(ch) || IS_GUARD(ch) || IS_RANGER(ch)) {
-		bonus = kRemortDamrollBonus[std::min(kMaxRemortForDamrollBonus, GetRealRemort(ch))];
+		bonus = kRemortDamrollBonus[std::min(kMaxRemortForDamrollBonus, remort::GetRealRemort(ch))];
 	}
 	// И с чего бы такое счастье именно обладателям луков и допа?
 	// Кстати, к ремортам оно каким боком?
-//	if (CanUseFeat(ch, EFeat::kBowsFocus) && ch->GetSkill(ESkill::kAddshot)) {
+//	if (CanUseFeat(ch, EFeat::kBowsFocus) && GetSkill(ch, ESkill::kAddshot)) {
 //		bonus *= 3;
 //	}
 	return bonus;
@@ -1094,18 +1201,42 @@ int CalcNpcDamrollBonus(CharData *ch) {
 /**
 * еще есть рандом дамролы, в данный момент максимум 30d127
 */
+// Предел дамролла подчинённого. У поднятой нежити (хозяин + флаг kCorpse) он выше -- так
+// заведено в GetRealDamroll, и автоатака считает по тому же правилу. Своему виду нежити
+// предел можно задать в cfg/mechanics/animate_dead.xml (damroll_cap): у верхних видов бонусы
+// от подъёма и «сил зла» иначе упираются в общий потолок.
+static int CharmiceDamrollCap(CharData *ch) {
+	// rnum < 0 -- моб без прототипа в памяти (так бывает в тестах и у служебных существ),
+	// GET_MOB_VNUM на таком читать нельзя: он лезет в mob_index по отрицательному индексу.
+	if (ch->IsNpc() && ch->get_rnum() >= 0) {
+		const int tier_cap = MUD::AnimateDead().DamrollCapOf(GET_MOB_VNUM(ch));
+		if (tier_cap > 0) {
+			return tier_cap;
+		}
+	}
+
+	return IsMortifier(ch) ? 100 : 50;
+}
+
 int GetRealDamroll(CharData *ch) {
-	if (ch->IsNpc() && !IS_CHARMICE(ch)) {
+	if (ch->IsNpc() && !IsCharmice(ch)) {
 		return std::max(0, GET_DR(ch) + GET_DR_ADD(ch) + CalcNpcDamrollBonus(ch));
 	}
 
 	int bonus = CalcPcDamrollBonus(ch);
-	return std::clamp(GET_DR(ch) + GET_DR_ADD(ch) + 2 * bonus, -50, (IS_MORTIFIER(ch) ? 100 : 50) + 2 * bonus);
+	return std::clamp(GET_DR(ch) + GET_DR_ADD(ch) + 2 * bonus, -50, CharmiceDamrollCap(ch) + 2 * bonus);
 }
 
 int GetAutoattackDamroll(CharData *ch, int weapon_skill) {
-	if (ch->IsNpc() && !IS_CHARMICE(ch)) {
+	if (ch->IsNpc() && !IsCharmice(ch)) {
 		return std::max(0, GET_DR(ch) + GET_DR_ADD(ch) + CalcNpcDamrollBonus(ch));
+	}
+	if (IsCharmice(ch)) {
+		// Кап от умения оружия подчинённому не годится: его дамролл приходит из прототипа,
+		// подъёма и баффов, а не из прокачки. У костяка велета кулачный бой 80 давал кап 40,
+		// и обрезались как его собственные 50 из прототипа, так и весь бонус сил зла
+		// (issue #3958, разбор в #3670). Предел -- тот же, что в GetRealDamroll.
+		return std::max(0, std::min(GET_DR(ch) + GET_DR_ADD(ch), CharmiceDamrollCap(ch)));
 	}
 	return std::min(GET_DR(ch) + GET_DR_ADD(ch) + 2 * CalcPcDamrollBonus(ch), weapon_skill / 2); //попробюуем так
 }

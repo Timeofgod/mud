@@ -1,5 +1,8 @@
+#include <fmt/format.h>
+
 #include "engine/entities/char_data.h"
-#include "engine/core/handler.h"
+#include "gameplay/mechanics/sight.h"
+#include "engine/core/target_resolver.h"
 #include "engine/core/utils_char_obj.inl"
 
 void do_mark(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
@@ -17,12 +20,11 @@ void do_mark(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 	} else if (!*arg2 || !is_number(arg2)) {
 		SendMsgToChar("Не указан или неверный маркер.\r\n", ch);
 	} else {
-		cont_dotmode = find_all_dots(arg1);
+		cont_dotmode = ParseAllPrefix(arg1);
 		if (cont_dotmode == kFindIndiv) {
 			generic_find(arg1, EFind::kObjInventory | EFind::kObjRoom | EFind::kObjEquip, ch, &tmp_char, &cont);
 			if (!cont) {
-				sprintf(buf, "У вас нет '%s'.\r\n", arg1);
-				SendMsgToChar(buf, ch);
+				SendMsgToChar(fmt::format("У вас нет '{}'.\r\n", arg1), ch);
 				return;
 			}
 			cont->set_owner(atoi(arg2));
@@ -33,7 +35,7 @@ void do_mark(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				return;
 			}
 			for (cont = ch->carrying; cont; cont = cont->get_next_content()) {
-				if (CAN_SEE_OBJ(ch, cont)
+				if (sight::CanSeeObj(ch, cont)
 					&& (cont_dotmode == kFindAll
 						|| isname(arg1, cont->get_aliases()))) {
 					cont->set_owner(atoi(arg2));
@@ -41,8 +43,8 @@ void do_mark(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 					found = true;
 				}
 			}
-			for (cont = world[ch->in_room]->contents; cont; cont = cont->get_next_content()) {
-				if (CAN_SEE_OBJ(ch, cont)
+			for (auto cont : world[ch->in_room]->contents) {
+				if (sight::CanSeeObj(ch, cont)
 					&& (cont_dotmode == kFindAll
 						|| isname(arg2, cont->get_aliases()))) {
 					cont->set_owner(atoi(arg2));
@@ -54,8 +56,7 @@ void do_mark(CharData *ch, char *argument, int/* cmd*/, int/* subcmd*/) {
 				if (cont_dotmode == kFindAll) {
 					SendMsgToChar("Вы не смогли найти ничего для маркировки.\r\n", ch);
 				} else {
-					sprintf(buf, "Вы что-то не видите здесь '%s'.\r\n", arg1);
-					SendMsgToChar(buf, ch);
+					SendMsgToChar(fmt::format("Вы что-то не видите здесь '{}'.\r\n", arg1), ch);
 				}
 			}
 		}

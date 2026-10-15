@@ -17,6 +17,7 @@ class NormalRand {
 	//Нормальное распределение
 	double NormalDistributionNumber(double mean, double sigma);
 	bool BernoulliTrial(double prob);
+	void seed(unsigned value) { _rng.seed(value); }
 
  private:
 	std::random_device _rd;
@@ -73,6 +74,12 @@ bool BernoulliTrial(double p) {
 	return Random::rnd.BernoulliTrial(p);
 }
 
+// Устанавливает зерно для глобального генератора. Используется автономным
+// симулятором для воспроизводимости прогонов.
+void SetRandomSeed(unsigned value) {
+	Random::rnd.seed(value);
+}
+
 /**
 * Генерация целого числа в заданном диапазоне с нормальным распределением
   Вообще говоря, это все кривовато, но будет по идее работать примерно как надо.
@@ -92,6 +99,16 @@ int GaussIntNumber(double mean, double sigma, int min_val, int max_val) {
 	iresult = ((dresult < mean) ? ceil(dresult) : floor(dresult));
 	//возвращаем с обрезанием по диапазону
 	return MAX(MIN(iresult, max_val), min_val);
+}
+
+// issue.potency-noise: standard-normal draw as a double, clamped to [min_val, max_val] (truncation).
+// Mirrors GaussIntNumber's clamp approach. sigma<=0 -> the mean, clamped (deterministic).
+double GaussDoubleNumber(double mean, double sigma, double min_val, double max_val) {
+	if (sigma <= 0.0) {
+		return MAX(min_val, MIN(mean, max_val));
+	}
+	const double d = Random::rnd.NormalDistributionNumber(mean, sigma);
+	return MAX(min_val, MIN(d, max_val));
 }
 
 

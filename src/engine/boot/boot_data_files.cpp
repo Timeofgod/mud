@@ -1,4 +1,5 @@
 #include "boot_data_files.h"
+#include "utils/native_text.h"
 
 #include "engine/db/obj_prototypes.h"
 #include "engine/scripting/dg_olc.h"
@@ -10,9 +11,7 @@
 #include "engine/scripting/dg_db_scripts.h"
 #include "engine/db/global_objects.h"
 
-#include "third_party_libs/fmt/include/fmt/format.h"
-
-#include <regex>
+#include <fmt/format.h>
 
 extern int scheck;                        // TODO: get rid of this line
 CharData *mob_proto;                    // TODO: get rid of this global variable
@@ -26,7 +25,7 @@ class DataFile : public BaseDataFile {
 	void close() override;
 	[[nodiscard]] const std::string &file_name() const { return m_file_name; }
 	[[nodiscard]] const auto &file() const { return m_file; }
-	void get_one_line(char *buf);
+	void get_one_line(char *buf, std::size_t buf_size);
 
  private:
 	FILE *m_file;
@@ -37,8 +36,7 @@ bool DataFile::open() {
 	const std::string file_name = full_file_name();
 	m_file = fopen(file_name.c_str(), "r");
 	if (nullptr == m_file) {
-		log("SYSERR: %s: %s", file_name.c_str(), strerror(errno));
-		exit(1);
+		fatal_log("SYSERR: %s: %s", file_name.c_str(), strerror(errno));
 	}
 	return true;
 }
@@ -47,14 +45,26 @@ void DataFile::close() {
 	fclose(m_file);
 }
 
-void DataFile::get_one_line(char *buf) {
-	if (fgets(buf, READ_SIZE, file()) == nullptr) {
+void DataFile::get_one_line(char *buf, std::size_t buf_size) {
+	char raw[READ_SIZE];
+	if (fgets(raw, sizeof(raw), file()) == nullptr) {
 		mudlog("SYSERR: error reading help file: not terminated with $?", DEF, kLvlImmortal, SYSLOG, true);
 		buf[0] = '$';
 		buf[1] = 0;
 		return;
 	}
-	buf[strlen(buf) - 1] = '\0';    // take off the trailing \n
+	size_t len = strlen(raw);
+	while (len > 0 && (raw[len - 1] == '\n' || raw[len - 1] == '\r')) {
+		raw[--len] = '\0';    // take off the trailing \r\n
+	}
+
+	// Граница кодировки (issue #3681): файлы справки лежат на диске в KOI8-R, а движок под
+	// UTF-8 ждёт нативный текст -- без этого ключи разделов не совпадали бы с тем, что ввёл
+	// игрок, а тело раздела уезжало бы клиенту байтами чужой кодировки. Строка может при этом
+	// вырасти (KOI8-R байт -> до трёх байт UTF-8), поэтому размер буфера передаётся явно.
+	const std::string native = native_text::from_disk_line(raw);
+	strncpy(buf, native.c_str(), buf_size - 1);
+	buf[buf_size - 1] = '\0';
 }
 
 class DiscreteFile : public DataFile {
@@ -101,13 +111,11 @@ bool DiscreteFile::discrete_load(const EBootType mode) {
 		if (*m_line == '#') {
 			last = nr;
 			if (sscanf(m_line, "#%d", &nr) != 1) {
-				log("SYSERR: Format error after %s #%d", boot_mode_name(mode), last);
-				exit(1);
+				fatal_log("SYSERR: Format error after %s #%d", boot_mode_name(mode), last);
 			}
 
 			if (nr == 1) {
-				log("SYSERR: Entity with vnum 1, filename=%s", file_name().c_str());
-				exit(1);
+				fatal_log("SYSERR: Entity with vnum 1, filename=%s", file_name().c_str());
 			}
 
 			if (nr >= kMaxProtoNumber) {
@@ -121,8 +129,7 @@ bool DiscreteFile::discrete_load(const EBootType mode) {
 				file_name().c_str(),
 				boot_mode_name(mode),
 				nr);
-			log("SYSERR: ... offending line: '%s'", m_line);
-			exit(1);
+			fatal_log("SYSERR: ... offending line: '%s'", m_line);
 		}
 	}
 
@@ -139,6 +146,7 @@ void DiscreteFile::read_next_line(const int nr) {
 				"(maybe the file is not terminated with '$'?)", file_name().c_str(),
 				boot_mode_name(mode()), nr, boot_mode_name(mode()));
 		}
+		fprintf(stderr, "FATAL: boot file format error in %s\n", file_name().c_str());
 		exit(1);
 	}
 }
@@ -211,7 +219,7 @@ void DiscreteFile::dg_read_trigger(void *proto, int type, int proto_vnum) {
 
 	rnum = GetTriggerRnum(vnum);
 	if (rnum < 0) {
-		sprintf(line, "SYSERR: Trigger vnum #%d asked for but non-existant!", vnum);
+		snprintf(line, sizeof(line), "SYSERR: Trigger vnum #%d asked for but non-existant!", vnum);
 		log("%s", line);
 		return;
 	}
@@ -231,11 +239,11 @@ void DiscreteFile::dg_read_trigger(void *proto, int type, int proto_vnum) {
 					ExtractTrigger(trigger_instance);
 				}
 			} else {
-				sprintf(line, "SYSERR: non-existant trigger #%d assigned to room #%d", vnum, room->vnum);
+				snprintf(line, sizeof(line), "SYSERR: non-existant trigger #%d assigned to room #%d", vnum, room->vnum);
 				log("%s", line);
 			}
 			break;
-		default: sprintf(line, "SYSERR: Trigger vnum #%d assigned to non-mob/obj/room", vnum);
+		default: snprintf(line, sizeof(line), "SYSERR: Trigger vnum #%d assigned to non-mob/obj/room", vnum);
 			log("%s", line);
 			break;
 	}
@@ -243,35 +251,22 @@ void DiscreteFile::dg_read_trigger(void *proto, int type, int proto_vnum) {
 
 class DataFileFactoryImpl : public DataFileFactory {
  public:
-	using regex_ptr_t = std::shared_ptr<std::regex>;
-
-	DataFileFactoryImpl() : m_load_obj_exp(std::make_shared<std::regex>(
-		"^\\s*(?:%load%|load|oload|mload|wload)\\s+obj\\s+(\\d+)")) {}
-
 	virtual BaseDataFile::shared_ptr get_file(const EBootType mode, const std::string &file_name) override;
-
- private:
-	const regex_ptr_t m_load_obj_exp;
 };
 
 class TriggersFile : public DiscreteFile {
  public:
-	TriggersFile(const std::string &file_name, const DataFileFactoryImpl::regex_ptr_t &expression) : DiscreteFile(
-		file_name), m_load_obj_exp(expression) {}
+	TriggersFile(const std::string &file_name) : DiscreteFile(file_name) {}
 
 	virtual EBootType mode() const override { return DB_BOOT_TRG; }
 
-	static shared_ptr create(const std::string &file_name,
-							 const DataFileFactoryImpl::regex_ptr_t &expression) {
-		return shared_ptr(new TriggersFile(file_name,
-										   expression));
-	}
+	static shared_ptr create(const std::string &file_name) { return shared_ptr(new TriggersFile(file_name)); }
 
  private:
 	virtual void read_entry(const int nr) override;
 	void parse_trigger(int nr);
-
-	const DataFileFactoryImpl::regex_ptr_t m_load_obj_exp;
+	void LoadDgTriggerScript(Trigger *trig, const std::string &cmds, int vnum);
+	void LoadLuaTriggerScript(Trigger *trig, const std::string &cmds);
 };
 
 void TriggersFile::read_entry(const int nr) {
@@ -280,7 +275,7 @@ void TriggersFile::read_entry(const int nr) {
 
 void TriggersFile::parse_trigger(int vnum) {
 	int t, add_flag, k;
-	char line[256], flags[256];
+	char line[256], flags[256], language[32];
 
 	ZoneRnum zrn = GetZoneRnum(vnum / 100);
 
@@ -289,12 +284,14 @@ void TriggersFile::parse_trigger(int vnum) {
 	}
 	zone_table[zrn].RnumTrigsLocation.second = top_of_trigt;
 
-	sprintf(buf2, "trig vnum %d", vnum);
 	std::string name(fread_string());
 	get_line(file(), line);
 
 	int attach_type = 0;
-	k = sscanf(line, "%d %s %d %d", &attach_type, flags, &t, &add_flag);
+	flags[0] = '\0';
+	language[0] = '\0';
+	t = 0;  // Initialize narg to avoid undefined behavior when only 2 fields present
+	k = sscanf(line, "%d %255s %d %d %31s", &attach_type, flags, &t, &add_flag, language);
 
 	if (0 > attach_type
 		|| 2 < attach_type) {
@@ -305,15 +302,28 @@ void TriggersFile::parse_trigger(int vnum) {
 	int trigger_type = 0;
 	asciiflag_conv(flags, &trigger_type);
 	const auto rnum = top_of_trigt;
-	Trigger *trig = new Trigger(rnum, std::move(name), static_cast<byte>(attach_type), trigger_type);
+	Trigger *trig = new Trigger(rnum, std::move(name), attach_type, trigger_type);
+	if (k == 5 && !strcmp(language, "lua")) {
+		trig->set_script_language(TriggerScriptLanguage::Lua);
+	}
 
 	trig->narg = t;
-	if (k == 4)
+	if (k >= 4)
 		trig->add_flag = add_flag;
 	else 
 		trig->add_flag = false;
 	trig->arglist = fread_string();
 	std::string cmds(fread_string());
+	if (trig->get_script_language() == TriggerScriptLanguage::Dg) {
+		LoadDgTriggerScript(trig, cmds, vnum);
+	} else if (trig->get_script_language() == TriggerScriptLanguage::Lua) {
+		LoadLuaTriggerScript(trig, cmds);
+	}
+
+	AddTrigIndexEntry(vnum, trig);
+}
+
+void TriggersFile::LoadDgTriggerScript(Trigger *trig, const std::string &cmds, int vnum) {
 	std::size_t pos = 0;
 	int indlev = 0, num = 1;
 	auto ptr = trig->cmdlist.get();
@@ -328,24 +338,14 @@ void TriggersFile::parse_trigger(int vnum) {
 			indent_trigger(line, &indlev);
 			(*ptr)->cmd = line;
 			(*ptr)->line_num = num++;
-			ptr = &(*ptr)->next;
 
-			std::smatch match;
-			if (std::regex_search(line, match, *m_load_obj_exp)) {
-				ObjVnum obj_num = std::stoi(match.str(1));
-				const auto tlist_it = obj2triggers.find(obj_num);
-				if (tlist_it != obj2triggers.end()) {
-					//const auto trig_f = std::find(tlist_it->second.begin(), tlist_it->second.end(), top_of_trigt);
-					const auto trig_f = std::find(tlist_it->second.begin(), tlist_it->second.end(), vnum);
-					if (trig_f == tlist_it->second.end()) {
-						//tlist_it->second.push_back(top_of_trigt);
-						tlist_it->second.push_back(vnum);
-					}
-				} else {
-					std::list<TrgVnum> tlist = {vnum};
-					obj2triggers.emplace(obj_num, tlist);
-				}
+			// lowercase the command (first word) for faster comparison at runtime
+			auto it = (*ptr)->cmd.begin();
+			while (it != (*ptr)->cmd.end() && (*it == ' ' || *it == '\t')) ++it;
+			for (; it != (*ptr)->cmd.end() && *it != ' '; it += native_text::char_bytes(&*it)) {
+				native_text::copy_lower_char(&*it, &*it);
 			}
+			ptr = &(*ptr)->next;
 		}
 		if (pos_end != std::string::npos)
 			pos_end = pos_end + 1;
@@ -358,8 +358,10 @@ void TriggersFile::parse_trigger(int vnum) {
 		log("%s", tmp);
 		Boards::dg_script_text += tmp + std::string("\r\n");
 	}
+}
 
-	AddTrigIndexEntry(vnum, trig);
+void TriggersFile::LoadLuaTriggerScript(Trigger *trig, const std::string &cmds) {
+	trig->set_lua_script_source(cmds);
 }
 
 class WorldFile : public DiscreteFile {
@@ -394,16 +396,14 @@ void WorldFile::parse_room(int virtual_nr) {
 	char letter;
 
 	if (virtual_nr <= (zone ? zone_table[zone - 1].top : -1)) {
-		log("SYSERR: Room #%d is below zone %d.", virtual_nr, zone);
-		exit(1);
+		fatal_log("SYSERR: Room #%d is below zone %d.", virtual_nr, zone);
 	}
 //	if (zone == 0 && zone_table[zone].RnumRoomsLocation.first == -1) {
 //		zone_table[zone].RnumRoomsLocation.first = 1;
 //	}
 	while (virtual_nr > zone_table[zone].top) {
 		if (++zone >= static_cast<ZoneRnum>(zone_table.size())) {
-			log("SYSERR: Room %d is outside of any zone.", virtual_nr);
-			exit(1);
+			fatal_log("SYSERR: Room %d is outside of any zone.", virtual_nr);
 		}
 	}
 	// Создаем новую комнату
@@ -411,7 +411,7 @@ void WorldFile::parse_room(int virtual_nr) {
 	world[room_realnum]->zone_rn = zone;
 	world[room_realnum]->vnum = virtual_nr;
 	std::string tmpstr = fread_string();
-	tmpstr[0] = UPPER(tmpstr[0]);
+	native_text::capitalize_first(tmpstr);
 	world[room_realnum]->set_name(tmpstr);
 //	if (zone_table[zone].RnumRoomsLocation.first == -1) {
 //		zone_table[zone].RnumRoomsLocation.first = room_realnum;
@@ -421,16 +421,14 @@ void WorldFile::parse_room(int virtual_nr) {
 	std::string desc = fread_string();
 	utils::TrimRightIf(desc, " _");
 	desc.shrink_to_fit();
-	world[room_realnum]->description_num = RoomDescription::add_desc(desc);
+	world[room_realnum]->description_num = GlobalObjects::descriptions().add(desc);
 
 	if (!get_line(file(), line)) {
-		log("SYSERR: Expecting roomflags/sector type of room #%d but file ended!", virtual_nr);
-		exit(1);
+		fatal_log("SYSERR: Expecting roomflags/sector type of room #%d but file ended!", virtual_nr);
 	}
 
 	if (sscanf(line, " %d %s %d ", t, flags, t + 2) != 3) {
-		log("SYSERR: Format error in roomflags/sector type of room #%d", virtual_nr);
-		exit(1);
+		fatal_log("SYSERR: Format error in roomflags/sector type of room #%d", virtual_nr);
 	}
 	// t[0] is the zone number; ignored with the zone-file system
 	world[room_realnum]->flags_from_string(flags);
@@ -438,7 +436,7 @@ void WorldFile::parse_room(int virtual_nr) {
 
 	CheckRoomForIncompatibleFlags(room_realnum);
 	world[room_realnum]->func = nullptr;
-	world[room_realnum]->contents = nullptr;
+	world[room_realnum]->contents.clear();
 	world[room_realnum]->track = nullptr;
 	world[room_realnum]->light = 0;    // Zero light sources
 	world[room_realnum]->fires = 0;
@@ -450,29 +448,28 @@ void WorldFile::parse_room(int virtual_nr) {
 		world[room_realnum]->dir_option[i] = nullptr;
 	}
 
-	world[room_realnum]->ex_description = nullptr;
+	world[room_realnum]->ex_description.clear();
 
-	sprintf(buf, "SYSERR: Format error in room #%d (expecting D/E/S)", virtual_nr);
+	// Сообщение лежало в общем буфере и затиралось ошибкой про extradesc ниже: после
+	// первого битого E-блока комната падала с чужим текстом.
+	const std::string format_error = fmt::format("SYSERR: Format error in room #{} (expecting D/E/S)", virtual_nr);
 
 	for (;;) {
 		if (!get_line(file(), line)) {
-			log("%s", buf);
-			exit(1);
+			fatal_log("%s", format_error.c_str());
 		}
 		switch (*line) {
 			case 'D': setup_dir(room_realnum, atoi(line + 1));
 				break;
 
 			case 'E': {
-				const ExtraDescription::shared_ptr new_descr(new ExtraDescription);
-				new_descr->set_keyword(fread_string());
-				new_descr->set_description(fread_string());
-				if (new_descr->keyword && new_descr->description) {
-					new_descr->next = world[room_realnum]->ex_description;
-					world[room_realnum]->ex_description = new_descr;
+				ExtraDescription new_descr;
+				new_descr.set_keyword(fread_string());
+				new_descr.set_description(fread_string());
+				if (!new_descr.keyword.empty() && !new_descr.description.empty()) {
+					world[room_realnum]->ex_description.push_back(std::move(new_descr));
 				} else {
-					sprintf(buf, "SYSERR: Format error in room #%d (Corrupt extradesc)", virtual_nr);
-					log("%s", buf);
+					log("SYSERR: Format error in room #%d (Corrupt extradesc)", virtual_nr);
 				}
 			}
 				break;
@@ -496,8 +493,7 @@ void WorldFile::parse_room(int virtual_nr) {
 				} while (letter != 0);
 				return;
 
-			default: log("%s", buf);
-				exit(1);
+			default: fatal_log("%s", format_error.c_str());
 		}
 	}
 }
@@ -511,7 +507,7 @@ void WorldFile::setup_dir(int room, unsigned dir) {
 	int t[5];
 	char line[256];
 
-	sprintf(buf2, "room #%d, direction D%u", GET_ROOM_VNUM(room), dir);
+	const std::string where = fmt::format("room #{}, direction D{}", GET_ROOM_VNUM(room), dir);
 
 	world[room]->dir_option_proto[dir] = std::make_shared<ExitData>();
 	world[room]->dir_option_proto[dir]->general_description = fread_string();
@@ -520,31 +516,36 @@ void WorldFile::setup_dir(int room, unsigned dir) {
 	world[room]->dir_option_proto[dir]->set_keywords(fread_string());
 
 	if (!get_line(file(), line)) {
-		log("SYSERR: Format error, %s", line);
-		exit(1);
+		fatal_log("SYSERR: Format error, %s", line);
 	}
 	int result = sscanf(line, " %d %d %d %d", t, t + 1, t + 2, t + 3);
 	if (result == 3) {
 		if (t[0] & 1)
-			world[room]->dir_option_proto[dir]->exit_info = EExitFlag::kHasDoor;
+			world[room]->dir_option_proto[dir]->exit_info = {EExitFlag::kHasDoor};
 		else if (t[0] & 2)
-			world[room]->dir_option_proto[dir]->exit_info = EExitFlag::kHasDoor | EExitFlag::kPickroof;
+			world[room]->dir_option_proto[dir]->exit_info = {EExitFlag::kHasDoor, EExitFlag::kPickroof};
 		else
-			world[room]->dir_option_proto[dir]->exit_info = 0;
+			world[room]->dir_option_proto[dir]->exit_info.clear();
 		if (t[0] & 4)
-			world[room]->dir_option_proto[dir]->exit_info |= EExitFlag::kHidden;
+			world[room]->dir_option_proto[dir]->exit_info.set(EExitFlag::kHidden);
 
 		world[room]->dir_option_proto[dir]->lock_complexity = 0;
 	} else if (result == 4) {
-		world[room]->dir_option_proto[dir]->exit_info = t[0];
+		world[room]->dir_option_proto[dir]->exit_info.set_plane(0, t[0]);
 		world[room]->dir_option_proto[dir]->lock_complexity = t[3];
 	} else {
-		log("SYSERR: Format error, %s", buf2);
-		exit(1);
+		fatal_log("SYSERR: Format error, %s", where.c_str());
 	}
 
 	world[room]->dir_option_proto[dir]->key = t[1];
 	world[room]->dir_option_proto[dir]->to_room(t[2]);
+
+	// Полностью пустые D-блоки - мусор из старых редакторов, на рантайм не
+	// влияют и без причины засоряют show errors. Дропаем их сразу при загрузке
+	// (симметрично в YAML- и SQLite-загрузчиках), см. issue #3272.
+	if (world[room]->dir_option_proto[dir]->is_empty()) {
+		world[room]->dir_option_proto[dir].reset();
+	}
 }
 
 bool WorldFile::load() {
@@ -603,36 +604,34 @@ void ObjectFile::parse_object(const int nr) {
 	tobj->set_level(1);
 	tobj->set_destroyer(ObjData::DEFAULT_DESTROYER);
 
-	sprintf(m_buffer, "object #%d", nr);
+	snprintf(m_buffer, sizeof(m_buffer), "object #%d", nr);
 
 	// *** string data ***
 	std::string aliases(fread_string());
 	if (aliases.empty()) {
-		log("SYSERR: Empty obj name or format error at or near %s", m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Empty obj name or format error at or near %s", m_buffer);
 	}
 	tobj->set_aliases(aliases);
 	tobj->set_short_description(utils::colorLOW(fread_string()));
 
-	strcpy(buf, tobj->get_short_description().c_str());
-	tobj->set_PName(ECase::kNom, utils::colorLOW(buf)); //именительный падеж равен короткому описанию
+	//именительный падеж равен короткому описанию
+	std::string nominative(tobj->get_short_description());
+	tobj->set_PName(grammar::ECase::kNom, utils::colorLOW(nominative));
 
-	for (j = ECase::kGen; j <= ECase::kLastCase; j++) {
-		tobj->set_PName(static_cast<ECase>(j), utils::colorLOW(fread_string()));
+	for (j = grammar::ECase::kGen; j <= grammar::ECase::kLastCase; j++) {
+		tobj->set_PName(static_cast<grammar::ECase>(j), utils::colorLOW(fread_string()));
 	}
 
 	tobj->set_description(utils::colorCAP(fread_string()));
 	tobj->set_action_description(fread_string());
 
 	if (!get_line(file(), m_line)) {
-		log("SYSERR: Expecting *1th* numeric line of %s, but file ended!", m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Expecting *1th* numeric line of %s, but file ended!", m_buffer);
 	}
 
 	int parsed_entries = sscanf(m_line, " %s %d %d %d", f0, t + 1, t + 2, t + 3);
 	if (parsed_entries != 4) {
-		log("SYSERR: Format error in *1th* numeric line (expecting 4 args, got %d), %s", parsed_entries, m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Format error in *1th* numeric line (expecting 4 args, got %d), %s", parsed_entries, m_buffer);
 	}
 
 	int sparam = 0;
@@ -648,14 +647,12 @@ void ObjectFile::parse_object(const int nr) {
 	}
 
 	if (!get_line(file(), m_line)) {
-		log("SYSERR: Expecting *2th* numeric line of %s, but file ended!", m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Expecting *2th* numeric line of %s, but file ended!", m_buffer);
 	}
 
 	parsed_entries = sscanf(m_line, " %d %d %d %d", t, t + 1, t + 2, t + 3);
 	if (parsed_entries != 4) {
-		log("SYSERR: Format error in *2th* numeric line (expecting 4 args, got %d), %s", parsed_entries, m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Format error in *2th* numeric line (expecting 4 args, got %d), %s", parsed_entries, m_buffer);
 	}
 	tobj->set_sex(static_cast<EGender>(t[0]));
 	int timer = t[1] > 0 ? t[1] : ObjData::SEVEN_DAYS;
@@ -663,18 +660,16 @@ void ObjectFile::parse_object(const int nr) {
 		timer = 99999;
 	}
 	tobj->set_timer(timer);
-	tobj->set_spell(t[2]);
-	tobj->set_level(t[3]);
+	// issue #3581: obj->spell и его уровень -- мёртвая пара, ни одна механика их не читает.
+	// t[2]/t[3] всё ещё разбираются (формат легаси-строки = 4 поля), но объекту не присваиваются.
 
 	if (!get_line(file(), m_line)) {
-		log("SYSERR: Expecting *3th* numeric line of %s, but file ended!", m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Expecting *3th* numeric line of %s, but file ended!", m_buffer);
 	}
 
 	parsed_entries = sscanf(m_line, " %s %s %s", f0, f1, f2);
 	if (parsed_entries != 3) {
-		log("SYSERR: Format error in *3th* numeric line (expecting 3 args, got %d), %s", parsed_entries, m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Format error in *3th* numeric line (expecting 3 args, got %d), %s", parsed_entries, m_buffer);
 	}
 
 	tobj->load_affect_flags(f0);
@@ -685,14 +680,12 @@ void ObjectFile::parse_object(const int nr) {
 	// ** Deny for ...
 
 	if (!get_line(file(), m_line)) {
-		log("SYSERR: Expecting *3th* numeric line of %s, but file ended!", m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Expecting *3th* numeric line of %s, but file ended!", m_buffer);
 	}
 
 	parsed_entries = sscanf(m_line, " %d %s %s", t, f1, f2);
 	if (parsed_entries != 3) {
-		log("SYSERR: Format error in *3th* misc line (expecting 3 args, got %d), %s", parsed_entries, m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Format error in *3th* misc line (expecting 3 args, got %d), %s", parsed_entries, m_buffer);
 	}
 
 	tobj->set_type(static_cast<EObjType>(t[0]));        // ** What's a object
@@ -704,14 +697,12 @@ void ObjectFile::parse_object(const int nr) {
 	// ** Wear on ...
 
 	if (!get_line(file(), m_line)) {
-		log("SYSERR: Expecting *5th* numeric line of %s, but file ended!", m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Expecting *5th* numeric line of %s, but file ended!", m_buffer);
 	}
 
 	parsed_entries = sscanf(m_line, "%s %d %d %d", f0, t + 1, t + 2, t + 3);
 	if (parsed_entries != 4) {
-		log("SYSERR: Format error in *5th* numeric line (expecting 4 args, got %d), %s", parsed_entries, m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Format error in *5th* numeric line (expecting 4 args, got %d), %s", parsed_entries, m_buffer);
 	}
 
 	int first_value = 0;
@@ -722,14 +713,12 @@ void ObjectFile::parse_object(const int nr) {
 	tobj->set_val(3, t[3]);
 
 	if (!get_line(file(), m_line)) {
-		log("SYSERR: Expecting *6th* numeric line of %s, but file ended!", m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Expecting *6th* numeric line of %s, but file ended!", m_buffer);
 	}
 
 	parsed_entries = sscanf(m_line, "%d %d %d %d", t, t + 1, t + 2, t + 3);
 	if (parsed_entries != 4) {
-		log("SYSERR: Format error in *6th* numeric line (expecting 4 args, got %d), %s", parsed_entries, m_buffer);
-		exit(1);
+		fatal_log("SYSERR: Format error in *6th* numeric line (expecting 4 args, got %d), %s", parsed_entries, m_buffer);
 	}
 	tobj->set_weight(t[0]);
 	tobj->set_cost(t[1]);
@@ -747,50 +736,41 @@ void ObjectFile::parse_object(const int nr) {
 	tobj->unset_extraflag(EObjFlag::kTicktimer);
 
 	// *** extra descriptions and affect fields ***
-	strcat(m_buffer, ", after numeric constants\n" "...expecting 'E', 'A', '$', or next object number");
+	strncat(m_buffer, ", after numeric constants\n" "...expecting 'E', 'A', '$', or next object number", sizeof(m_buffer) - strlen(m_buffer) - 1);
 	j = 0;
 
 	for (;;) {
 		if (!get_line(file(), m_line)) {
-			log("SYSERR: Format error in %s", m_buffer);
-			exit(1);
+			fatal_log("SYSERR: Format error in %s", m_buffer);
 		}
 		switch (*m_line) {
 			case 'E': {
-				const ExtraDescription::shared_ptr new_descr(new ExtraDescription());
-				new_descr->set_keyword(fread_string());
-				new_descr->set_description(fread_string());
-				if (new_descr->keyword && new_descr->description) {
-					new_descr->next = tobj->get_ex_description();
-					tobj->set_ex_description(new_descr);
+				ExtraDescription new_descr;
+				new_descr.set_keyword(fread_string());
+				new_descr.set_description(fread_string());
+				if (!new_descr.keyword.empty() && !new_descr.description.empty()) {
+					tobj->ex_descriptions().push_back(std::move(new_descr));
 				} else {
-					const auto written =
-						snprintf(buf, sizeof(buf), "SYSERR: Format error in %s (Corrupt extradesc)", m_buffer);
-					buf[written] = '\0';
-
-					log("%s", buf);
+					log("SYSERR: Format error in %s (Corrupt extradesc)", m_buffer);
 				}
 			}
 				break;
 
 			case 'A':
 				if (j >= kMaxObjAffect) {
-					log("SYSERR: Too many A fields (%d max), %s", kMaxObjAffect, m_buffer);
-					exit(1);
+					fatal_log("SYSERR: Too many A fields (%d max), %s", kMaxObjAffect, m_buffer);
 				}
 
 				if (!get_line(file(), m_line)) {
-					log("SYSERR: Format error in 'A' field, %s\n"
+					fatal_log("SYSERR: Format error in 'A' field, %s\n"
 						"...expecting 2 numeric constants but file ended!", m_buffer);
-					exit(1);
 				}
 
 				parsed_entries = sscanf(m_line, " %d %d ", t, t + 1);
 				if (parsed_entries != 2) {
-					log("SYSERR: Format error in 'A' field, %s\n"
+					fatal_log("SYSERR: Format error in 'A' field, %s\n"
 						"...expecting 2 numeric arguments, got %d\n"
 						"...offending line: '%s'", m_buffer, parsed_entries, m_line);
-					exit(1);
 				}
 
 				tobj->set_affected(j, static_cast<EApply>(t[0]), t[1]);
@@ -809,17 +789,15 @@ void ObjectFile::parse_object(const int nr) {
 
 			case 'S':
 				if (!get_line(file(), m_line)) {
-					log("SYSERR: Format error in 'S' field, %s\n"
+					fatal_log("SYSERR: Format error in 'S' field, %s\n"
 						"...expecting 2 numeric constants but file ended!", m_buffer);
-					exit(1);
 				}
 
 				parsed_entries = sscanf(m_line, " %d %d ", t, t + 1);
 				if (parsed_entries != 2) {
-					log("SYSERR: Format error in 'S' field, %s\n"
+					fatal_log("SYSERR: Format error in 'S' field, %s\n"
 						"...expecting 2 numeric arguments, got %d\n"
 						"...offending line: '%s'", m_buffer, parsed_entries, m_line);
-					exit(1);
 				}
 				tobj->set_skill(static_cast<ESkill>(t[0]), t[1]);
 				break;
@@ -829,14 +807,13 @@ void ObjectFile::parse_object(const int nr) {
 
 			case '$':
 			case '#': check_object(tobj);        // Anton Gorev (2015/12/29): do we need the result of this check?
-				if (tobj->has_flag(EObjFlag::kZonedacay)
+				if (tobj->has_flag(EObjFlag::kZonedecay)
 					|| tobj->has_flag(EObjFlag::kRepopDecay))
 					tobj->set_max_in_world(-1);
 				obj_proto.add(tobj, nr);
 				return;
 
-			default: log("SYSERR: Format error in %s", m_buffer);
-				exit(1);
+			default: fatal_log("SYSERR: Format error in %s", m_buffer);
 		}
 	}
 }
@@ -856,23 +833,24 @@ bool ObjectFile::check_object(ObjData *obj) {
 			GET_OBJ_VNUM(obj), obj->get_short_description().c_str(), obj->get_rent_off());
 	}
 */
-	sprintbit(obj->get_wear_flags(), wear_bits, buf);
-	if (strstr(buf, "UNDEFINED")) {
+	char flags[kMaxStringLength];
+	sprintbit(obj->get_wear_flags(), wear_bits, flags, sizeof(flags));
+	if (strstr(flags, "UNDEFINED")) {
 		error = true;
 		log("SYSERR: Object #%d (%s) has unknown wear flags.", GET_OBJ_VNUM(obj), obj->get_short_description().c_str());
 	}
 
-	obj->get_extra_flags().sprintbits(extra_bits, buf, ",", 4);
-	if (strstr(buf, "UNDEFINED")) {
+	obj->get_extra_flags().sprintbits(extra_bits, flags, sizeof(flags), ",", 4);
+	if (strstr(flags, "UNDEFINED")) {
 		error = true;
 		log("SYSERR: Object #%d (%s) has unknown extra flags.",
 			GET_OBJ_VNUM(obj),
 			obj->get_short_description().c_str());
 	}
 
-	obj->get_affect_flags().sprintbits(affected_bits, buf, ",", 4);
+	obj->get_affect_flags().sprintbits(equipment_affects, flags, sizeof(flags), ",", 4);
 
-	if (strstr(buf, "UNDEFINED")) {
+	if (strstr(flags, "UNDEFINED")) {
 		error = true;
 		log("SYSERR: Object #%d (%s) has unknown affection flags.",
 			GET_OBJ_VNUM(obj),
@@ -1007,8 +985,8 @@ void MobileFile::parse_mobile(const int nr) {
 	mob_proto[i].set_npc_name(fread_string());
 
 	// real name
-	mob_proto[i].player_data.PNames[ECase::kNom] = mob_proto[i].get_npc_name();
-	for (j = ECase::kGen; j <= ECase::kLastCase; j++) {
+	mob_proto[i].player_data.PNames[grammar::ECase::kNom] = mob_proto[i].get_npc_name();
+	for (j = grammar::ECase::kGen; j <= grammar::ECase::kLastCase; j++) {
 		mob_proto[i].player_data.PNames[j] = fread_string();
 	}
 	mob_proto[i].player_data.long_descr = utils::colorCAP(fread_string());
@@ -1019,20 +997,18 @@ void MobileFile::parse_mobile(const int nr) {
 
 	// *** Numeric data ***
 	if (!get_line(file(), line)) {
-		log("SYSERR: Format error after string section of mob #%d\n"
+		fatal_log("SYSERR: Format error after string section of mob #%d\n"
 			"...expecting line of form '# # # {S | E}', but file ended!\n%s", nr, line);
-		exit(1);
 	}
 
 	if (sscanf(line, "%s %s %d %c", f1, f2, t + 2, &letter) != 4) {
-		log("SYSERR: Format error after string section of mob #%d\n"
+		fatal_log("SYSERR: Format error after string section of mob #%d\n"
 			"...expecting line of form '# # # {S | E}'\n%s", nr, line);
-		exit(1);
 	}
 	mob_proto[i].SetFlagsFromString(f1);
 	mob_proto[i].SetNpcAttribute(true); 
 	AFF_FLAGS(&mob_proto[i]).from_string(f2);
-	GET_ALIGNMENT(mob_proto + i) = t[2];
+	alignment::SetAlignment(mob_proto + i, t[2]);
 	switch (UPPER(letter)) {
 		case 'S':        // Simple monsters
 			parse_simple_mob(i, nr);
@@ -1043,8 +1019,7 @@ void MobileFile::parse_mobile(const int nr) {
 			break;
 
 			// add new mob types here..
-		default: log("SYSERR: Unsupported mob type '%c' in mob #%d", letter, nr);
-			exit(1);
+		default: fatal_log("SYSERR: Unsupported mob type '%c' in mob #%d", letter, nr);
 	}
 
 	// DG triggers -- script info follows mob S/E section
@@ -1086,6 +1061,28 @@ void MobileFile::parse_mobile(const int nr) {
 	if ((mob_proto + 1)->GetLevel() == 0)
 		SetTestData(mob_proto + i);
 
+	if (mob_proto[i].IsFlagged(EMobFlag::kSentinel)) {
+		for (const auto dest : mob_proto[i].mob_specials.dest) {
+			if (dest != 0) {
+				log("WARNING: Mob #%d (%s) has movement route and !sentinel flag at the same time.",
+					nr,
+					mob_proto[i].get_npc_name().c_str());
+				break;
+			}
+		}
+	}
+/*
+//сконвертированно в пфайлы
+	// Авто-выставление "магии жизни" мобам с заклинанием
+	// "исцеление"/"групповое исцеление" -- билдеры часто забывают
+	// прописать Skill: 189, и кастер заваливает каст из-за нулевого
+	// процента. На загрузке выставляем kLifeMagic = level * 10 для
+	// любого моба с одним из этих заклинаний в памяти (#3267).
+	if (GET_SPELL_MEM(mob_proto + i, ESpell::kHeal) > 0
+		|| GET_SPELL_MEM(mob_proto + i, ESpell::kGroupHeal) > 0) {
+		mob_proto[i].set_skill(ESkill::kLifeMagic, mob_proto[i].GetLevel() * 10);
+	}
+*/
 	top_of_mobt = i++;
 }
 
@@ -1102,13 +1099,11 @@ void MobileFile::parse_simple_mob(int i, int nr) {
 
 	mob_proto[i].player_specials->saved.NameGod = 1001; // у мобов имя всегда одобрено
 	if (!get_line(file(), line)) {
-		log("SYSERR: Format error in mob #%d, file ended after S flag!", nr);
-		exit(1);
+		fatal_log("SYSERR: Format error in mob #%d, file ended after S flag!", nr);
 	}
 	if (sscanf(line, " %d %d %d %dd%d+%d %dd%d+%d ",
 			   t, t + 1, t + 2, t + 3, t + 4, t + 5, t + 6, t + 7, t + 8) != 9) {
-		log("SYSERR: Format error in mob #%d, 1th line\n" "...expecting line of form '# # # #d#+# #d#+#'", nr);
-		exit(1);
+		fatal_log("SYSERR: Format error in mob #%d, 1th line\n" "...expecting line of form '# # # #d#+# #d#+#'", nr);
 	}
 
 	mob_proto[i].set_level(t[0]);
@@ -1129,24 +1124,21 @@ void MobileFile::parse_simple_mob(int i, int nr) {
 	mob_proto[i].real_abils.damroll = t[8];
 
 	if (!get_line(file(), line)) {
-		log("SYSERR: Format error in mob #%d, 2th line\n"
+		fatal_log("SYSERR: Format error in mob #%d, 2th line\n"
 			"...expecting line of form '#d#+# #', but file ended!", nr);
-		exit(1);
 	}
 	if (sscanf(line, " %dd%d+%d %d", t, t + 1, t + 2, t + 3) != 4) {
-		log("SYSERR: Format error in mob #%d, 2th line\n" "...expecting line of form '#d#+# #'", nr);
-		exit(1);
+		fatal_log("SYSERR: Format error in mob #%d, 2th line\n" "...expecting line of form '#d#+# #'", nr);
 	}
 
-	mob_proto[i].set_gold(t[2], false);
+	currencies::SetHand(mob_proto[i], currencies::kGold, t[2], false);
 	GET_GOLD_NoDs(mob_proto + i) = t[0];
 	GET_GOLD_SiDs(mob_proto + i) = t[1];
 	mob_proto[i].set_exp(t[3]);
 
 	if (!get_line(file(), line)) {
-		log("SYSERR: Format error in 3th line of mob #%d\n"
+		fatal_log("SYSERR: Format error in 3th line of mob #%d\n"
 			"...expecting line of form '# # #', but file ended!", nr);
-		exit(1);
 	}
 
 	switch (sscanf(line, " %d %d %d %d", t, t + 1, t + 2, t + 3)) {
@@ -1154,8 +1146,7 @@ void MobileFile::parse_simple_mob(int i, int nr) {
 			break;
 		case 4: mob_proto[i].mob_specials.speed = t[3];
 			break;
-		default: log("SYSERR: Format error in 3th line of mob #%d\n" "...expecting line of form '# # # #'", nr);
-			exit(1);
+		default: fatal_log("SYSERR: Format error in 3th line of mob #%d\n" "...expecting line of form '# # # #'", nr);
 	}
 
 	mob_proto[i].SetPosition(static_cast<EPosition>(t[0]));
@@ -1194,16 +1185,14 @@ void MobileFile::parse_enhanced_mob(int i, int nr) {
 			return;
 		} else if (*line == '#')    // we've hit the next mob, maybe?
 		{
-			log("SYSERR: Unterminated E section in mob #%d", nr);
-			exit(1);
+			fatal_log("SYSERR: Unterminated E section in mob #%d", nr);
 		} else {
 			parse_espec(line, i, nr);
 
 		}
 	}
 
-	log("SYSERR: Unexpected end of file reached after mob #%d", nr);
-	exit(1);
+	fatal_log("SYSERR: Unexpected end of file reached after mob #%d", nr);
 }
 
 void MobileFile::parse_espec(char *buf, int i, int nr) {
@@ -1246,7 +1235,7 @@ void MobileFile::interpret_espec(const char *keyword, const char *value, int i, 
 
 
 /*		заготовка парса резистов у моба при загрузке мада, чтоб в след раз не придумывать
-		if (GET_RESIST(mob_proto + i, 4) > 49 && !mob_proto[i].get_role(MOB_ROLE_BOSS)) // жизнь и не боссы
+		if (GET_RESIST(mob_proto + i, 4) > 49 && !mob_proto[i].get_role(kBoss)) // жизнь и не боссы
 		{
 			if (zone_table[world[&mob_proto[i]->in_room]->zone].group < 3) // в зонах 0-2 группы
 				log("RESIST LIVE num: %d Vnum: %d Level: %d Name: %s", GET_RESIST(mob_proto + i, 4), mob_index[i].vnum, GetRealLevel(&mob_proto[i]), GET_PAD(&mob_proto[i], 0));
@@ -1342,23 +1331,23 @@ void MobileFile::interpret_espec(const char *keyword, const char *value, int i, 
 	}
 
 	CASE("Size") {
-		mob_proto[i].real_abils.size = std::clamp<byte>(num_arg, 0, 100);
+		mob_proto[i].real_abils.size = std::clamp<int>(num_arg, 0, 100);
 	}
 
 	CASE("LikeWork") {
-		mob_proto[i].mob_specials.like_work = std::clamp<byte>(num_arg, 0, 100);
+		mob_proto[i].mob_specials.like_work = std::clamp<int>(num_arg, 0, 100);
 	}
 
 	CASE("MaxFactor") {
-		mob_proto[i].mob_specials.MaxFactor = std::clamp<byte>(num_arg, 0, 127);
+		mob_proto[i].mob_specials.MaxFactor = std::clamp<int>(num_arg, 0, 127);
 	}
 
 	CASE("ExtraAttack") {
-		mob_proto[i].mob_specials.extra_attack = std::clamp<byte>(num_arg, 0, 127);
+		mob_proto[i].mob_specials.extra_attack = std::clamp<int>(num_arg, 0, 127);
 	}
 
 	CASE("MobRemort") {
-		mob_proto[i].set_remort(std::clamp<byte>(num_arg, 0, 100));
+		mob_proto[i].set_remort(std::clamp<int>(num_arg, 0, 100));
 	}
 
 	CASE("Height") {
@@ -1401,7 +1390,7 @@ void MobileFile::interpret_espec(const char *keyword, const char *value, int i, 
 			return;
 		}
 		t[1] = std::clamp(t[1], 0, MUD::Skill(skill_id).cap);
-		(mob_proto + i)->set_skill(skill_id, t[1]);
+		SetSkill(mob_proto + i, skill_id, t[1]);
 	}
 
 	CASE("Spell") {
@@ -1493,14 +1482,12 @@ bool ZoneFile::load_zone() {
 		char type[BUFFER_SIZE];
 		const auto count = sscanf(buf, "#%d %s", &zone.vnum, type);
 		if (count < 1) {
-			log("SYSERR: Format error in %s, line 1", full_file_name().c_str());
-			exit(1);
+			fatal_log("SYSERR: Format error in %s, line 1", full_file_name().c_str());
 		}
 		size_t digits = full_file_name().find_first_of("1234567890");
 		if (digits <= full_file_name().size()) {
 			if (zone.vnum != atoi(full_file_name().c_str() + digits)) {
-				log("SYSERR: файл %s содержит неверный номер зоны %d", full_file_name().c_str(), zone.vnum);
-				exit(1);
+				fatal_log("SYSERR: файл %s содержит неверный номер зоны %d", full_file_name().c_str(), zone.vnum);
 			}
 		}
 		if (2 == count) {
@@ -1520,13 +1507,13 @@ bool ZoneFile::load_zone() {
 bool ZoneFile::load_regular_zone() {
 	auto &zone = zone_table[s_zone_number];
 
-	sprintf(buf2, "beginning of zone #%d", zone.vnum);
+	char line[kMaxStringLength];
 
 	rewind(file());
 	char *ptr;
 	auto num_of_cmds = 0;
-	while (get_line(file(), buf)) {
-		ptr = buf;
+	while (get_line(file(), line)) {
+		ptr = line;
 		skip_spaces(&ptr);
 
 		if (*ptr == 'A') {
@@ -1556,83 +1543,79 @@ bool ZoneFile::load_regular_zone() {
 	}
 
 	if (num_of_cmds == 0) {
-		log("SYSERR: %s is empty!", full_file_name().c_str());
-		exit(1);
+		fatal_log("SYSERR: %s is empty!", full_file_name().c_str());
 	} else {
 		CREATE(zone.cmd, num_of_cmds);
 	}
 
-	auto line_num = get_line(file(), buf);    // skip already processed "#<zone number> [<zone type>]" line
+	auto line_num = get_line(file(), line);    // skip already processed "#<zone number> [<zone type>]" line
 
-	line_num += get_line(file(), buf);
-	if ((ptr = strchr(buf, '~')) != nullptr)    // take off the '~' if it's there
+	line_num += get_line(file(), line);
+	if ((ptr = strchr(line, '~')) != nullptr)    // take off the '~' if it's there
 	{
 		*ptr = '\0';
 	}
-	zone.name = buf;
+	zone.name = line;
 
 	log("Читаем zon файл: %s", full_file_name().c_str());
-	while (*buf != 'S' && !feof(file())) {
-		line_num += get_line(file(), buf);
+	while (*line != 'S' && !feof(file())) {
+		line_num += get_line(file(), line);
 
-		if (*buf == '#') {
+		if (*line == '#') {
 			break;
 		}
 
-		if (*buf == '^') {
-			std::string comment = buf;
+		if (*line == '^') {
+			std::string comment = line;
 			utils::TrimIf(comment, "^~");
 			zone.comment = comment;
 		}
 
-		if (*buf == '&') {
-			std::string location = buf;
+		if (*line == '&') {
+			std::string location = line;
 			utils::TrimIf(location, "&~");
 			zone.location = location;
 		}
 
-		if (*buf == '!') {
-			std::string autor = buf;
+		if (*line == '!') {
+			std::string autor = line;
 			utils::TrimIf(autor, "!~");
 			zone.author = autor;
 		}
 
-		if (*buf == '$') {
-			std::string description = buf ;
+		if (*line == '$') {
+			std::string description = line ;
 			utils::TrimIf(description, "$~");
 			zone.description = description;
 		}
 	}
 
-	if (*buf != '#') {
-		log("SYSERR: ERROR!!! not # in file %s", full_file_name().c_str());
-		exit(1);
+	if (*line != '#') {
+		fatal_log("SYSERR: ERROR!!! not # in file %s", full_file_name().c_str());
 	}
 	auto group = 0;
-	const auto count = sscanf(buf, "#%d %d %d %d", &zone.level, &zone.type, &group, &zone.entrance);
+	const auto count = sscanf(line, "#%d %d %d %d", &zone.level, &zone.type, &group, &zone.entrance);
 	if (count < 2) {
-		log("SYSERR: ошибка чтения z.level, z.type, z.group, z.entrance: %s", buf);
-		exit(1);
+		fatal_log("SYSERR: ошибка чтения z.level, z.type, z.group, z.entrance: %s", line);
 	}
 	zone.group = (group == 0) ? 1 : group; //группы в 0 рыл не бывает
-	line_num += get_line(file(), buf);
+	line_num += get_line(file(), line);
 
 	char t1[80];
 	char t2[80];
 	*t1 = 0;
 	*t2 = 0;
 	auto tmp_reset_idle = 0;
-	if (sscanf(buf, " %d %d %d %d %s %s", &zone.top, &zone.lifespan, &zone.reset_mode, &tmp_reset_idle, t1, t2) < 4) {
+	if (sscanf(line, " %d %d %d %d %s %s", &zone.top, &zone.lifespan, &zone.reset_mode, &tmp_reset_idle, t1, t2) < 4) {
 		// если нет четырех констант, то, возможно, это старый формат -- попробуем прочитать три
-		const auto count = sscanf(buf, " %d %d %d %s %s",
+		const auto count = sscanf(line, " %d %d %d %s %s",
 								  &zone.top,
 								  &zone.lifespan,
 								  &zone.reset_mode,
 								  t1,
 								  t2);
 		if (count < 3) {
-			log("SYSERR: Format error in 3-constant line of %s", full_file_name().c_str());
-			exit(1);
+			fatal_log("SYSERR: Format error in 3-constant line of %s", full_file_name().c_str());
 		}
 	}
 	zone.reset_idle = 0 != tmp_reset_idle;
@@ -1643,15 +1626,14 @@ bool ZoneFile::load_regular_zone() {
 	auto cmd_no = 0;
 
 	for (;;) {
-		const auto lines_read = get_line(file(), buf);
+		const auto lines_read = get_line(file(), line);
 
 		if (lines_read == 0) {
-			log("SYSERR: Format error in %s - premature end of file", full_file_name().c_str());
-			exit(1);
+			fatal_log("SYSERR: Format error in %s - premature end of file", full_file_name().c_str());
 		}
 
 		line_num += lines_read;
-		ptr = buf;
+		ptr = line;
 		skip_spaces(&ptr);
 
 		if ((zone.cmd[cmd_no].command = *ptr) == '*') {
@@ -1729,8 +1711,7 @@ bool ZoneFile::load_regular_zone() {
 		zone.cmd[cmd_no].if_flag = if_flag;
 
 		if (error) {
-			log("SYSERR: Format error in %s, line %d: '%s'", full_file_name().c_str(), line_num, buf);
-			exit(1);
+			fatal_log("SYSERR: Format error in %s, line %d: '%s'", full_file_name().c_str(), line_num, line);
 		}
 		zone.cmd[cmd_no].line = line_num;
 		cmd_no++;
@@ -1740,10 +1721,6 @@ bool ZoneFile::load_regular_zone() {
 }
 
 bool ZoneFile::load_generated_zone() const {
-	auto &zone = zone_table[s_zone_number];
-
-	sprintf(buf2, "beginning of generated zone #%d", zone.vnum);
-
 	return true;
 }
 
@@ -1761,20 +1738,23 @@ class HelpFile : public DataFile {
 };
 
 bool HelpFile::load_help() {
+	// В нативной кодировке строка может быть втрое длиннее прочитанной с диска (KOI8-R байт
+	// разворачивается в UTF-8 максимум в три), поэтому буферы с запасом (issue #3681).
+	constexpr size_t kLineBufSize = 3 * READ_SIZE + 1;
 #if defined(CIRCLE_MACINTOSH)
-	static char key[READ_SIZE + 1], next_key[READ_SIZE + 1], entry[32384];	// ?
+	static char key[kLineBufSize], next_key[kLineBufSize], entry[32384];	// ?
 #else
-	char key[READ_SIZE + 1], next_key[READ_SIZE + 1], entry[32384];
+	char key[kLineBufSize], next_key[kLineBufSize], entry[32384];
 #endif
-	char line[READ_SIZE + 1];
+	char line[kLineBufSize];
 	const char *scan;
 
 	// get the first keyword line
-	get_one_line(key);
+	get_one_line(key, sizeof(key));
 	while (*key != '$')    // read in the corresponding help entry
 	{
-		strcpy(entry, strcat(key, "\r\n"));
-		get_one_line(line);
+		snprintf(entry, sizeof(entry), "%s\r\n", key);
+		get_one_line(line, sizeof(line));
 		while (*line != '#') {
 			// если вдруг файл внезапно закончился и '#' так и не встретился
 			// логаем ошибку и заканчиваем парсинг во избежание зацикливания
@@ -1784,8 +1764,9 @@ bool HelpFile::load_help() {
 				mudlog(str_log.str().c_str(), DEF, kLvlImmortal, SYSLOG, true);
 				break;
 			}
-			strcat(entry, strcat(line, "\r\n"));
-			get_one_line(line);
+			size_t entry_len = strlen(entry);
+			snprintf(entry + entry_len, sizeof(entry) - entry_len, "%s\r\n", line);
+			get_one_line(line, sizeof(line));
 		}
 		// Assign read level
 		int min_level = 0;
@@ -1803,101 +1784,10 @@ bool HelpFile::load_help() {
 		}
 
 		// get next keyword line (or $)
-		get_one_line(key);
+		get_one_line(key, sizeof(key));
 	}
 
 	return true;
-}
-
-class SocialsFile : public DataFile {
- public:
-	SocialsFile(const std::string &file_name) : DataFile(file_name) {}
-
-	virtual bool load() override { return load_socials(); }
-	virtual std::string full_file_name() const override { return prefixes(DB_BOOT_SOCIAL) + file_name(); }
-
-	static shared_ptr create(const std::string &file_name) { return shared_ptr(new SocialsFile(file_name)); }
-
- private:
-	bool load_socials();
-	char *str_dup_bl(const char *source);
-};
-
-bool SocialsFile::load_socials() {
-	char line[kMaxInputLength], next_key[kMaxInputLength];
-	const char *scan;
-	int key = -1, message = -1, c_min_pos, c_max_pos, v_min_pos, v_max_pos, what;
-
-	// get the first keyword line
-	get_one_line(line);
-	while (*line != '$') {
-		message++;
-		scan = one_word(line, next_key);
-		while (*next_key) {
-			key++;
-			// Не нужен лишний спам, только мешает искать ошибки
-			//log("Social %d '%s' - message %d", key, next_key, message);
-			soc_keys_list[key].keyword = str_dup(next_key);
-			soc_keys_list[key].social_message = message;
-			scan = one_word(scan, next_key);
-		}
-
-		what = 0;
-		get_one_line(line);
-		while (*line != '#') {
-			scan = line;
-			skip_spaces(&scan);
-			if (scan && *scan && *scan != ';') {
-				switch (what) {
-					case 0:
-						if (sscanf(scan, " %d %d %d %d \n", &c_min_pos, &c_max_pos, &v_min_pos, &v_max_pos) < 4) {
-							log("SYSERR: format error in %d social file near social '%s' #d #d #d #d\n", message, line);
-							exit(1);
-						}
-						soc_mess_list[message].ch_min_pos = static_cast<EPosition>(c_min_pos);
-						soc_mess_list[message].ch_max_pos = static_cast<EPosition>(c_max_pos);
-						soc_mess_list[message].vict_min_pos = static_cast<EPosition>(v_min_pos);
-						soc_mess_list[message].vict_max_pos = static_cast<EPosition>(v_max_pos);
-						break;
-					case 1: soc_mess_list[message].char_no_arg = str_dup_bl(scan);
-						break;
-					case 2: soc_mess_list[message].others_no_arg = str_dup_bl(scan);
-						break;
-					case 3: soc_mess_list[message].char_found = str_dup_bl(scan);
-						break;
-					case 4: soc_mess_list[message].others_found = str_dup_bl(scan);
-						break;
-					case 5: soc_mess_list[message].vict_found = str_dup_bl(scan);
-						break;
-					case 6: soc_mess_list[message].not_found = str_dup_bl(scan);
-						break;
-				}
-			}
-
-			if (!scan || *scan != ';') {
-				what++;
-			}
-
-			get_one_line(line);
-		}
-		// get next keyword line (or $)
-		get_one_line(line);
-	}
-
-	return true;
-}
-
-char *SocialsFile::str_dup_bl(const char *source) {
-	char line[kMaxInputLength];
-
-	line[0] = 0;
-	if (source[0]) {
-		strcat(line, "&K");
-		strcat(line, source);
-		strcat(line, "&n");
-	}
-
-	return (str_dup(line));
 }
 
 DataFileFactory::shared_ptr DataFileFactory::create() {
@@ -1916,9 +1806,8 @@ BaseDataFile::shared_ptr DataFileFactoryImpl::get_file(const EBootType mode, con
 
 		case DB_BOOT_HLP:return HelpFile::create(file_name);
 
-		case DB_BOOT_TRG:return TriggersFile::create(file_name, m_load_obj_exp);
+		case DB_BOOT_TRG:return TriggersFile::create(file_name);
 
-		case DB_BOOT_SOCIAL:return SocialsFile::create(file_name);
 
 		default:return nullptr;
 	}

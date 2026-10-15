@@ -14,6 +14,16 @@
 #include "engine/entities/entities_constants.h"
 
 #include <bitset>
+#include <list>
+#include <vector>
+
+class CharData;
+
+// issue.dot-death-exp: pick the character to credit for a self-inflicted death (DoT/poison tick or
+// suffering) among `people` (the victim's room). Author looked up by UID, so a dead author -> nullptr.
+// Defined in damage.cpp; exposed here for ProcessDeath and unit tests.
+CharData *SelectSelfInflictedKiller(const std::list<CharData *> &people, const CharData *victim,
+								   long author_uid, fight::EDamageSource damage_source);
 
 /**
  * Для входа со скила без инита остальных полей:
@@ -36,13 +46,14 @@ struct SpellDmg {
 };
 
 /**
- * Для входа с необычного дамага без инита остальных полей (инится сразу номер messages):
- * Damage obj(SimpleDmg(TYPE_NUM), dam, FightSystem::UNDEF_DMG|PHYS_DMG|MAGE_DMG)
+ * Для входа с необычного (серверного) дамага без инита остальных полей: источник урона
+ * задаётся сразу как fight::EDamageSource (ловушка, кровотечение и т.п.):
+ * Damage obj(SimpleDmg(fight::EDamageSource::kSuffering), dam, fight::kUndefDmg)
  * obj.process(ch, victim);
  */
 struct SimpleDmg {
-  explicit SimpleDmg(int num) : msg_num(num) {};
-  int msg_num;
+  explicit SimpleDmg(fight::EDamageSource source) : damage_source(source) {};
+  fight::EDamageSource damage_source;
 };
 
 /**
@@ -76,7 +87,7 @@ class Damage {
   Damage(SimpleDmg obj, int in_dam, fight::DmgType in_dmg_type)
 	  : dam(in_dam),
 		dmg_type(in_dmg_type),
-		msg_num(obj.msg_num) {};
+		damage_source(obj.damage_source) {};
 
   int Process(CharData *ch, CharData *victim);
 
@@ -95,11 +106,9 @@ class Damage {
   // Применяется, если урон магический, но наносится не спеллом.
   // Если спеллом - стихия берется из самого спелла.
   EElement element{EElement::kUndefined};
-  // см. описание в HitData, но здесь может быть -1
-  int hit_type{-1};
-  // номер сообщения об ударе из файла messages
-  // инится только начиная с вызова process
-  int msg_num{-1};
+  // Источник урона для выбора боевого сообщения: тип атаки оружием (kHit..kSting),
+  // либо серверный урон (ловушка/кровотечение). kUndefined - источник не задан.
+  fight::EDamageSource damage_source{fight::EDamageSource::kUndefined};
   // набор флагов из HitType
   std::bitset<fight::kHitFlagsNum> flags;
   // позиция атакующего на начало атаки (по дефолту будет = текущему положению)
@@ -108,24 +117,64 @@ class Damage {
   EPosition victim_start_pos{EPosition::kUndefined};
   // Оружие которым нанесли дамаг
   ObjData *wielded{nullptr};
+  // UID персонажа-"автора" этого урона для начисления убийства, когда прямого атакующего
+  // нет (урон нанесён сам себе: тик повреждающего аффекта и т.п.). Обычно это caster_id
+  // аффекта. 0 - автора нет; равен UID жертвы - урон самому себе, убийство не засчитывается.
+  long author_uid{0};
+  // issue.character-affect-triggers: affect-owned damage flavor (set by the affect-trigger runners via
+  // CastDamage/LandOneDamageHit). When any is non-empty it FULLY REPLACES the generic combat hit line
+  // and the char_dam_message severity line in Process. $n = ch, $N = victim.
+  std::string aff_msg_char_;
+  std::string aff_msg_vict_;
+  std::string aff_msg_room_;
 
  private:
   // инит всех полей дефолтными значениями для конструкторов
   // инит msg_num, ch_start_pos, victim_start_pos
   // дергается в начале process, когда все уже заполнено
   void PerformPostInit(CharData *ch, CharData *victim);
-  void SetPostInitShieldFlags(CharData *victim);
+  // issue.damage-change: weighted-random-pick one elemental shield (by AffectShieldWeight) among the
+  // victim's shields; stores its EAffect underlying value in selected_shield_ (-1 = none). A hit passes
+  // through exactly that shield -- its retaliation/reduction actions run, the others are skipped.
+  void SelectMagicShield(CharData *victim);
   // process()
-  bool CalcMagisShieldsDmgAbsoption(CharData *ch, CharData *victim);
   void CalcArmorDmgAbsorption(CharData *victim);
   bool CalcDmgAbsorption(CharData *ch, CharData *victim);
   void ProcessDeath(CharData *ch, CharData *victim) const;
   void SendCritHitMsg(CharData *ch, CharData *victim);
-  void SendDmgMsg(CharData *ch, CharData *victim) const;
   void ProcessBlink(CharData *ch, CharData *victim);
+  // issue.damage-change: apply the victim's kWardDamage <damage_change> actions to this in-flight Damage
+  // (data-driven incoming-damage modifiers: scale dam, edit flags), gated by type/element/flags.
+  void ApplyAffectDamageChanges(CharData *ch, CharData *victim, bool late_stage);
+  // issue.damage-change: scan the victim's kWardDamage <retaliation> actions and append their thorns
+  // contributions to reflect_pool_ (reads the PRE-reduction dam; never mutates it). Skipped for reflected
+  // damage (kMagicReflect) to stop a Process->Process bounce. DealReflectPool deals the pool afterwards.
+  void ApplyRetaliations(CharData *ch, CharData *victim);
+  void DealReflectPool(CharData *ch, CharData *victim);
 
-  // обратный дамаг от огненного щита
-  int fs_damage{0};
+  // issue.damage-change: one accumulated thorns contribution (a <retaliation> that fired). Dealt back to
+  // the attacker as its own Damage after the main pipeline, so the attacker's own defenses transform it.
+  // Attribution is NOT stored here: the reflect is credited to the incoming attack (this->spell_id) at
+  // deal time -- a ward doesn't deal damage of its own; the reflected spell does.
+  struct ReflectHit {
+    int amount{0};
+    fight::DmgType type{fight::kUndefDmg};
+    EElement element{EElement::kUndefined};
+    // issue: EAffect (underlying value) of the ward that fired this reflect, or -1. Lets DealReflectPool
+    // narrate with that ward's own kWardTo* flavor instead of the reflected hit's generic combat line.
+    int ward{-1};
+    // issue: a passive reflect (magic mirror) fires regardless of the bearer's stance/combat state.
+    bool passive{false};
+  };
+  std::vector<ReflectHit> reflect_pool_;
+  // issue: set on a reflected-hit Damage when its ward already narrated via kWardTo* messages, so Process
+  // skips the generic combat/severity line (a mirror reflect shouldn't read as an ordinary "hit").
+  bool no_generic_msg_{false};
+
+  // issue.damage-change: the elemental shield chosen (weighted-random) to handle this hit -- underlying
+  // EAffect value, or -1 if the victim has no shield. Only this shield's actions apply; others skip.
+  int selected_shield_{-1};
+
   // строка для краткого режима щитов, дописывается после ударов и прочего
   // если во flags были соответствующие флаги
   std::string brief_shields_;
